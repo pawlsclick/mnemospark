@@ -1,7 +1,7 @@
 {
-  "id": "clawrouter",
-  "name": "ClawRouter",
-  "description": "Smart LLM router — 30+ models, x402 micropayments, 78% cost savings",
+  "id": "mnemospark",
+  "name": "mnemospark",
+  "description": "Smart LLM router — 30+ models, x402 micropayments (mnemospark)",
   "configSchema": {
     "type": "object",
     "properties": {

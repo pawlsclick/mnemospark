@@ -3,3 +3,17 @@ dist/
 *.tsbuildinfo
 .DS_Store
 .playwright-mcp/
+
+# Env and secrets
+.env
+.env.*
+.env.local
+
+# Build / test artifacts
+.tmp-e2e/
+coverage/
+
+# IDE / editor
+.idea/
+*.swp
+*.swo

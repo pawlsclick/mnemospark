@@ -1,12 +1,12 @@
 {
-  "name": "@blockrun/clawrouter",
+  "name": "mnemospark",
   "version": "0.9.30",
-  "description": "Smart LLM router — save 78% on inference costs. 30+ models, one wallet, x402 micropayments.",
+  "description": "Smart LLM router and inference toolkit — based on ClawRouter. 30+ models, one wallet, x402 micropayments.",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "bin": {
-    "clawrouter": "./dist/cli.js"
+    "mnemospark": "./dist/cli.js"
   },
   "openclaw": {
     "extensions": [
@@ -41,7 +41,8 @@
     "test:resilience:full": "npm run test:resilience:errors && npm run test:resilience:lifecycle && npm run test:resilience:stability:full",
     "test:e2e:tool-ids": "npx tsx test/e2e-tool-id-sanitization.ts",
     "test:docker:install": "bash test/run-docker-test.sh",
-    "test:docker:edge-cases": "bash test/docker/run-edge-cases.sh"
+    "test:docker:edge-cases": "bash test/docker/run-edge-cases.sh",
+    "prepare": "husky"
   },
   "keywords": [
     "llm",
@@ -60,11 +61,14 @@
     "usdc-hackathon-winner",
     "agentic-commerce"
   ],
-  "author": "BlockRun <hello@blockrun.ai>",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/BlockRunAI/ClawRouter.git"
+    "url": "git@github.com:pawlsclick/mnemospark.git"
+  },
+  "homepage": "https://github.com/pawlsclick/mnemospark#readme",
+  "bugs": {
+    "url": "https://github.com/pawlsclick/mnemospark/issues"
   },
   "dependencies": {
     "viem": "^2.39.3"
@@ -77,9 +81,15 @@
       "optional": true
     }
   },
+  "lint-staged": {
+    "*.{ts,tsx,js,mjs,json,md}": "prettier --write",
+    "src/**/*.{ts,tsx}": "eslint --fix"
+  },
   "devDependencies": {
     "@eslint/js": "^9.39.2",
     "eslint": "^9.39.2",
+    "husky": "^9.1.7",
+    "lint-staged": "^16.2.7",
     "openclaw": "latest",
     "prettier": "^3.8.1",
     "tsup": "^8.0.0",
