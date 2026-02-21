@@ -30,6 +30,8 @@ Python tooling and examples use [uv](https://docs.astral.sh/uv/) for dependency 
 uv sync --extra bcm-pricing    # create .venv and install optional deps (e.g. boto3)
 source .venv/bin/activate      # or on Windows: .venv\Scripts\activate
 python examples/s3_storage_cost_estimate.py --gb 100
+python examples/data_transfer_cost_estimate.py --direction in --gb 100   # ingress/regional
+python examples/data_transfer_cost_estimate.py --direction out --gb 500  # egress to internet
 ```
 
 ---
