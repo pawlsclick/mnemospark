@@ -1,5 +1,12 @@
 node_modules/
 dist/
+.venv/
+
+# Python / uv
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.egg
 *.tsbuildinfo
 .DS_Store
 .playwright-mcp/

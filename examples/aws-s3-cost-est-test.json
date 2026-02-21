@@ -1,0 +1,34 @@
+{
+  "id": "29dea388-c63f-4ac1-87fe-c0e85953d7ac",
+  "name": "S3-test",
+  "createdAt": "February 21, 2026 at 15:28 (UTC+1:00)",
+  "expiresAt": "March 21, 2027 at 15:28 (UTC+1:00)",
+  "rateType": "BEFORE_DISCOUNTS",
+  "rateTimestamp": "February 21, 2026 at 15:28 (UTC+1:00)",
+  "status": "VALID",
+  "totalCostHistorical": 0,
+  "totalCostEstimated": 2.3,
+  "currency": "USD",
+  "exportCreatedAt": "February 21, 2026 at 15:33 (UTC+1:00)",
+  "items": [
+    {
+      "serviceCode": "AmazonS3",
+      "usageType": "TimedStorage-ByteHrs",
+      "operation": "",
+      "location": "us-east-1",
+      "usageId": "a90a8111-a22b-4d68-a82b-fbd139efbf88",
+      "usageAccountId": 929837999468,
+      "accountName": "",
+      "group": "mnemospark",
+      "quantity": {
+        "unit": "GB-Mo",
+        "amount": 100
+      },
+      "costSummary": {
+        "cost": 2.3,
+        "currency": "USD",
+        "status": "new"
+      }
+    }
+  ]
+}
