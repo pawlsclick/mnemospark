@@ -27,3 +27,6 @@ coverage/
 .idea/
 *.swp
 *.swo
+
+# Test / test artifacts
+test-files/
