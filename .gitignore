@@ -20,9 +20,6 @@ __pycache__/
 .tmp-e2e/
 coverage/
 
-# Company / internal
-.company/
-
 # IDE / editor
 .idea/
 *.swp
