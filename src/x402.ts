@@ -268,8 +268,9 @@ export function createPaymentFetch(privateKey: `0x${string}`): PaymentFetchResul
       }
 
       // Pre-auth rejected (wrong amount, payTo changed, etc.)
-      // Try to use this 402's payment header for a proper retry
-      const paymentHeader = response.headers.get("x-payment-required");
+      // Try to use this 402's payment header for a proper retry (v2 or legacy)
+      const paymentHeader =
+        response.headers.get("payment-required") ?? response.headers.get("x-payment-required");
       if (paymentHeader) {
         return handle402(input, init, url, endpointPath, paymentHeader);
       }
@@ -281,9 +282,11 @@ export function createPaymentFetch(privateKey: `0x${string}`): PaymentFetchResul
       if (cleanResponse.status !== 402) {
         return cleanResponse;
       }
-      const cleanHeader = cleanResponse.headers.get("x-payment-required");
+      const cleanHeader =
+        cleanResponse.headers.get("payment-required") ??
+        cleanResponse.headers.get("x-payment-required");
       if (!cleanHeader) {
-        throw new Error("402 response missing x-payment-required header");
+        throw new Error("402 response missing PAYMENT-REQUIRED or x-payment-required header");
       }
       return handle402(input, init, url, endpointPath, cleanHeader);
     }
@@ -295,9 +298,10 @@ export function createPaymentFetch(privateKey: `0x${string}`): PaymentFetchResul
       return response;
     }
 
-    const paymentHeader = response.headers.get("x-payment-required");
+    const paymentHeader =
+      response.headers.get("payment-required") ?? response.headers.get("x-payment-required");
     if (!paymentHeader) {
-      throw new Error("402 response missing x-payment-required header");
+      throw new Error("402 response missing PAYMENT-REQUIRED or x-payment-required header");
     }
 
     return handle402(input, init, url, endpointPath, paymentHeader);
