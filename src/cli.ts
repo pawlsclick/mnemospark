@@ -1,16 +1,16 @@
 #!/usr/bin/env node
 /**
- * ClawRouter CLI
+ * mnemospark CLI
  *
  * Standalone proxy for deployed setups where the proxy needs to survive gateway restarts.
  *
  * Usage:
- *   npx @blockrun/clawrouter              # Start standalone proxy
- *   npx @blockrun/clawrouter --version    # Show version
- *   npx @blockrun/clawrouter --port 8402  # Custom port
+ *   npx mnemospark              # Start standalone proxy
+ *   npx mnemospark --version    # Show version
+ *   npx mnemospark --port 7120  # Custom port
  *
  * For production deployments, use with PM2:
- *   pm2 start "npx @blockrun/clawrouter" --name clawrouter
+ *   pm2 start "npx mnemospark" --name mnemospark
  */
 
 import { startProxy, getProxyPort } from "./proxy.js";
@@ -20,10 +20,10 @@ import { VERSION } from "./version.js";
 
 function printHelp(): void {
   console.log(`
-ClawRouter v${VERSION} - Smart LLM Router
+mnemospark v${VERSION} - Smart LLM Router
 
 Usage:
-  clawrouter [options]
+  mnemospark [options]
 
 Options:
   --version, -v     Show version number
@@ -32,19 +32,19 @@ Options:
 
 Examples:
   # Start standalone proxy (survives gateway restarts)
-  npx @blockrun/clawrouter
+  npx mnemospark
 
   # Start on custom port
-  npx @blockrun/clawrouter --port 9000
+  npx mnemospark --port 9000
 
   # Production deployment with PM2
-  pm2 start "npx @blockrun/clawrouter" --name clawrouter
+  pm2 start "npx mnemospark" --name mnemospark
 
 Environment Variables:
   BLOCKRUN_WALLET_KEY     Private key for x402 payments (auto-generated if not set)
-  BLOCKRUN_PROXY_PORT     Default proxy port (default: 8402)
+  MNEMOSPARK_PROXY_PORT   Default proxy port (default: 7120)
 
-For more info: https://github.com/BlockRunAI/ClawRouter
+For more info: https://github.com/pawlsclick/mnemospark
 `);
 }
 
@@ -83,11 +83,11 @@ async function main(): Promise<void> {
   const { key: walletKey, address, source } = await resolveOrGenerateWalletKey();
 
   if (source === "generated") {
-    console.log(`[ClawRouter] Generated new wallet: ${address}`);
+    console.log(`[mnemospark] Generated new wallet: ${address}`);
   } else if (source === "saved") {
-    console.log(`[ClawRouter] Using saved wallet: ${address}`);
+    console.log(`[mnemospark] Using saved wallet: ${address}`);
   } else {
-    console.log(`[ClawRouter] Using wallet from BLOCKRUN_WALLET_KEY: ${address}`);
+    console.log(`[mnemospark] Using wallet from BLOCKRUN_WALLET_KEY: ${address}`);
   }
 
   // Start the proxy
@@ -95,23 +95,23 @@ async function main(): Promise<void> {
     walletKey,
     port: args.port,
     onReady: (port) => {
-      console.log(`[ClawRouter] Proxy listening on http://127.0.0.1:${port}`);
-      console.log(`[ClawRouter] Health check: http://127.0.0.1:${port}/health`);
+      console.log(`[mnemospark] Proxy listening on http://127.0.0.1:${port}`);
+      console.log(`[mnemospark] Health check: http://127.0.0.1:${port}/health`);
     },
     onError: (error) => {
-      console.error(`[ClawRouter] Error: ${error.message}`);
+      console.error(`[mnemospark] Error: ${error.message}`);
     },
     onRouted: (decision) => {
       const cost = decision.costEstimate.toFixed(4);
       const saved = (decision.savings * 100).toFixed(0);
-      console.log(`[ClawRouter] [${decision.tier}] ${decision.model} $${cost} (saved ${saved}%)`);
+      console.log(`[mnemospark] [${decision.tier}] ${decision.model} $${cost} (saved ${saved}%)`);
     },
     onLowBalance: (info) => {
-      console.warn(`[ClawRouter] Low balance: ${info.balanceUSD}. Fund: ${info.walletAddress}`);
+      console.warn(`[mnemospark] Low balance: ${info.balanceUSD}. Fund: ${info.walletAddress}`);
     },
     onInsufficientFunds: (info) => {
       console.error(
-        `[ClawRouter] Insufficient funds. Balance: ${info.balanceUSD}, Need: ${info.requiredUSD}`,
+        `[mnemospark] Insufficient funds. Balance: ${info.balanceUSD}, Need: ${info.requiredUSD}`,
       );
     },
   });
@@ -121,28 +121,28 @@ async function main(): Promise<void> {
   try {
     const balance = await monitor.checkBalance();
     if (balance.isEmpty) {
-      console.log(`[ClawRouter] Wallet balance: $0.00 (using FREE model)`);
-      console.log(`[ClawRouter] Fund wallet for premium models: ${address}`);
+      console.log(`[mnemospark] Wallet balance: $0.00 (using FREE model)`);
+      console.log(`[mnemospark] Fund wallet for premium models: ${address}`);
     } else if (balance.isLow) {
-      console.log(`[ClawRouter] Wallet balance: ${balance.balanceUSD} (low)`);
+      console.log(`[mnemospark] Wallet balance: ${balance.balanceUSD} (low)`);
     } else {
-      console.log(`[ClawRouter] Wallet balance: ${balance.balanceUSD}`);
+      console.log(`[mnemospark] Wallet balance: ${balance.balanceUSD}`);
     }
   } catch {
-    console.log(`[ClawRouter] Wallet: ${address} (balance check pending)`);
+    console.log(`[mnemospark] Wallet: ${address} (balance check pending)`);
   }
 
-  console.log(`[ClawRouter] Ready - Ctrl+C to stop`);
+  console.log(`[mnemospark] Ready - Ctrl+C to stop`);
 
   // Handle graceful shutdown
   const shutdown = async (signal: string) => {
-    console.log(`\n[ClawRouter] Received ${signal}, shutting down...`);
+    console.log(`\n[mnemospark] Received ${signal}, shutting down...`);
     try {
       await proxy.close();
-      console.log(`[ClawRouter] Proxy closed`);
+      console.log(`[mnemospark] Proxy closed`);
       process.exit(0);
     } catch (err) {
-      console.error(`[ClawRouter] Error during shutdown: ${err}`);
+      console.error(`[mnemospark] Error during shutdown: ${err}`);
       process.exit(1);
     }
   };
@@ -155,6 +155,6 @@ async function main(): Promise<void> {
 }
 
 main().catch((err) => {
-  console.error(`[ClawRouter] Fatal error: ${err.message}`);
+  console.error(`[mnemospark] Fatal error: ${err.message}`);
   process.exit(1);
 });

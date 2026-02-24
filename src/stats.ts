@@ -216,7 +216,7 @@ export function formatStatsAscii(stats: AggregatedStats): string {
 
   // Header
   lines.push("╔════════════════════════════════════════════════════════════╗");
-  lines.push(`║          ClawRouter by BlockRun v${VERSION}`.padEnd(61) + "║");
+  lines.push(`║          mnemospark v${VERSION}`.padEnd(61) + "║");
   lines.push("║                Usage Statistics                            ║");
   lines.push("╠════════════════════════════════════════════════════════════╣");
 

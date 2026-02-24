@@ -1,19 +1,19 @@
 #!/bin/bash
 set -e
 
-echo "🦞 ClawRouter Uninstall"
+echo "mnemospark uninstall"
 echo ""
 
-# 1. Stop proxy
+# 1. Stop mnemospark proxy (port 7120)
 echo "→ Stopping proxy..."
-lsof -ti :8402 | xargs kill -9 2>/dev/null || true
+lsof -ti :7120 | xargs kill -9 2>/dev/null || true
 
-# 2. Remove plugin files
+# 2. Remove mnemospark plugin files only
 echo "→ Removing plugin files..."
-rm -rf ~/.openclaw/extensions/clawrouter
+rm -rf ~/.openclaw/extensions/mnemospark
 
-# 3. Clean openclaw.json
-echo "→ Cleaning openclaw.json..."
+# 3. Clean only mnemospark entries from openclaw.json (do not touch blockrun/openclaw)
+echo "→ Cleaning openclaw.json (mnemospark only)..."
 node -e "
 const os = require('os');
 const fs = require('fs');
@@ -29,54 +29,22 @@ try {
   const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
   let changed = false;
 
-  // Remove blockrun provider
-  if (config.models?.providers?.blockrun) {
-    delete config.models.providers.blockrun;
-    console.log('  Removed blockrun provider');
+  // Remove only mnemospark plugin entries
+  if (config.plugins?.entries?.mnemospark) {
+    delete config.plugins.entries.mnemospark;
+    changed = true;
+  }
+  if (config.plugins?.installs?.mnemospark) {
+    delete config.plugins.installs.mnemospark;
     changed = true;
   }
 
-  // Remove plugin entries
-  if (config.plugins?.entries?.clawrouter) {
-    delete config.plugins.entries.clawrouter;
-    changed = true;
-  }
-  if (config.plugins?.installs?.clawrouter) {
-    delete config.plugins.installs.clawrouter;
-    changed = true;
-  }
-
-  // Remove from plugins.allow
+  // Remove only mnemospark from plugins.allow
   if (Array.isArray(config.plugins?.allow)) {
     const before = config.plugins.allow.length;
-    config.plugins.allow = config.plugins.allow.filter(
-      p => p !== 'clawrouter' && p !== '@blockrun/clawrouter'
-    );
+    config.plugins.allow = config.plugins.allow.filter(p => p !== 'mnemospark');
     if (config.plugins.allow.length !== before) {
-      console.log('  Removed from plugins.allow');
-      changed = true;
-    }
-  }
-
-  // Reset default model if it's blockrun/auto
-  if (config.agents?.defaults?.model?.primary === 'blockrun/auto') {
-    delete config.agents.defaults.model.primary;
-    console.log('  Reset default model (was blockrun/auto)');
-    changed = true;
-  }
-
-  // Remove blockrun models from allowlist
-  if (config.agents?.defaults?.models) {
-    const models = config.agents.defaults.models;
-    let removedCount = 0;
-    for (const key of Object.keys(models)) {
-      if (key.startsWith('blockrun/')) {
-        delete models[key];
-        removedCount++;
-      }
-    }
-    if (removedCount > 0) {
-      console.log('  Removed ' + removedCount + ' blockrun models from allowlist');
+      console.log('  Removed mnemospark from plugins.allow');
       changed = true;
     }
   }
@@ -85,51 +53,15 @@ try {
     fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
     console.log('  Config cleaned');
   } else {
-    console.log('  No changes needed');
+    console.log('  No mnemospark entries found');
   }
 } catch (err) {
   console.error('  Error:', err.message);
 }
 "
 
-# 4. Clean auth-profiles.json
-echo "→ Cleaning auth profiles..."
-node -e "
-const os = require('os');
-const fs = require('fs');
-const path = require('path');
-const agentsDir = path.join(os.homedir(), '.openclaw', 'agents');
-
-if (!fs.existsSync(agentsDir)) {
-  console.log('  No agents directory found');
-  process.exit(0);
-}
-
-const agents = fs.readdirSync(agentsDir, { withFileTypes: true })
-  .filter(d => d.isDirectory())
-  .map(d => d.name);
-
-for (const agentId of agents) {
-  const authPath = path.join(agentsDir, agentId, 'agent', 'auth-profiles.json');
-  if (!fs.existsSync(authPath)) continue;
-
-  try {
-    const store = JSON.parse(fs.readFileSync(authPath, 'utf8'));
-    if (store.profiles?.['blockrun:default']) {
-      delete store.profiles['blockrun:default'];
-      fs.writeFileSync(authPath, JSON.stringify(store, null, 2));
-      console.log('  Removed blockrun auth from ' + agentId);
-    }
-  } catch {}
-}
-"
-
-# 5. Clean models cache
-echo "→ Cleaning models cache..."
-rm -f ~/.openclaw/agents/*/agent/models.json 2>/dev/null || true
-
 echo ""
-echo "✓ ClawRouter uninstalled"
+echo "✓ mnemospark uninstalled"
 echo ""
 echo "Restart OpenClaw to apply changes:"
 echo "  openclaw gateway restart"

@@ -139,7 +139,7 @@ function transformPaymentError(errorBody: string): string {
             error: {
               message: "Payment signature invalid. This may be a temporary issue.",
               type: "invalid_payload",
-              help: "Try again. If this persists, reinstall ClawRouter: curl -fsSL https://blockrun.ai/ClawRouter-update | bash",
+              help: "Try again. If this persists, reinstall mnemospark: openclaw plugins install mnemospark",
             },
           });
         }
@@ -193,7 +193,7 @@ function isRateLimited(modelId: string): boolean {
  */
 function markRateLimited(modelId: string): void {
   rateLimitedModels.set(modelId, Date.now());
-  console.log(`[ClawRouter] Model ${modelId} rate-limited, will deprioritize for 60s`);
+  console.log(`[mnemospark] Model ${modelId} rate-limited, will deprioritize for 60s`);
 }
 
 /**
@@ -725,7 +725,7 @@ function truncateMessages<T extends { role: string }>(messages: T[]): T[] {
   const truncatedConversation = conversationMsgs.slice(-maxConversation);
 
   console.log(
-    `[ClawRouter] Truncated messages: ${messages.length} → ${systemMsgs.length + truncatedConversation.length} (kept ${systemMsgs.length} system + ${truncatedConversation.length} recent)`,
+    `[mnemospark] Truncated messages: ${messages.length} → ${systemMsgs.length + truncatedConversation.length} (kept ${systemMsgs.length} system + ${truncatedConversation.length} recent)`,
   );
 
   return [...systemMsgs, ...truncatedConversation];
@@ -784,7 +784,7 @@ export type InsufficientFundsInfo = {
 export type ProxyOptions = {
   walletKey: string;
   apiBase?: string;
-  /** Port to listen on (default: 8402) */
+  /** Port to listen on (default: 7120) */
   port?: number;
   routingConfig?: Partial<RoutingConfig>;
   /** Request timeout in ms (default: 180000 = 3 minutes). Covers on-chain tx + LLM response. */
@@ -890,7 +890,7 @@ function estimateAmount(
  * Start the local x402 proxy server.
  *
  * If a proxy is already running on the target port, reuses it instead of failing.
- * Port can be configured via BLOCKRUN_PROXY_PORT environment variable.
+ * Port can be configured via MNEMOSPARK_PROXY_PORT environment variable.
  *
  * Returns a handle with the assigned port, base URL, and a close function.
  */
@@ -911,7 +911,7 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
     // Verify the existing proxy is using the same wallet (or warn if different)
     if (existingWallet !== account.address) {
       console.warn(
-        `[ClawRouter] Existing proxy on port ${listenPort} uses wallet ${existingWallet}, but current config uses ${account.address}. Reusing existing proxy.`,
+        `[mnemospark] Existing proxy on port ${listenPort} uses wallet ${existingWallet}, but current config uses ${account.address}. Reusing existing proxy.`,
       );
     }
 
@@ -961,19 +961,19 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
   const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
     // Add stream error handlers to prevent server crashes
     req.on("error", (err) => {
-      console.error(`[ClawRouter] Request stream error: ${err.message}`);
+      console.error(`[mnemospark] Request stream error: ${err.message}`);
       // Don't throw - just log and let request handler deal with it
     });
 
     res.on("error", (err) => {
-      console.error(`[ClawRouter] Response stream error: ${err.message}`);
+      console.error(`[mnemospark] Response stream error: ${err.message}`);
       // Don't try to write to failed socket - just log
     });
 
     // Finished wrapper for guaranteed cleanup on response completion/error
     finished(res, (err) => {
       if (err && err.code !== "ERR_STREAM_DESTROYED") {
-        console.error(`[ClawRouter] Response finished with error: ${err.message}`);
+        console.error(`[mnemospark] Response finished with error: ${err.message}`);
       }
       // Note: heartbeatInterval cleanup happens in res.on("close") handler
       // Note: completed and dedup cleanup happens in the res.on("close") handler below
@@ -982,7 +982,7 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
     // Request finished wrapper for complete stream lifecycle tracking
     finished(req, (err) => {
       if (err && err.code !== "ERR_STREAM_DESTROYED") {
-        console.error(`[ClawRouter] Request finished with error: ${err.message}`);
+        console.error(`[mnemospark] Request finished with error: ${err.message}`);
       }
     });
 
@@ -1115,7 +1115,7 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
           const existingWallet = await checkExistingProxy(listenPort);
           if (existingWallet) {
             // Proxy is actually running - this is fine, reuse it
-            console.log(`[ClawRouter] Existing proxy detected on port ${listenPort}, reusing`);
+            console.log(`[mnemospark] Existing proxy detected on port ${listenPort}, reusing`);
             rejectAttempt({ code: "REUSE_EXISTING", wallet: existingWallet });
             return;
           }
@@ -1123,7 +1123,7 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
           // Port is in TIME_WAIT (no proxy responding) - retry after delay
           if (attempt < PORT_RETRY_ATTEMPTS) {
             console.log(
-              `[ClawRouter] Port ${listenPort} in TIME_WAIT, retrying in ${PORT_RETRY_DELAY_MS}ms (attempt ${attempt}/${PORT_RETRY_ATTEMPTS})`,
+              `[mnemospark] Port ${listenPort} in TIME_WAIT, retrying in ${PORT_RETRY_DELAY_MS}ms (attempt ${attempt}/${PORT_RETRY_ATTEMPTS})`,
             );
             rejectAttempt({ code: "RETRY", attempt });
             return;
@@ -1131,7 +1131,7 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
 
           // Max retries exceeded
           console.error(
-            `[ClawRouter] Port ${listenPort} still in use after ${PORT_RETRY_ATTEMPTS} attempts`,
+            `[mnemospark] Port ${listenPort} still in use after ${PORT_RETRY_ATTEMPTS} attempts`,
           );
           rejectAttempt(err);
           return;
@@ -1201,14 +1201,14 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
   // Add runtime error handler AFTER successful listen
   // This handles errors that occur during server operation (not just startup)
   server.on("error", (err) => {
-    console.error(`[ClawRouter] Server runtime error: ${err.message}`);
+    console.error(`[mnemospark] Server runtime error: ${err.message}`);
     options.onError?.(err);
     // Don't crash - log and continue
   });
 
   // Handle client connection errors (bad requests, socket errors)
   server.on("clientError", (err, socket) => {
-    console.error(`[ClawRouter] Client error: ${err.message}`);
+    console.error(`[mnemospark] Client error: ${err.message}`);
     // Send 400 Bad Request if socket is still writable
     if (socket.writable && !socket.destroyed) {
       socket.end("HTTP/1.1 400 Bad Request\r\n\r\n");
@@ -1223,7 +1223,7 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
     socket.setTimeout(300_000);
 
     socket.on("timeout", () => {
-      console.error(`[ClawRouter] Socket timeout, destroying connection`);
+      console.error(`[mnemospark] Socket timeout, destroying connection`);
       socket.destroy();
     });
 
@@ -1232,7 +1232,7 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
     });
 
     socket.on("error", (err) => {
-      console.error(`[ClawRouter] Socket error: ${err.message}`);
+      console.error(`[mnemospark] Socket error: ${err.message}`);
     });
 
     socket.on("close", () => {
@@ -1248,7 +1248,7 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
     close: () =>
       new Promise<void>((res, rej) => {
         const timeout = setTimeout(() => {
-          rej(new Error("[ClawRouter] Close timeout after 4s"));
+          rej(new Error("[mnemospark] Close timeout after 4s"));
         }, 4000);
 
         sessionStore.close();
@@ -1482,14 +1482,14 @@ async function proxyRequest(
             parsed.messages = messages;
             bodyModified = true;
             console.log(
-              `[ClawRouter] Injected session journal (${journalText.length} chars) for session ${sessionId.slice(0, 8)}...`,
+              `[mnemospark] Injected session journal (${journalText.length} chars) for session ${sessionId.slice(0, 8)}...`,
             );
           }
         }
       }
 
       // Force stream: false — BlockRun API doesn't support streaming yet
-      // ClawRouter handles SSE heartbeat simulation for upstream compatibility
+      // mnemospark handles SSE heartbeat simulation for upstream compatibility
       if (parsed.stream === true) {
         parsed.stream = false;
         bodyModified = true;
@@ -1513,7 +1513,7 @@ async function proxyRequest(
 
       // Debug: log received model name
       console.log(
-        `[ClawRouter] Received model: "${parsed.model}" -> normalized: "${normalizedModel}"${wasAlias ? ` -> alias: "${resolvedModel}"` : ""}${routingProfile ? `, profile: ${routingProfile}` : ""}`,
+        `[mnemospark] Received model: "${parsed.model}" -> normalized: "${normalizedModel}"${wasAlias ? ` -> alias: "${resolvedModel}"` : ""}${routingProfile ? `, profile: ${routingProfile}` : ""}`,
       );
 
       // If alias was resolved, update the model in the request
@@ -1528,7 +1528,7 @@ async function proxyRequest(
         // Free profile - direct shortcut to nvidia/gpt-oss-120b (no tier routing)
         if (routingProfile === "free") {
           const freeModel = "nvidia/gpt-oss-120b";
-          console.log(`[ClawRouter] Free profile - using ${freeModel} directly`);
+          console.log(`[mnemospark] Free profile - using ${freeModel} directly`);
           parsed.model = freeModel;
           modelId = freeModel;
           bodyModified = true;
@@ -1554,7 +1554,7 @@ async function proxyRequest(
           if (existingSession) {
             // Use the session's pinned model instead of re-routing
             console.log(
-              `[ClawRouter] Session ${sessionId?.slice(0, 8)}... using pinned model: ${existingSession.model}`,
+              `[mnemospark] Session ${sessionId?.slice(0, 8)}... using pinned model: ${existingSession.model}`,
             );
             parsed.model = existingSession.model;
             modelId = existingSession.model;
@@ -1587,7 +1587,7 @@ async function proxyRequest(
 
             if (hasTools) {
               console.log(
-                `[ClawRouter] Tools detected (${tools.length}), agentic mode via keywords`,
+                `[mnemospark] Tools detected (${tools.length}), agentic mode via keywords`,
               );
             }
 
@@ -1605,7 +1605,7 @@ async function proxyRequest(
             if (sessionId) {
               sessionStore.setSession(sessionId, routingDecision.model, routingDecision.tier);
               console.log(
-                `[ClawRouter] Session ${sessionId.slice(0, 8)}... pinned to model: ${routingDecision.model}`,
+                `[mnemospark] Session ${sessionId.slice(0, 8)}... pinned to model: ${routingDecision.model}`,
               );
             }
 
@@ -1621,7 +1621,7 @@ async function proxyRequest(
     } catch (err) {
       // Log routing errors so they're not silently swallowed
       const errorMsg = err instanceof Error ? err.message : String(err);
-      console.error(`[ClawRouter] Routing error: ${errorMsg}`);
+      console.error(`[mnemospark] Routing error: ${errorMsg}`);
       options.onError?.(new Error(`Routing failed: ${errorMsg}`));
     }
   }
@@ -1635,7 +1635,7 @@ async function proxyRequest(
   if (autoCompress && requestSizeKB > compressionThreshold) {
     try {
       console.log(
-        `[ClawRouter] Request size ${requestSizeKB}KB exceeds threshold ${compressionThreshold}KB, applying compression...`,
+        `[mnemospark] Request size ${requestSizeKB}KB exceeds threshold ${compressionThreshold}KB, applying compression...`,
       );
 
       // Parse messages for compression
@@ -1669,7 +1669,7 @@ async function proxyRequest(
         const savings = (((requestSizeKB - compressedSizeKB) / requestSizeKB) * 100).toFixed(1);
 
         console.log(
-          `[ClawRouter] Compressed ${requestSizeKB}KB → ${compressedSizeKB}KB (${savings}% reduction)`,
+          `[mnemospark] Compressed ${requestSizeKB}KB → ${compressedSizeKB}KB (${savings}% reduction)`,
         );
 
         // Update request body with compressed messages
@@ -1679,7 +1679,7 @@ async function proxyRequest(
     } catch (err) {
       // Compression failed - continue with original request
       console.warn(
-        `[ClawRouter] Compression failed: ${err instanceof Error ? err.message : String(err)}`,
+        `[mnemospark] Compression failed: ${err instanceof Error ? err.message : String(err)}`,
       );
     }
   }
@@ -1693,7 +1693,7 @@ async function proxyRequest(
   if (responseCache.shouldCache(body, reqHeaders)) {
     const cachedResponse = responseCache.get(cacheKey);
     if (cachedResponse) {
-      console.log(`[ClawRouter] Cache HIT for ${cachedResponse.model} (saved API call)`);
+      console.log(`[mnemospark] Cache HIT for ${cachedResponse.model} (saved API call)`);
       res.writeHead(cachedResponse.status, cachedResponse.headers);
       res.end(cachedResponse.body);
       return;
@@ -1744,10 +1744,10 @@ async function proxyRequest(
 
       if (sufficiency.info.isEmpty || !sufficiency.sufficient) {
         // Wallet is empty or insufficient — ALWAYS fallback to free model
-        // This ensures new users with empty wallets can still use ClawRouter
+        // This ensures new users with empty wallets can still use mnemospark
         const originalModel = modelId;
         console.log(
-          `[ClawRouter] Wallet ${sufficiency.info.isEmpty ? "empty" : "insufficient"} ($${sufficiency.info.balanceUSD}), falling back to free model: ${FREE_MODEL} (requested: ${originalModel})`,
+          `[mnemospark] Wallet ${sufficiency.info.isEmpty ? "empty" : "insufficient"} ($${sufficiency.info.balanceUSD}), falling back to free model: ${FREE_MODEL} (requested: ${originalModel})`,
         );
         modelId = FREE_MODEL;
         // Update the body with new model
@@ -1865,7 +1865,7 @@ async function proxyRequest(
       const contextExcluded = fullChain.filter((m) => !contextFiltered.includes(m));
       if (contextExcluded.length > 0) {
         console.log(
-          `[ClawRouter] Context filter (~${estimatedTotalTokens} tokens): excluded ${contextExcluded.join(", ")}`,
+          `[mnemospark] Context filter (~${estimatedTotalTokens} tokens): excluded ${contextExcluded.join(", ")}`,
         );
       }
 
@@ -1893,7 +1893,7 @@ async function proxyRequest(
       const tryModel = modelsToTry[i];
       const isLastAttempt = i === modelsToTry.length - 1;
 
-      console.log(`[ClawRouter] Trying model ${i + 1}/${modelsToTry.length}: ${tryModel}`);
+      console.log(`[mnemospark] Trying model ${i + 1}/${modelsToTry.length}: ${tryModel}`);
 
       const result = await tryModelRequest(
         upstreamUrl,
@@ -1910,7 +1910,7 @@ async function proxyRequest(
       if (result.success && result.response) {
         upstream = result.response;
         actualModelUsed = tryModel;
-        console.log(`[ClawRouter] Success with model: ${tryModel}`);
+        console.log(`[mnemospark] Success with model: ${tryModel}`);
         break;
       }
 
@@ -1927,7 +1927,7 @@ async function proxyRequest(
           markRateLimited(tryModel);
         }
         console.log(
-          `[ClawRouter] Provider error from ${tryModel}, trying fallback: ${result.errorBody?.slice(0, 100)}`,
+          `[mnemospark] Provider error from ${tryModel}, trying fallback: ${result.errorBody?.slice(0, 100)}`,
         );
         continue;
       }
@@ -1935,7 +1935,7 @@ async function proxyRequest(
       // Not a provider error or last attempt — stop trying
       if (!result.isProviderError) {
         console.log(
-          `[ClawRouter] Non-provider error from ${tryModel}, not retrying: ${result.errorBody?.slice(0, 100)}`,
+          `[mnemospark] Non-provider error from ${tryModel}, not retrying: ${result.errorBody?.slice(0, 100)}`,
         );
       }
       break;
@@ -2227,7 +2227,7 @@ async function proxyRequest(
           headers: responseHeaders,
           model: modelId,
         });
-        console.log(`[ClawRouter] Cached response for ${modelId} (${responseBody.length} bytes)`);
+        console.log(`[mnemospark] Cached response for ${modelId} (${responseBody.length} bytes)`);
       }
 
       // Extract content from non-streaming response for session journal
@@ -2249,7 +2249,7 @@ async function proxyRequest(
       if (events.length > 0) {
         sessionJournal.record(sessionId, events, actualModelUsed);
         console.log(
-          `[ClawRouter] Recorded ${events.length} events to session journal for session ${sessionId.slice(0, 8)}...`,
+          `[mnemospark] Recorded ${events.length} events to session journal for session ${sessionId.slice(0, 8)}...`,
         );
       }
     }

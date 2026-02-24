@@ -1,5 +1,5 @@
 /**
- * Typed Error Classes for ClawRouter
+ * Typed Error Classes for mnemospark
  *
  * Provides structured errors for balance-related failures with
  * all necessary information for user-friendly error messages.
@@ -42,7 +42,7 @@ export class EmptyWalletError extends Error {
       `Options:`,
       `  1. Fund wallet: ${walletAddress}`,
       `  2. Use free model: /model free`,
-      `  3. Uninstall: bash ~/.openclaw/extensions/clawrouter/scripts/uninstall.sh`,
+      `  3. Uninstall: bash ~/.openclaw/extensions/mnemospark/scripts/uninstall.sh`,
     ].join("\n");
     super(msg);
     this.name = "EmptyWalletError";

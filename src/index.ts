@@ -1,12 +1,12 @@
 /**
- * @blockrun/clawrouter
+ * mnemospark
  *
  * Smart LLM router for OpenClaw — 30+ models, x402 micropayments, 78% cost savings.
  * Routes each request to the cheapest model that can handle it.
  *
  * Usage:
  *   # Install the plugin
- *   openclaw plugins install @blockrun/clawrouter
+ *   openclaw plugins install mnemospark
  *
  *   # Fund your wallet with USDC on Base (address printed on install)
  *
@@ -471,7 +471,7 @@ async function startProxyInBackground(api: OpenClawPluginApi): Promise<void> {
   setActiveProxy(proxy);
   activeProxyHandle = proxy;
 
-  api.logger.info(`ClawRouter ready — smart routing enabled`);
+  api.logger.info(`mnemospark ready — smart routing enabled`);
   api.logger.info(`Pricing: Simple ~$0.001 | Code ~$0.01 | Complex ~$0.05 | Free: $0`);
 
   // Non-blocking balance check AFTER proxy is ready (won't hang startup)
@@ -495,13 +495,13 @@ async function startProxyInBackground(api: OpenClawPluginApi): Promise<void> {
 }
 
 /**
- * /stats command handler for ClawRouter.
+ * /stats command handler for mnemospark.
  * Shows usage statistics and cost savings.
  */
 async function createStatsCommand(): Promise<OpenClawPluginCommandDefinition> {
   return {
     name: "stats",
-    description: "Show ClawRouter usage statistics and cost savings",
+    description: "Show mnemospark usage statistics and cost savings",
     acceptsArgs: true,
     requireAuth: false,
     handler: async (ctx: PluginCommandContext) => {
@@ -526,7 +526,7 @@ async function createStatsCommand(): Promise<OpenClawPluginCommandDefinition> {
 }
 
 /**
- * /wallet command handler for ClawRouter.
+ * /wallet command handler for mnemospark.
  * - /wallet or /wallet status: Show wallet address, balance, and key file location
  * - /wallet export: Show private key for backup (with security warning)
  */
@@ -556,7 +556,7 @@ async function createWalletCommand(): Promise<OpenClawPluginCommandDefinition> {
 
       if (!walletKey || !address) {
         return {
-          text: `No ClawRouter wallet found.\n\nRun \`openclaw plugins install @blockrun/clawrouter\` to generate a wallet.`,
+          text: `No mnemospark wallet found.\n\nRun \`openclaw plugins install mnemospark\` to generate a wallet.`,
           isError: true,
         };
       }
@@ -565,7 +565,7 @@ async function createWalletCommand(): Promise<OpenClawPluginCommandDefinition> {
         // Export private key for backup
         return {
           text: [
-            "🔐 **ClawRouter Wallet Export**",
+            "🔐 **mnemospark Wallet Export**",
             "",
             "⚠️ **SECURITY WARNING**: Your private key controls your wallet funds.",
             "Never share this key. Anyone with this key can spend your USDC.",
@@ -596,7 +596,7 @@ async function createWalletCommand(): Promise<OpenClawPluginCommandDefinition> {
 
       return {
         text: [
-          "🦞 **ClawRouter Wallet**",
+          "🦞 **mnemospark Wallet**",
           "",
           `**Address:** \`${address}\``,
           `**${balanceText}**`,
@@ -614,18 +614,18 @@ async function createWalletCommand(): Promise<OpenClawPluginCommandDefinition> {
 }
 
 const plugin: OpenClawPluginDefinition = {
-  id: "clawrouter",
-  name: "ClawRouter",
+  id: "mnemospark",
+  name: "mnemospark",
   description: "Smart LLM router — 30+ models, x402 micropayments, 78% cost savings",
   version: VERSION,
 
   async register(api: OpenClawPluginApi) {
-    // Check if ClawRouter is disabled via environment variable
-    // Usage: CLAWROUTER_DISABLED=true openclaw gateway start
+    // Check if mnemospark is disabled via environment variable
+    // Usage: MNEMOSPARK_DISABLED=true openclaw gateway start
     const isDisabled =
-      process.env.CLAWROUTER_DISABLED === "true" || process.env.CLAWROUTER_DISABLED === "1";
+      process.env.MNEMOSPARK_DISABLED === "true" || process.env.MNEMOSPARK_DISABLED === "1";
     if (isDisabled) {
-      api.logger.info("ClawRouter disabled (CLAWROUTER_DISABLED=true). Using default routing.");
+      api.logger.info("mnemospark disabled (MNEMOSPARK_DISABLED=true). Using default routing.");
       return;
     }
 
@@ -702,12 +702,12 @@ const plugin: OpenClawPluginDefinition = {
     // Register a service with stop() for cleanup on gateway shutdown
     // This prevents EADDRINUSE when the gateway restarts
     api.registerService({
-      id: "clawrouter-proxy",
+      id: "mnemospark-proxy",
       start: () => {
         // No-op: proxy is started below in non-blocking mode
       },
       stop: async () => {
-        // Close proxy on gateway shutdown to release port 8402
+        // Close proxy on gateway shutdown to release port 7120
         if (activeProxyHandle) {
           try {
             await activeProxyHandle.close();

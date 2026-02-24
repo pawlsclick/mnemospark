@@ -1,8 +1,8 @@
 # Troubleshooting
 
-Quick solutions for common ClawRouter issues.
+Quick solutions for common mnemospark issues.
 
-> Need help? [Open a Discussion](https://github.com/BlockRunAI/ClawRouter/discussions) or check [existing issues](https://github.com/BlockRunAI/ClawRouter/issues).
+> Need help? [Open a Discussion](https://github.com/pawlsclick/mnemospark/discussions) or check [existing issues](https://github.com/pawlsclick/mnemospark/issues).
 
 ## Table of Contents
 
@@ -18,11 +18,11 @@ Quick solutions for common ClawRouter issues.
 ## Quick Checklist
 
 ```bash
-# 1. Check your version (should be 0.5.7+)
-cat ~/.openclaw/extensions/clawrouter/package.json | grep version
+# 1. Check your version
+cat ~/.openclaw/extensions/mnemospark/package.json | grep version
 
-# 2. Check proxy is running
-curl http://localhost:8402/health
+# 2. Check proxy is running (mnemospark uses port 7120)
+curl http://localhost:7120/health
 
 # 3. Watch routing in action
 openclaw logs --follow
@@ -48,7 +48,7 @@ Auth profile is missing or wasn't created properly.
 
 **Fix:** See [How to Update](#how-to-update) — the reinstall script automatically injects the auth profile.
 
-### "Config validation failed: plugin not found: clawrouter"
+### "Config validation failed: plugin not found: mnemospark"
 
 Plugin directory was removed but config still references it. This blocks all OpenClaw commands until fixed.
 
@@ -71,7 +71,7 @@ Wallet needs funding.
 
 ### "WARNING: dangerous code patterns — possible credential harvesting"
 
-This is a **false positive**. ClawRouter legitimately:
+This is a **false positive**. mnemospark legitimately:
 
 1. Reads `BLOCKRUN_WALLET_KEY` from environment (for authentication)
 2. Sends authenticated requests to BlockRun API (for x402 micropayments)
@@ -80,7 +80,7 @@ This pattern triggers OpenClaw's security scanner, but it's the intended behavio
 
 ### "env-harvesting" Warning
 
-OpenClaw's security scanner may flag ClawRouter with:
+OpenClaw's security scanner may flag mnemospark with:
 
 ```
 [env-harvesting] Environment variable access combined with network send
@@ -88,13 +88,13 @@ OpenClaw's security scanner may flag ClawRouter with:
 
 **This is a false positive.** The scanner's heuristic (`env variable + network request = suspicious`) flags all payment plugins, but this pattern is inherently required for non-custodial payments.
 
-ClawRouter reads `BLOCKRUN_WALLET_KEY` to sign x402 payment transactions — this is required and intentional:
+mnemospark reads `BLOCKRUN_WALLET_KEY` to sign x402 payment transactions — this is required and intentional:
 
 - The wallet key is used **locally** for cryptographic signing (EIP-712)
 - The **signature** is transmitted, not the private key itself
 - The key **never leaves the machine** — only cryptographic proofs are sent
 - This is standard [x402 payment protocol](https://x402.org) behavior
-- Source code is [MIT licensed and fully auditable](https://github.com/BlockRunAI/ClawRouter)
+- Source code is [MIT licensed and fully auditable](https://github.com/pawlsclick/mnemospark)
 
 See [`openclaw.security.json`](../openclaw.security.json) for detailed security documentation and [this discussion](https://x.com/bc1beat/status/2020158972561428686) for more context.
 
@@ -102,9 +102,9 @@ See [`openclaw.security.json`](../openclaw.security.json) for detailed security 
 
 ## Port Conflicts
 
-### Port 8402 already in use
+### Port 7120 already in use
 
-As of v0.4.1, ClawRouter automatically detects and reuses an existing proxy on the configured port instead of failing with `EADDRINUSE`. You should no longer see this error.
+mnemospark automatically detects and reuses an existing proxy on the configured port (default 7120) instead of failing with `EADDRINUSE`. You should no longer see this error.
 
 If you need to use a different port:
 
@@ -117,7 +117,7 @@ openclaw gateway restart
 To manually check/kill the process:
 
 ```bash
-lsof -i :8402
+lsof -i :7120
 # Kill the process or restart OpenClaw
 ```
 
@@ -126,7 +126,7 @@ lsof -i :8402
 ## How to Update
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/BlockRunAI/ClawRouter/main/scripts/reinstall.sh | bash
+bash ~/.openclaw/extensions/mnemospark/scripts/reinstall.sh
 openclaw gateway restart
 ```
 

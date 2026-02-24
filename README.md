@@ -1,6 +1,6 @@
 # mnemospark
 
-Smart LLM router and inference toolkit — based on [ClawRouter](https://github.com/BlockRunAI/ClawRouter). 30+ models, one wallet, x402 micropayments.
+Smart LLM router and inference toolkit — fork of [BlockRun's ClawRouter](https://github.com/BlockRunAI/ClawRouter). 30+ models, one wallet, x402 micropayments.
 
 **Repository:** [github.com/pawlsclick/mnemospark](https://github.com/pawlsclick/mnemospark)
 

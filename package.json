@@ -1,7 +1,7 @@
 {
   "name": "mnemospark",
   "version": "0.9.30",
-  "description": "Smart LLM router and inference toolkit — based on ClawRouter. 30+ models, one wallet, x402 micropayments.",
+  "description": "Smart LLM router and inference toolkit — fork of BlockRun's ClawRouter. 30+ models, one wallet, x402 micropayments.",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -33,15 +33,7 @@
     "lint": "eslint src/",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "test:resilience:errors": "npx tsx test/resilience-errors.ts",
-    "test:resilience:stability": "DURATION_MINUTES=5 npx tsx test/resilience-stability.ts",
-    "test:resilience:stability:full": "DURATION_MINUTES=240 npx tsx test/resilience-stability.ts",
-    "test:resilience:lifecycle": "npx tsx test/resilience-lifecycle.ts",
-    "test:resilience:quick": "npm run test:resilience:errors && npm run test:resilience:lifecycle",
-    "test:resilience:full": "npm run test:resilience:errors && npm run test:resilience:lifecycle && npm run test:resilience:stability:full",
     "test:e2e:tool-ids": "npx tsx test/e2e-tool-id-sanitization.ts",
-    "test:docker:install": "bash test/run-docker-test.sh",
-    "test:docker:edge-cases": "bash test/docker/run-edge-cases.sh",
     "prepare": "husky"
   },
   "keywords": [

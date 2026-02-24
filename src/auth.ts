@@ -14,7 +14,7 @@
  * This module reads BLOCKRUN_WALLET_KEY environment variable and uses it
  * to sign x402 payment requests. This is INTENTIONAL and REQUIRED behavior:
  * - The wallet key signs USDC payments on Base L2 for each LLM API call
- * - Without the key, ClawRouter cannot authorize payments to BlockRun
+ * - Without the key, mnemospark cannot authorize payments to BlockRun
  * - The key is NEVER transmitted over the network, only used locally for signing
  * - This is standard x402 payment flow, not credential harvesting
  *
@@ -42,15 +42,15 @@ async function loadSavedWallet(): Promise<string | undefined> {
   try {
     const key = (await readFile(WALLET_FILE, "utf-8")).trim();
     if (key.startsWith("0x") && key.length === 66) {
-      console.log(`[ClawRouter] ✓ Loaded existing wallet from ${WALLET_FILE}`);
+      console.log(`[mnemospark] ✓ Loaded existing wallet from ${WALLET_FILE}`);
       return key;
     }
-    console.warn(`[ClawRouter] ⚠ Wallet file exists but is invalid (wrong format)`);
+    console.warn(`[mnemospark] ⚠ Wallet file exists but is invalid (wrong format)`);
   } catch (err) {
     // File doesn't exist yet - this is expected on first run
     if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
       console.error(
-        `[ClawRouter] ✗ Failed to read wallet file: ${err instanceof Error ? err.message : String(err)}`,
+        `[mnemospark] ✗ Failed to read wallet file: ${err instanceof Error ? err.message : String(err)}`,
       );
     }
   }
@@ -77,7 +77,7 @@ async function generateAndSaveWallet(): Promise<{ key: string; address: string }
     if (verification !== key) {
       throw new Error("Wallet file verification failed - content mismatch");
     }
-    console.log(`[ClawRouter] ✓ Wallet saved and verified at ${WALLET_FILE}`);
+    console.log(`[mnemospark] ✓ Wallet saved and verified at ${WALLET_FILE}`);
   } catch (err) {
     throw new Error(
       `Failed to verify wallet file after creation: ${err instanceof Error ? err.message : String(err)}`,
