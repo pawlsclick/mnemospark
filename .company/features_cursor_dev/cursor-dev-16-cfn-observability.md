@@ -22,7 +22,8 @@ Add a **CloudFormation** template (or extend existing) for **observability**: Cl
   - [ ] At least one CloudWatch alarm for API Gateway or Lambda: e.g. 4xx count, 5xx count, throttle count, or latency (metric and threshold defined).
   - [ ] Optional: CloudTrail or documentation for enabling it for API and account actions.
   - [ ] Template validates; stack deploys or change-set succeeds (or README with deploy steps).
+  - [ ] All taggable resources tagged with `Project: mnemospark` (or `Application: mnemospark`).
 
 ## Task string (optional)
 
-Add CloudFormation for observability: CloudWatch log groups (API access + Lambda), alarms for 4xx/5xx/throttle/latency. Optional CloudTrail. Ref: infrastructure_design/internet_facing_API.md § Logging and monitoring. Depends on 08. Acceptance: [ ] log groups; [ ] alarms; [ ] template validates and deploys.
+Before implementing, read .company/features_cursor_dev/AWS_DOCS_REFERENCES.md and use the listed AWS docs for CloudFormation/SAM syntax. Add CloudFormation for observability: CloudWatch log groups (API access + Lambda), alarms for 4xx/5xx/throttle/latency. Optional CloudTrail. Ref: infrastructure_design/internet_facing_API.md § Logging and monitoring. Depends on 08. Acceptance: [ ] log groups; [ ] alarms; [ ] template validates and deploys.

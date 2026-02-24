@@ -28,7 +28,8 @@ Implement the upload Lambda for `POST /storage/upload`: lookup quote in DynamoDB
   - [ ] Idempotency-Key: same key within 24h returns 200 with cached response if already completed; 409 if in progress (per §9).
   - [ ] 402/payment headers: conform to API spec §2 (v2 names; legacy accepted)—return 402 with PAYMENT-REQUIRED or x-payment-required; accept PAYMENT-SIGNATURE or x-payment on retry.
   - [ ] Unit/integration tests; error responses use common shape per §10.
+  - [ ] All taggable resources (Lambda, API route, etc.) tagged with `Project: mnemospark` (or `Application: mnemospark`).
 
 ## Task string (optional)
 
-Implement upload Lambda for POST /storage/upload: quote lookup, EIP-712 payment verification on Base, S3 upload (bucket per wallet, client-held encryption), DynamoDB transaction log, Idempotency-Key per API spec §9. Use examples/object_storage_management_aws.py pattern. Acceptance: [ ] quote lookup + validation; [ ] payment verify + S3 upload; [ ] txn log; [ ] idempotency; [ ] tests and error shape.
+Before implementing, read .company/features_cursor_dev/AWS_DOCS_REFERENCES.md and use the listed AWS docs for CloudFormation/SAM syntax. Implement upload Lambda for POST /storage/upload: quote lookup, EIP-712 payment verification on Base, S3 upload (bucket per wallet, client-held encryption), DynamoDB transaction log, Idempotency-Key per API spec §9. Use examples/object_storage_management_aws.py pattern. Acceptance: [ ] quote lookup + validation; [ ] payment verify + S3 upload; [ ] txn log; [ ] idempotency; [ ] tests and error shape.

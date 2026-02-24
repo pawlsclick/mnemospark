@@ -24,7 +24,8 @@ Implement the object storage Lambda for `POST /storage/delete` and `DELETE /stor
   - [ ] Response 200 JSON: `success`, `key`, `bucket`, `bucket_deleted` per §7.2.
   - [ ] 404 or error shape per §9 if object or bucket not found.
   - [ ] Unit tests; integration test with S3 (or mocked).
+  - [ ] All taggable resources (Lambda, API route, etc.) tagged with `Project: mnemospark` (or `Application: mnemospark`).
 
 ## Task string (optional)
 
-Implement Lambda for POST/DELETE /storage/delete: delete object from wallet bucket; delete bucket if empty. Response per API spec §7.2. Acceptance: [ ] request params; [ ] object deleted; [ ] bucket deleted when empty; [ ] response shape; [ ] tests.
+Before implementing, read .company/features_cursor_dev/AWS_DOCS_REFERENCES.md and use the listed AWS docs for CloudFormation/SAM syntax. Implement Lambda for POST/DELETE /storage/delete: delete object from wallet bucket; delete bucket if empty. Response per API spec §7.2. Acceptance: [ ] request params; [ ] object deleted; [ ] bucket deleted when empty; [ ] response shape; [ ] tests.

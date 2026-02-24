@@ -24,7 +24,8 @@ Implement a scheduled job (e.g. EventBridge rule + Lambda) that checks stored ob
   - [ ] Deletion: remove object from S3; delete bucket if empty; update or remove transaction record as needed.
   - [ ] Recipient wallet from env (e.g. `MNEMOSPARK_RECIPIENT_WALLET`); payment confirmation logic documented or implemented (on-chain check or ledger).
   - [ ] Unit tests; optional integration test with mocked data.
+  - [ ] All taggable resources (Lambda, EventBridge rule, etc.) tagged with `Project: mnemospark` (or `Application: mnemospark`).
 
 ## Task string (optional)
 
-Implement housekeeping scheduled job for mnemospark-backend: EventBridge + Lambda that checks payment per object; if not paid within 32 days of last due date, delete object and bucket if empty. Use MNEMOSPARK_RECIPIENT_WALLET. Ref: full_workflow housekeeping. Acceptance: [ ] scheduled trigger; [ ] 32-day check; [ ] delete object/bucket; [ ] recipient wallet from config; [ ] tests.
+Before implementing, read .company/features_cursor_dev/AWS_DOCS_REFERENCES.md and use the listed AWS docs for CloudFormation/SAM syntax. Implement housekeeping scheduled job for mnemospark-backend: EventBridge + Lambda that checks payment per object; if not paid within 32 days of last due date, delete object and bucket if empty. Use MNEMOSPARK_RECIPIENT_WALLET. Ref: full_workflow housekeeping. Acceptance: [ ] scheduled trigger; [ ] 32-day check; [ ] delete object/bucket; [ ] recipient wallet from config; [ ] tests.

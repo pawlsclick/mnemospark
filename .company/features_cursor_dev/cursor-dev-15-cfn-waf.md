@@ -23,7 +23,8 @@ Add a **CloudFormation** template (or nested stack) that creates an **AWS WAF We
   - [ ] Web ACL is associated with the API Gateway REST API stage (e.g. AWS::WAFv2::WebACLAssociation or console association); stage ID/ARN can be parameter or output from API stack.
   - [ ] Template validates: `aws cloudformation validate-template --template-body file://template.yaml` (or URL) succeeds.
   - [ ] Stack deploys (or deploy dry-run / change-set) without errors; or README documents how to deploy after API stack.
+  - [ ] All taggable resources tagged with `Project: mnemospark` (or `Application: mnemospark`).
 
 ## Task string (optional)
 
-Add CloudFormation template for AWS WAF: Web ACL with AWS managed rule groups (e.g. Core, Known Bad Inputs), associate with API Gateway stage. Ref: infrastructure_design/internet_facing_API.md. Depends on 08. Acceptance: [ ] Web ACL resource; [ ] managed rule groups; [ ] association with API stage; [ ] template validates; [ ] deploy or doc.
+Before implementing, read .company/features_cursor_dev/AWS_DOCS_REFERENCES.md and use the listed AWS docs for CloudFormation/SAM syntax. Add CloudFormation template for AWS WAF: Web ACL with AWS managed rule groups (e.g. Core, Known Bad Inputs), associate with API Gateway stage. Ref: infrastructure_design/internet_facing_API.md. Depends on 08. Acceptance: [ ] Web ACL resource; [ ] managed rule groups; [ ] association with API stage; [ ] template validates; [ ] deploy or doc.

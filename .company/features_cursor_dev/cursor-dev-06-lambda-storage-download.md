@@ -24,7 +24,8 @@ Implement the object storage Lambda for `GET /storage/download` and `POST /stora
   - [ ] Response 200 JSON: `download_url`, `object_key`, optional `expires_in_seconds` per §6 (presigned URL flow).
   - [ ] 404 or error shape per §9 if object not found.
   - [ ] Unit tests; integration test with S3 (or mocked).
+  - [ ] All taggable resources (Lambda, API route, etc.) tagged with `Project: mnemospark` (or `Application: mnemospark`).
 
 ## Task string (optional)
 
-Implement Lambda for GET/POST /storage/download: validate wallet/key, return presigned GET URL for S3 object. Response per API spec §6. Acceptance: [ ] request params; [ ] presigned URL in response; [ ] 404/error shape; [ ] tests.
+Before implementing, read .company/features_cursor_dev/AWS_DOCS_REFERENCES.md and use the listed AWS docs for CloudFormation/SAM syntax. Implement Lambda for GET/POST /storage/download: validate wallet/key, return presigned GET URL for S3 object. Response per API spec §6. Acceptance: [ ] request params; [ ] presigned URL in response; [ ] 404/error shape; [ ] tests.

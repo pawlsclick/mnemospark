@@ -1,6 +1,8 @@
 node_modules/
 dist/
 .venv/
+# Prefer pnpm; ignore npm lockfile (see scripts/README.md)
+package-lock.json
 
 # Python / uv
 __pycache__/

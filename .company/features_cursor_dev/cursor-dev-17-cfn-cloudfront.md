@@ -22,7 +22,8 @@
   - [ ] Viewer protocol policy enforces HTTPS; TLS 1.2+ (default policy or custom).
   - [ ] If custom domain: ACM certificate (us-east-1) referenced; alternate domain name(s) and DNS can be documented.
   - [ ] Template validates; stack deploys or change-set succeeds (or README with deploy steps).
+  - [ ] All taggable resources tagged with `Project: mnemospark` (or `Application: mnemospark`).
 
 ## Task string (optional)
 
-Add optional CloudFormation for CloudFront: distribution with origin = API Gateway, HTTPS only, TLS at edge. Optional ACM + custom domain. Ref: infrastructure_design/internet_facing_API.md. Depends on 08. Acceptance: [ ] CloudFront resource; [ ] HTTPS; [ ] template validates and deploys.
+Before implementing, read .company/features_cursor_dev/AWS_DOCS_REFERENCES.md and use the listed AWS docs for CloudFormation/SAM syntax. Add optional CloudFormation for CloudFront: distribution with origin = API Gateway, HTTPS only, TLS at edge. Optional ACM + custom domain. Ref: infrastructure_design/internet_facing_API.md. Depends on 08. Acceptance: [ ] CloudFront resource; [ ] HTTPS; [ ] template validates and deploys.

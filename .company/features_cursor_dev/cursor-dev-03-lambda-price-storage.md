@@ -25,7 +25,8 @@ Implement the price-storage orchestrator Lambda for `POST /price-storage`: call 
   - [ ] Errors (e.g. DynamoDB failure, missing params) return consistent error shape per API spec §10.
   - [ ] 402/payment headers: conform to API spec (v2 names; legacy accepted) when downstream flows use 402.
   - [ ] Unit tests; integration test with real or mocked estimate Lambdas and DynamoDB.
+  - [ ] All taggable resources (Lambda, API route, etc.) tagged with `Project: mnemospark` (or `Application: mnemospark`).
 
 ## Task string (optional)
 
-Implement the price-storage orchestrator Lambda for POST /price-storage: call estimate/storage and estimate/transfer, add markup, write quote to DynamoDB (1h TTL), return quote JSON per API spec §5.3. Depends on 01, 02, 09. Acceptance: [ ] request/response per spec; [ ] quote in DynamoDB with TTL; [ ] error shape; [ ] tests.
+Before implementing, read .company/features_cursor_dev/AWS_DOCS_REFERENCES.md and use the listed AWS docs for CloudFormation/SAM syntax. Implement the price-storage orchestrator Lambda for POST /price-storage: call estimate/storage and estimate/transfer, add markup, write quote to DynamoDB (1h TTL), return quote JSON per API spec §5.3. Depends on 01, 02, 09. Acceptance: [ ] request/response per spec; [ ] quote in DynamoDB with TTL; [ ] error shape; [ ] tests.
