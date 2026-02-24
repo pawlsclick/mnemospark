@@ -138,7 +138,7 @@
 
 # ANSWERS (from repo, design decisions, and best practices)
 
-Answers below are derived from the repo (workflow, PRD, spec_feedback, slash_commands, examples, clawrouter EIP-712, balance.ts), AWS docs, and common design practice. **Product/tech lead must confirm** any answer marked as _Decision needed_ before implementation.
+Answers below are derived from the repo (workflow, PRD, spec*feedback, slash_commands, examples, clawrouter EIP-712, balance.ts), AWS docs, and common design practice. **Product/tech lead must confirm** any answer marked as \_Decision needed* before implementation.
 
 ---
 
