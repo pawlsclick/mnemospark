@@ -4,6 +4,8 @@
 **Repo:** mnemospark-backend  
 **Rough size:** One Cloud Agent run
 
+**Workspace for Cloud Agent:** Work only in **this repo** (the repo you were started in). This repo is mnemospark-backend. Backend features (01–10, 15–17) and design patterns live in this repo (e.g. `examples/s3-cost-estimate-api`). Do **not** open, clone, or require access to BlockRun/ClawRouter, OpenRouter, or any other repository; all code and references are in this repo and `.company/`.
+
 ## Scope
 
 Implement the object storage Lambda for `GET /storage/download` and `POST /storage/download`: validate wallet and object key, then return a presigned GET URL for S3 (recommended for all sizes to avoid Lambda payload limits). Optionally support inline base64 for small files. Response shape per API spec §6.
@@ -28,4 +30,4 @@ Implement the object storage Lambda for `GET /storage/download` and `POST /stora
 
 ## Task string (optional)
 
-Before implementing, read .company/features_cursor_dev/AWS_DOCS_REFERENCES.md and use the listed AWS docs for CloudFormation/SAM syntax. Implement Lambda for GET/POST /storage/download: validate wallet/key, return presigned GET URL for S3 object. Response per API spec §6. Acceptance: [ ] request params; [ ] presigned URL in response; [ ] 404/error shape; [ ] tests.
+Work only in this repo; do not use BlockRun/ClawRouter or any other repo. Before implementing, read .company/features_cursor_dev/AWS_DOCS_REFERENCES.md and use the listed AWS docs for CloudFormation/SAM syntax. Implement Lambda for GET/POST /storage/download: validate wallet/key, return presigned GET URL for S3 object. Response per API spec §6. Acceptance: [ ] request params; [ ] presigned URL in response; [ ] 404/error shape; [ ] tests.

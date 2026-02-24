@@ -15,12 +15,18 @@ Small, single-run feature specs for [Cursor Cloud Agents](https://cursor.com/doc
 
 ---
 
-## Repo mapping
+## Repo mapping (where to run the Cloud Agent)
 
-| Features     | Repo                                                                                                                                                                                                                                                    |
-| ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 01–10, 15–17 | **mnemospark-backend** (or `examples/` in this repo if backend not yet split). Backend infra (08, 15–17) is built with **CloudFormation** (or SAM) per [infrastructure_design/internet_facing_API.md](../infrastructure_design/internet_facing_API.md). |
-| 11–14        | **mnemospark** (this repo) — plugin/client.                                                                                                                                                                                                             |
+- **Backend features (01–10, 15–17):** Start the Cloud Agent from the **mnemospark-backend** repo. Seed that repo first by running from mnemospark:  
+  `./scripts/seed-mnemospark-backend.sh /path/to/mnemospark-backend`
+- **Client features (11–14):** Start the Cloud Agent from the **mnemospark** repo.
+
+The agent must work **only in the repo it was started in**. Do **not** open, clone, or require access to BlockRun/ClawRouter, OpenRouter, or any other repository.
+
+| Features     | Repo to run agent from | Notes                                                                                                                                                                                            |
+| ------------ | ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 01–10, 15–17 | **mnemospark-backend** | Seed first (see above). Backend infra (08, 15–17) is built with **CloudFormation** (or SAM) per [infrastructure_design/internet_facing_API.md](../infrastructure_design/internet_facing_API.md). |
+| 11–14        | **mnemospark**         | Plugin/client.                                                                                                                                                                                   |
 
 **mnemospark proxy port:** For client features (11–14), the mnemospark proxy listens on **port 7120** by default. Agents and config should use `http://127.0.0.1:7120` when talking to the proxy (configurable via `MNEMOSPARK_PROXY_PORT`).
 

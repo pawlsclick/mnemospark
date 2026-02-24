@@ -4,6 +4,8 @@
 **Repo:** mnemospark-backend  
 **Rough size:** One Cloud Agent run
 
+**Workspace for Cloud Agent:** Work only in **this repo** (the repo you were started in). This repo is mnemospark-backend. Backend features (01–10, 15–17) and design patterns live in this repo (e.g. `examples/s3-cost-estimate-api`). Do **not** open, clone, or require access to BlockRun/ClawRouter, OpenRouter, or any other repository; all code and references are in this repo and `.company/`.
+
 ## Scope
 
 Implement the price-storage orchestrator Lambda for `POST /price-storage`: call the storage cost Lambda (POST /estimate/storage) and transfer cost Lambda (POST /estimate/transfer), add configurable markup, create a quote row in DynamoDB (1h TTL), and return the quote JSON per API spec §5.3. Depends on cursor-dev-01, cursor-dev-02, and cursor-dev-09 (DynamoDB quotes table).
@@ -29,4 +31,4 @@ Implement the price-storage orchestrator Lambda for `POST /price-storage`: call 
 
 ## Task string (optional)
 
-Before implementing, read .company/features_cursor_dev/AWS_DOCS_REFERENCES.md and use the listed AWS docs for CloudFormation/SAM syntax. Implement the price-storage orchestrator Lambda for POST /price-storage: call estimate/storage and estimate/transfer, add markup, write quote to DynamoDB (1h TTL), return quote JSON per API spec §5.3. Depends on 01, 02, 09. Acceptance: [ ] request/response per spec; [ ] quote in DynamoDB with TTL; [ ] error shape; [ ] tests.
+Work only in this repo; do not use BlockRun/ClawRouter or any other repo. Before implementing, read .company/features_cursor_dev/AWS_DOCS_REFERENCES.md and use the listed AWS docs for CloudFormation/SAM syntax. Implement the price-storage orchestrator Lambda for POST /price-storage: call estimate/storage and estimate/transfer, add markup, write quote to DynamoDB (1h TTL), return quote JSON per API spec §5.3. Depends on 01, 02, 09. Acceptance: [ ] request/response per spec; [ ] quote in DynamoDB with TTL; [ ] error shape; [ ] tests.

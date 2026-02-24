@@ -4,6 +4,8 @@
 **Repo:** mnemospark-backend  
 **Rough size:** One Cloud Agent run
 
+**Workspace for Cloud Agent:** Work only in **this repo** (the repo you were started in). This repo is mnemospark-backend. Backend features (01–10, 15–17) and design patterns live in this repo (e.g. `examples/s3-cost-estimate-api`). Do **not** open, clone, or require access to BlockRun/ClawRouter, OpenRouter, or any other repository; all code and references are in this repo and `.company/`.
+
 ## Scope
 
 Add CloudFormation/SAM resources (or equivalent) for DynamoDB: (1) quotes table with TTL 1 hour for quote rows; (2) transaction log table for upload transactions. Define IAM permissions so Lambdas (price-storage, upload) can read/write as needed. No application logic in this task—tables and IAM only.
@@ -27,4 +29,4 @@ Add CloudFormation/SAM resources (or equivalent) for DynamoDB: (1) quotes table 
 
 ## Task string (optional)
 
-Before implementing, read .company/features_cursor_dev/AWS_DOCS_REFERENCES.md and use the listed AWS docs for CloudFormation/SAM syntax. Add DynamoDB tables for mnemospark-backend: (1) quotes table with TTL 1h; (2) transaction log table for uploads. Define IAM for price-storage and upload Lambdas. Acceptance: [ ] quotes table + TTL; [ ] txn log table; [ ] IAM for both Lambdas; [ ] template validates and deploys.
+Work only in this repo; do not use BlockRun/ClawRouter or any other repo. Before implementing, read .company/features_cursor_dev/AWS_DOCS_REFERENCES.md and use the listed AWS docs for CloudFormation/SAM syntax. Add DynamoDB tables for mnemospark-backend: (1) quotes table with TTL 1h; (2) transaction log table for uploads. Define IAM for price-storage and upload Lambdas. Acceptance: [ ] quotes table + TTL; [ ] txn log table; [ ] IAM for both Lambdas; [ ] template validates and deploys.

@@ -41,6 +41,16 @@ sudo apt install -y jq
 
 Or run `./scripts/install-jq.sh` if present.
 
+## Seed mnemospark-backend
+
+Before running Cursor Cloud Agent on backend features (01–10, 15–17), seed the **mnemospark-backend** repo from this repo:
+
+```bash
+./scripts/seed-mnemospark-backend.sh /path/to/mnemospark-backend
+```
+
+Then open mnemospark-backend in Cursor and start the Cloud Agent there. See [.company/features_cursor_dev/README.md](../.company/features_cursor_dev/README.md) for where to run each feature.
+
 ## Other scripts
 
 - `reinstall.sh` — Reinstall mnemospark OpenClaw plugin.

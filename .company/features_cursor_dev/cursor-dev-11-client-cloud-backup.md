@@ -4,6 +4,8 @@
 **Repo:** mnemospark  
 **Rough size:** One Cloud Agent run
 
+**Workspace for Cloud Agent:** Work only in **this repo** (the repo you were started in). Client features (11–14) are in this repo (plugin/client). Do **not** open, clone, or require access to BlockRun/ClawRouter, OpenRouter, or any other repository; all code and references are in this repo and `.company/`.
+
 ## Scope
 
 Implement the **mnemospark-client** command `/cloud backup <file>` or `/cloud backup <directory>` per [mnemospark_full_workflow.md](../mnemospark_full_workflow.md): Mac/Linux only; tar+gzip to /tmp (filename = `<object-id>`); compute SHA-256 hash (`<object-id-hash>`); compute size in GB (`<object-size-gb>`); write to object lifecycle log at `~/.openclaw/mnemospark/object.log`; print user message with object-id, object-id-hash, object-size-gb; on error print "Cannot build storage object". Check /tmp exists and available disk space before writing.
@@ -28,4 +30,4 @@ Implement the **mnemospark-client** command `/cloud backup <file>` or `/cloud ba
 
 ## Task string (optional)
 
-Implement mnemospark-client /cloud backup &lt;file&gt; or &lt;directory&gt;: tar.gz to /tmp, hash, size, write to ~/.openclaw/mnemospark/object.log, print object-id/hash/size. Mac/Linux only; check /tmp and disk space. Ref: mnemospark_full_workflow.md backup command. Acceptance: [ ] backup command; [ ] object.log; [ ] user message; [ ] error message; [ ] test.
+Work only in this repo; do not use BlockRun/ClawRouter or any other repo. Implement mnemospark-client /cloud backup &lt;file&gt; or &lt;directory&gt;: tar.gz to /tmp, hash, size, write to ~/.openclaw/mnemospark/object.log, print object-id/hash/size. Mac/Linux only; check /tmp and disk space. Ref: mnemospark_full_workflow.md backup command. Acceptance: [ ] backup command; [ ] object.log; [ ] user message; [ ] error message; [ ] test.

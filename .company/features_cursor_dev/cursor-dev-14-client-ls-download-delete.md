@@ -4,6 +4,8 @@
 **Repo:** mnemospark  
 **Rough size:** One Cloud Agent run
 
+**Workspace for Cloud Agent:** Work only in **this repo** (the repo you were started in). Client features (11–14) are in this repo (plugin/client). Do **not** open, clone, or require access to BlockRun/ClawRouter, OpenRouter, or any other repository; all code and references are in this repo and `.company/`.
+
 ## Scope
 
 Implement the **mnemospark-client** and **mnemospark-proxy** flows for `/cloud ls`, `/cloud download`, and `/cloud delete`. Each command takes `--wallet-address <addr>` and `--object-key <s3-key>`. Proxy calls backend GET/POST /storage/ls, /storage/download, /storage/delete respectively; client prints user-facing messages per [mnemospark_full_workflow.md](../mnemospark_full_workflow.md) (ls: object and size; download: "File \<s3-key\> downloaded"; delete: "File \<s3-key\> deleted"). For download, proxy receives presigned URL or stream and writes file to disk then returns to client. Depends on backend storage Lambdas (cursor-dev-05, 06, 07).
@@ -27,4 +29,4 @@ Implement the **mnemospark-client** and **mnemospark-proxy** flows for `/cloud l
 
 ## Task string (optional)
 
-Implement /cloud ls, /cloud download, /cloud delete: args --wallet-address and --object-key; proxy calls /storage/ls, /storage/download, /storage/delete; client messages per full_workflow. Download: handle presigned URL and write file. Acceptance: [ ] ls; [ ] download; [ ] delete; [ ] error handling; [ ] tests.
+Work only in this repo; do not use BlockRun/ClawRouter or any other repo. Implement /cloud ls, /cloud download, /cloud delete: args --wallet-address and --object-key; proxy calls /storage/ls, /storage/download, /storage/delete; client messages per full_workflow. Download: handle presigned URL and write file. Acceptance: [ ] ls; [ ] download; [ ] delete; [ ] error handling; [ ] tests.

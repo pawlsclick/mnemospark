@@ -4,6 +4,8 @@
 **Repo:** mnemospark-backend  
 **Rough size:** One Cloud Agent run
 
+**Workspace for Cloud Agent:** Work only in **this repo** (the repo you were started in). This repo is mnemospark-backend. Backend features (01–10, 15–17) and design patterns live in this repo (e.g. `examples/s3-cost-estimate-api`). Do **not** open, clone, or require access to BlockRun/ClawRouter, OpenRouter, or any other repository; all code and references are in this repo and `.company/`.
+
 ## Scope
 
 Add a **CloudFormation** template (or extend existing) for **observability**: CloudWatch log group(s) for API Gateway access logging and Lambda execution; CloudWatch alarms for 4xx, 5xx, throttle, and latency. Optional: CloudTrail for API and account activity. Per [infrastructure_design/internet_facing_API.md](../infrastructure_design/internet_facing_API.md) § Logging and monitoring. Depends on cursor-dev-08 (API Gateway and Lambdas).
@@ -26,4 +28,4 @@ Add a **CloudFormation** template (or extend existing) for **observability**: Cl
 
 ## Task string (optional)
 
-Before implementing, read .company/features_cursor_dev/AWS_DOCS_REFERENCES.md and use the listed AWS docs for CloudFormation/SAM syntax. Add CloudFormation for observability: CloudWatch log groups (API access + Lambda), alarms for 4xx/5xx/throttle/latency. Optional CloudTrail. Ref: infrastructure_design/internet_facing_API.md § Logging and monitoring. Depends on 08. Acceptance: [ ] log groups; [ ] alarms; [ ] template validates and deploys.
+Work only in this repo; do not use BlockRun/ClawRouter or any other repo. Before implementing, read .company/features_cursor_dev/AWS_DOCS_REFERENCES.md and use the listed AWS docs for CloudFormation/SAM syntax. Add CloudFormation for observability: CloudWatch log groups (API access + Lambda), alarms for 4xx/5xx/throttle/latency. Optional CloudTrail. Ref: infrastructure_design/internet_facing_API.md § Logging and monitoring. Depends on 08. Acceptance: [ ] log groups; [ ] alarms; [ ] template validates and deploys.

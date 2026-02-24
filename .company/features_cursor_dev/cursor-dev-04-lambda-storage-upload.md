@@ -4,6 +4,8 @@
 **Repo:** mnemospark-backend  
 **Rough size:** One Cloud Agent run
 
+**Workspace for Cloud Agent:** Work only in **this repo** (the repo you were started in). This repo is mnemospark-backend. Backend features (01–10, 15–17) and design patterns live in this repo (e.g. `examples/s3-cost-estimate-api`). Do **not** open, clone, or require access to BlockRun/ClawRouter, OpenRouter, or any other repository; all code and references are in this repo and `.company/`.
+
 ## Scope
 
 Implement the upload Lambda for `POST /storage/upload`: lookup quote in DynamoDB, verify payment (EIP-712/USDC on Base), then upload to S3 (bucket per wallet, client-held encryption: store ciphertext + wrapped DEK in metadata). Write transaction log to DynamoDB. Support `Idempotency-Key` header per API spec §9. Use the design pattern from `examples/object_storage_management_aws.py`. Depends on cursor-dev-09 (DynamoDB).
@@ -32,4 +34,4 @@ Implement the upload Lambda for `POST /storage/upload`: lookup quote in DynamoDB
 
 ## Task string (optional)
 
-Before implementing, read .company/features_cursor_dev/AWS_DOCS_REFERENCES.md and use the listed AWS docs for CloudFormation/SAM syntax. Implement upload Lambda for POST /storage/upload: quote lookup, EIP-712 payment verification on Base, S3 upload (bucket per wallet, client-held encryption), DynamoDB transaction log, Idempotency-Key per API spec §9. Use examples/object_storage_management_aws.py pattern. Acceptance: [ ] quote lookup + validation; [ ] payment verify + S3 upload; [ ] txn log; [ ] idempotency; [ ] tests and error shape.
+Work only in this repo; do not use BlockRun/ClawRouter or any other repo. Before implementing, read .company/features_cursor_dev/AWS_DOCS_REFERENCES.md and use the listed AWS docs for CloudFormation/SAM syntax. Implement upload Lambda for POST /storage/upload: quote lookup, EIP-712 payment verification on Base, S3 upload (bucket per wallet, client-held encryption), DynamoDB transaction log, Idempotency-Key per API spec §9. Use examples/object_storage_management_aws.py pattern. Acceptance: [ ] quote lookup + validation; [ ] payment verify + S3 upload; [ ] txn log; [ ] idempotency; [ ] tests and error shape.

@@ -4,6 +4,8 @@
 **Repo:** mnemospark-backend  
 **Rough size:** One Cloud Agent run
 
+**Workspace for Cloud Agent:** Work only in **this repo** (the repo you were started in). This repo is mnemospark-backend. Backend features (01–10, 15–17) and design patterns live in this repo (e.g. `examples/s3-cost-estimate-api`). Do **not** open, clone, or require access to BlockRun/ClawRouter, OpenRouter, or any other repository; all code and references are in this repo and `.company/`.
+
 ## Scope
 
 Implement the Lambda for `POST /estimate/storage`: BCM Pricing Calculator–based S3 storage cost estimate (GB, region). Parse query or JSON body; return JSON per API spec §4.1. Add route to API Gateway (or document integration point). Include unit and integration tests. Use the design pattern from `examples/s3-cost-estimate-api`.
@@ -29,4 +31,4 @@ Implement the Lambda for `POST /estimate/storage`: BCM Pricing Calculator–base
 
 ## Task string (optional)
 
-Before implementing, read .company/features_cursor_dev/AWS_DOCS_REFERENCES.md and use the listed AWS docs for CloudFormation/SAM syntax. Implement the mnemospark-backend Lambda for POST /estimate/storage: BCM-based S3 storage cost (gb, region, rateType). Parse query/body; return JSON per mnemospark_backend_api_spec.md §4.1. Use examples/s3-cost-estimate-api as the design pattern. Acceptance: [ ] handler accepts gb/region/rateType; [ ] response shape per spec; [ ] BCM used for cost; [ ] unit + integration tests; [ ] route/integration documented or wired.
+Work only in this repo; do not use BlockRun/ClawRouter or any other repo. Before implementing, read .company/features_cursor_dev/AWS_DOCS_REFERENCES.md and use the listed AWS docs for CloudFormation/SAM syntax. Implement the mnemospark-backend Lambda for POST /estimate/storage: BCM-based S3 storage cost (gb, region, rateType). Parse query/body; return JSON per mnemospark_backend_api_spec.md §4.1. Use examples/s3-cost-estimate-api in this repo as the design pattern. Acceptance: [ ] handler accepts gb/region/rateType; [ ] response shape per spec; [ ] BCM used for cost; [ ] unit + integration tests; [ ] route/integration documented or wired.
