@@ -55,6 +55,9 @@ This document outlines recommended AWS services and configuration for securing a
    - Put **CloudFront** in front of the API for custom domain, caching (where applicable), and to work with **Shield** and **WAF** at the edge.
    - Use **origin** = API Gateway (custom domain or invoke URL); enforce HTTPS and modern TLS at the edge.
 
+9. **Resource tagging**
+   - Tag **every resource that supports tags** with a project identifier so resources can be identified and cost-allocated. Use at least: **`Project: mnemospark`** (or `Application: mnemospark`). In CloudFormation/SAM, set tags on the stack and/or on each taggable resource (Lambda, API Gateway, DynamoDB, WAF, CloudWatch log groups, CloudFront, etc.). See [Tagging AWS resources](https://docs.aws.amazon.com/general/latest/gr/aws_tagging.html).
+
 ---
 
 ## Architecture Diagram

@@ -1,6 +1,6 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Transform: AWS::Serverless-2016-10-31
-Description: S3 storage cost estimate REST API (Lambda + API Gateway)
+Description: S3 storage cost estimate REST API (Lambda + API Gateway). Resources are tagged Project: mnemospark (see .company/infrastructure_design/internet_facing_API.md §9).
 
 Parameters:
   StageName:
@@ -13,6 +13,8 @@ Resources:
     Type: AWS::Serverless::Api
     Properties:
       Name: s3-cost-estimate-api
+      Tags:
+        Project: mnemospark
       StageName: !Ref StageName
       Auth:
         ApiKeyRequired: true
@@ -31,6 +33,8 @@ Resources:
   S3CostEstimateFunction:
     Type: AWS::Serverless::Function
     Properties:
+      Tags:
+        Project: mnemospark
       Handler: app.lambda_handler
       Runtime: python3.13
       CodeUri: .

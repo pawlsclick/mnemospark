@@ -23,7 +23,8 @@ Add CloudFormation/SAM resources (or equivalent) for DynamoDB: (1) quotes table 
   - [ ] Transaction log table defined for upload records (e.g. quote_id, addr, trans_id, object_id, bucket, etc.).
   - [ ] IAM role(s) or policy snippets allow price-storage Lambda to write/read quotes; upload Lambda to read quotes and write transaction log.
   - [ ] Template validates (`aws cloudformation validate-template` or `sam validate`); stack deploys or dry-run succeeds.
+  - [ ] All taggable resources tagged with `Project: mnemospark` (or `Application: mnemospark`).
 
 ## Task string (optional)
 
-Add DynamoDB tables for mnemospark-backend: (1) quotes table with TTL 1h; (2) transaction log table for uploads. Define IAM for price-storage and upload Lambdas. Acceptance: [ ] quotes table + TTL; [ ] txn log table; [ ] IAM for both Lambdas; [ ] template validates and deploys.
+Before implementing, read .company/features_cursor_dev/AWS_DOCS_REFERENCES.md and use the listed AWS docs for CloudFormation/SAM syntax. Add DynamoDB tables for mnemospark-backend: (1) quotes table with TTL 1h; (2) transaction log table for uploads. Define IAM for price-storage and upload Lambdas. Acceptance: [ ] quotes table + TTL; [ ] txn log table; [ ] IAM for both Lambdas; [ ] template validates and deploys.

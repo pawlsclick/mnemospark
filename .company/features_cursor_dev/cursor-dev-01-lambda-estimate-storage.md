@@ -25,7 +25,8 @@ Implement the Lambda for `POST /estimate/storage`: BCM Pricing Calculator–base
   - [ ] BCM Pricing Calculator used for S3 storage cost (e.g. TimedStorage-ByteHrs); errors surfaced consistently.
   - [ ] Unit tests for handler and cost function; integration test against real BCM (or skipped if no creds).
   - [ ] Route or integration point for `POST /estimate/storage` documented or wired (e.g. in SAM/CloudFormation).
+  - [ ] All taggable resources (Lambda, API route, etc.) tagged with `Project: mnemospark` (or `Application: mnemospark`).
 
 ## Task string (optional)
 
-Implement the mnemospark-backend Lambda for POST /estimate/storage: BCM-based S3 storage cost (gb, region, rateType). Parse query/body; return JSON per mnemospark_backend_api_spec.md §4.1. Use examples/s3-cost-estimate-api as the design pattern. Acceptance: [ ] handler accepts gb/region/rateType; [ ] response shape per spec; [ ] BCM used for cost; [ ] unit + integration tests; [ ] route/integration documented or wired.
+Before implementing, read .company/features_cursor_dev/AWS_DOCS_REFERENCES.md and use the listed AWS docs for CloudFormation/SAM syntax. Implement the mnemospark-backend Lambda for POST /estimate/storage: BCM-based S3 storage cost (gb, region, rateType). Parse query/body; return JSON per mnemospark_backend_api_spec.md §4.1. Use examples/s3-cost-estimate-api as the design pattern. Acceptance: [ ] handler accepts gb/region/rateType; [ ] response shape per spec; [ ] BCM used for cost; [ ] unit + integration tests; [ ] route/integration documented or wired.

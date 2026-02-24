@@ -24,7 +24,8 @@ Implement the object storage Lambda for `GET /storage/ls` and `POST /storage/ls`
   - [ ] Response 200 JSON: `success`, `key`, `size_bytes`, `bucket` per §7.1.
   - [ ] 404 or error shape per §9 if object or bucket not found.
   - [ ] Unit tests; integration test against S3 (or mocked).
+  - [ ] All taggable resources (Lambda, API route, etc.) tagged with `Project: mnemospark` (or `Application: mnemospark`).
 
 ## Task string (optional)
 
-Implement Lambda for GET/POST /storage/ls: list object metadata (name + size) for wallet bucket. Request: wallet_address, object_key, optional location. Response per API spec §7.1. Acceptance: [ ] GET/POST accepted; [ ] bucket per wallet; [ ] response shape; [ ] 404/error shape; [ ] tests.
+Before implementing, read .company/features_cursor_dev/AWS_DOCS_REFERENCES.md and use the listed AWS docs for CloudFormation/SAM syntax. Implement Lambda for GET/POST /storage/ls: list object metadata (name + size) for wallet bucket. Request: wallet_address, object_key, optional location. Response per API spec §7.1. Acceptance: [ ] GET/POST accepted; [ ] bucket per wallet; [ ] response shape; [ ] 404/error shape; [ ] tests.

@@ -25,7 +25,8 @@ Implement the Lambda for `POST /estimate/transfer`: BCM-based data transfer (egr
   - [ ] BCM used for data transfer cost; errors surfaced consistently.
   - [ ] Unit tests for handler and cost function; integration test against real BCM (or skipped if no creds).
   - [ ] Route or integration point for `POST /estimate/transfer` documented or wired.
+  - [ ] All taggable resources (Lambda, API route, etc.) tagged with `Project: mnemospark` (or `Application: mnemospark`).
 
 ## Task string (optional)
 
-Implement the mnemospark-backend Lambda for POST /estimate/transfer: BCM-based data transfer cost (direction, gb, region). Parse query/body; return JSON per mnemospark_backend_api_spec.md §4.2. Use examples/data-transfer-cost-estimate-api as the design pattern. Acceptance: [ ] handler accepts direction/gb/region/rateType; [ ] response shape per spec; [ ] BCM used; [ ] unit + integration tests; [ ] route/integration documented or wired.
+Before implementing, read .company/features_cursor_dev/AWS_DOCS_REFERENCES.md and use the listed AWS docs for CloudFormation/SAM syntax. Implement the mnemospark-backend Lambda for POST /estimate/transfer: BCM-based data transfer cost (direction, gb, region). Parse query/body; return JSON per mnemospark_backend_api_spec.md §4.2. Use examples/data-transfer-cost-estimate-api as the design pattern. Acceptance: [ ] handler accepts direction/gb/region/rateType; [ ] response shape per spec; [ ] BCM used; [ ] unit + integration tests; [ ] route/integration documented or wired.

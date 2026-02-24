@@ -24,6 +24,8 @@ Small, single-run feature specs for [Cursor Cloud Agents](https://cursor.com/doc
 
 **mnemospark proxy port:** For client features (11–14), the mnemospark proxy listens on **port 7120** by default. Agents and config should use `http://127.0.0.1:7120` when talking to the proxy (configurable via `MNEMOSPARK_PROXY_PORT`).
 
+**AWS documentation (CloudFormation/SAM):** Cloud Agents do not have an AWS MCP server. They have internet access. When implementing backend features (01–10, 15–17), use **[AWS_DOCS_REFERENCES.md](AWS_DOCS_REFERENCES.md)** for official AWS doc URLs (API Gateway, Lambda, DynamoDB, WAF, CloudWatch, CloudFront, SAM). Fetch or open those URLs as needed for resource syntax and properties.
+
 ---
 
 ## Conventions

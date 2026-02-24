@@ -26,7 +26,8 @@ Implement the single internet-facing REST API using **CloudFormation or SAM**: A
   - [ ] CORS configured: allowed headers include `Content-Type`, `x-api-key`, `Idempotency-Key`; methods GET, POST, DELETE, OPTIONS.
   - [ ] Request validation enabled for body/query/headers where applicable.
   - [ ] Template validates (`aws cloudformation validate-template` or `sam validate`); stack deploys or dry-run succeeds.
+  - [ ] All taggable resources tagged with `Project: mnemospark` (or `Application: mnemospark`).
 
 ## Task string (optional)
 
-Implement API Gateway for mnemospark-backend via CloudFormation or SAM: REST API, stage, path-based routing to Lambdas, API key (usage plan + x-api-key), throttling, CORS (Content-Type, x-api-key, Idempotency-Key; GET, POST, DELETE, OPTIONS), request validation. Ref: infrastructure_design/internet_facing_API.md. Acceptance: [ ] API + routes; [ ] API key required; [ ] throttling; [ ] CORS; [ ] template validates and deploys.
+Before implementing, read .company/features_cursor_dev/AWS_DOCS_REFERENCES.md and use the listed AWS docs for CloudFormation/SAM syntax. Implement API Gateway for mnemospark-backend via CloudFormation or SAM: REST API, stage, path-based routing to Lambdas, API key (usage plan + x-api-key), throttling, CORS (Content-Type, x-api-key, Idempotency-Key; GET, POST, DELETE, OPTIONS), request validation. Ref: infrastructure_design/internet_facing_API.md. Acceptance: [ ] API + routes; [ ] API key required; [ ] throttling; [ ] CORS; [ ] template validates and deploys.
