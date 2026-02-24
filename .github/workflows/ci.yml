@@ -32,5 +32,11 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
+      - name: Run unit tests
+        run: npm test
+
       - name: Build
         run: npm run build
+
+      - name: Install check (plugin load)
+        run: npm run test:install-check

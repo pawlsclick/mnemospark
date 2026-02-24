@@ -33,7 +33,7 @@
     "lint": "eslint src/",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "test:e2e:tool-ids": "npx tsx test/e2e-tool-id-sanitization.ts",
+    "test:install-check": "node test/install-check.mjs",
     "prepare": "husky"
   },
   "keywords": [
