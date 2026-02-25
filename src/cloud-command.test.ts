@@ -35,7 +35,7 @@ function randomBytesFixture(size: number): Buffer {
   return Buffer.from("0011223344556677".slice(0, size * 2), "hex");
 }
 
-describe("cloud backup command", () => {
+describe("cloud command", () => {
   it("builds tar.gz object, computes hash/size, and appends object.log entry", async () => {
     const { homeDir, tmpBackupDir, sourceDir } = await createSandbox();
     await writeFile(join(sourceDir, "notes.txt"), "hello from mnemospark backup");
@@ -106,5 +106,105 @@ describe("cloud backup command", () => {
 
     expect(result.isError).toBe(true);
     expect(result.text).toBe("Cloud backup is only supported on macOS and Linux.");
+  });
+
+  it("handles /cloud price-storage, logs quote, and prints next-step upload command", async () => {
+    const { homeDir } = await createSandbox();
+    let capturedRequest: Record<string, unknown> | undefined;
+
+    const command = createCloudCommand({
+      objectLogHomeDir: homeDir,
+      requestPriceStorageQuoteFn: async (request) => {
+        capturedRequest = request as Record<string, unknown>;
+        return {
+          timestamp: "2026-02-25 19:00:00",
+          quote_id: "quote-abc123",
+          storage_price: 2.75,
+          addr: "0x1234abcd",
+          object_id: "obj-001",
+          object_id_hash: "hash-001",
+          object_size_gb: 0.015,
+          provider: "aws",
+          location: "us-east-1",
+        };
+      },
+    });
+
+    const result = await command.handler({
+      channel: "test",
+      isAuthorizedSender: true,
+      args: [
+        "price-storage",
+        "--wallet-address 0x1234abcd",
+        "--object-id obj-001",
+        "--object-id-hash hash-001",
+        "--gb 0.015",
+        "--provider aws",
+        "--region us-east-1",
+      ].join(" "),
+      commandBody: "price-storage",
+      config: {},
+    });
+
+    expect(capturedRequest).toEqual({
+      wallet_address: "0x1234abcd",
+      object_id: "obj-001",
+      object_id_hash: "hash-001",
+      gb: 0.015,
+      provider: "aws",
+      region: "us-east-1",
+    });
+    expect(result.isError).not.toBe(true);
+    expect(result.text).toContain("Your storage quote `quote-abc123` is valid for 1 hour");
+    expect(result.text).toContain("If you accept this quote run the command /cloud upload");
+
+    const objectLogPath = join(homeDir, ".openclaw", "mnemospark", "object.log");
+    const logContent = await readFile(objectLogPath, "utf-8");
+    const lastLine = logContent.trim().split("\n").at(-1);
+    expect(lastLine).toBe(
+      "2026-02-25 19:00:00,quote-abc123,2.75,0x1234abcd,obj-001,hash-001,0.015,aws,us-east-1",
+    );
+  });
+
+  it("returns Cannot price storage on invalid /cloud price-storage args", async () => {
+    const command = createCloudCommand();
+
+    const result = await command.handler({
+      channel: "test",
+      isAuthorizedSender: true,
+      args: "price-storage --wallet-address 0x1234abcd",
+      commandBody: "price-storage --wallet-address 0x1234abcd",
+      config: {},
+    });
+
+    expect(result.isError).toBe(true);
+    expect(result.text).toBe("Cannot price storage");
+  });
+
+  it("returns Cannot price storage when proxy quote request fails", async () => {
+    const command = createCloudCommand({
+      requestPriceStorageQuoteFn: async () => {
+        throw new Error("network down");
+      },
+    });
+
+    const result = await command.handler({
+      channel: "test",
+      isAuthorizedSender: true,
+      args: [
+        "price-storage",
+        "--wallet-address 0x1234abcd",
+        "--object-id obj-001",
+        "--object-id-hash hash-001",
+        "--gb 0.015",
+        "--provider aws",
+        "--region us-east-1",
+      ].join(" "),
+      commandBody: "price-storage",
+      config: {},
+    });
+
+    expect(result.isError).toBe(true);
+    expect(result.text).toBe("Cannot price storage");
   });
 });
