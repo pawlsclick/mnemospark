@@ -55,8 +55,17 @@ import { compressContext, shouldCompress, type NormalizedMessage } from "./compr
 import { USER_AGENT } from "./version.js";
 import { SessionStore, getSessionId, type SessionConfig } from "./session.js";
 import { checkForUpdates } from "./updater.js";
-import { PROXY_PORT } from "./config.js";
+import {
+  PROXY_PORT,
+  MNEMOSPARK_BACKEND_API_BASE_URL,
+  MNEMOSPARK_BACKEND_API_KEY,
+} from "./config.js";
 import { SessionJournal } from "./journal.js";
+import {
+  PRICE_STORAGE_PROXY_PATH,
+  forwardPriceStorageToBackend,
+  parsePriceStorageQuoteRequest,
+} from "./cloud-price-storage.js";
 
 const BLOCKRUN_API = "https://blockrun.ai/api";
 // Routing profile models - virtual models that trigger intelligent routing
@@ -985,6 +994,80 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
         console.error(`[mnemospark] Request finished with error: ${err.message}`);
       }
     });
+
+    // Mnemospark backend proxy endpoint for /cloud price-storage command.
+    if (
+      req.method === "POST" &&
+      (req.url === PRICE_STORAGE_PROXY_PATH || req.url?.startsWith(`${PRICE_STORAGE_PROXY_PATH}?`))
+    ) {
+      try {
+        const bodyChunks: Buffer[] = [];
+        for await (const chunk of req) {
+          bodyChunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+        }
+
+        const bodyText = Buffer.concat(bodyChunks).toString("utf-8").trim();
+        let payload: unknown = {};
+        if (bodyText.length > 0) {
+          try {
+            payload = JSON.parse(bodyText);
+          } catch {
+            res.writeHead(400, { "Content-Type": "application/json" });
+            res.end(
+              JSON.stringify({
+                error: "Bad request",
+                message: "Invalid JSON body for /cloud price-storage",
+              }),
+            );
+            return;
+          }
+        }
+
+        const requestPayload = parsePriceStorageQuoteRequest(payload);
+        if (!requestPayload) {
+          res.writeHead(400, { "Content-Type": "application/json" });
+          res.end(
+            JSON.stringify({
+              error: "Bad request",
+              message:
+                "Missing required fields: wallet_address, object_id, object_id_hash, gb, provider, region",
+            }),
+          );
+          return;
+        }
+
+        const backendResponse = await forwardPriceStorageToBackend(requestPayload, {
+          backendBaseUrl: MNEMOSPARK_BACKEND_API_BASE_URL,
+          backendApiKey: MNEMOSPARK_BACKEND_API_KEY,
+        });
+
+        const responseHeaders: Record<string, string> = {
+          "Content-Type": backendResponse.contentType,
+        };
+
+        // Preserve v2 payment headers while also supporting legacy names.
+        if (backendResponse.paymentRequired) {
+          responseHeaders["PAYMENT-REQUIRED"] = backendResponse.paymentRequired;
+          responseHeaders["x-payment-required"] = backendResponse.paymentRequired;
+        }
+        if (backendResponse.paymentResponse) {
+          responseHeaders["PAYMENT-RESPONSE"] = backendResponse.paymentResponse;
+          responseHeaders["x-payment-response"] = backendResponse.paymentResponse;
+        }
+
+        res.writeHead(backendResponse.status, responseHeaders);
+        res.end(backendResponse.bodyText);
+      } catch (err) {
+        res.writeHead(502, { "Content-Type": "application/json" });
+        res.end(
+          JSON.stringify({
+            error: "proxy_error",
+            message: `Failed to forward /cloud price-storage: ${err instanceof Error ? err.message : String(err)}`,
+          }),
+        );
+      }
+      return;
+    }
 
     // Health check with optional balance info
     if (req.url === "/health" || req.url?.startsWith("/health?")) {

@@ -21,3 +21,21 @@ export const PROXY_PORT = (() => {
   }
   return DEFAULT_PORT;
 })();
+
+/**
+ * Mnemospark backend API base URL for proxy → backend calls.
+ * Example: https://{api-id}.execute-api.{region}.amazonaws.com/{stage}
+ */
+export const MNEMOSPARK_BACKEND_API_BASE_URL = (
+  process.env.MNEMOSPARK_BACKEND_API_BASE_URL ?? ""
+).trim();
+
+/**
+ * Mnemospark backend API key for proxy → backend calls.
+ * Supports a legacy fallback env name for compatibility.
+ */
+export const MNEMOSPARK_BACKEND_API_KEY = (
+  process.env.MNEMOSPARK_BACKEND_API_KEY ??
+  process.env.MNEMOSPARK_API_KEY ??
+  ""
+).trim();
