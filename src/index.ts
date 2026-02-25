@@ -61,6 +61,7 @@ import { join } from "node:path";
 import { VERSION } from "./version.js";
 import { privateKeyToAccount } from "viem/accounts";
 import { getStats, formatStatsAscii } from "./stats.js";
+import { createCloudCommand } from "./cloud-command.js";
 
 /**
  * Detect if we're running in shell completion mode.
@@ -698,6 +699,15 @@ const plugin: OpenClawPluginDefinition = {
           `Failed to register /stats command: ${err instanceof Error ? err.message : String(err)}`,
         );
       });
+
+    // Register /cloud command for storage workflow actions
+    try {
+      api.registerCommand(createCloudCommand());
+    } catch (err) {
+      api.logger.warn(
+        `Failed to register /cloud command: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
 
     // Register a service with stop() for cleanup on gateway shutdown
     // This prevents EADDRINUSE when the gateway restarts
