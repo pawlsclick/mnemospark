@@ -234,4 +234,153 @@ describe("cloud command", () => {
     expect(result.isError).toBe(true);
     expect(result.text).toBe("Cannot price storage");
   });
+
+  it("handles /cloud ls and prints object metadata message", async () => {
+    let capturedRequest: Record<string, unknown> | undefined;
+
+    const command = createCloudCommand({
+      requestStorageLsFn: async (request) => {
+        capturedRequest = request as Record<string, unknown>;
+        return {
+          success: true,
+          key: "backup/archive.tar.gz",
+          size_bytes: 1536,
+          bucket: "wallet-bucket-001",
+          object_id: "obj-001",
+        };
+      },
+    });
+
+    const result = await command.handler({
+      channel: "test",
+      isAuthorizedSender: true,
+      args: "ls --wallet-address 0x1234abcd --object-key backup/archive.tar.gz",
+      commandBody: "ls",
+      config: {},
+    });
+
+    expect(capturedRequest).toEqual({
+      wallet_address: "0x1234abcd",
+      object_key: "backup/archive.tar.gz",
+      location: undefined,
+    });
+    expect(result.isError).not.toBe(true);
+    expect(result.text).toBe("obj-001 with backup/archive.tar.gz is 1536 in wallet-bucket-001");
+  });
+
+  it("handles /cloud download and prints success message", async () => {
+    let capturedRequest: Record<string, unknown> | undefined;
+
+    const command = createCloudCommand({
+      requestStorageDownloadFn: async (request) => {
+        capturedRequest = request as Record<string, unknown>;
+        return {
+          success: true,
+          key: "backup/archive.tar.gz",
+          file_path: "/tmp/backup/archive.tar.gz",
+        };
+      },
+    });
+
+    const result = await command.handler({
+      channel: "test",
+      isAuthorizedSender: true,
+      args: "download --wallet-address 0x1234abcd --object-key backup/archive.tar.gz",
+      commandBody: "download",
+      config: {},
+    });
+
+    expect(capturedRequest).toEqual({
+      wallet_address: "0x1234abcd",
+      object_key: "backup/archive.tar.gz",
+      location: undefined,
+    });
+    expect(result.isError).not.toBe(true);
+    expect(result.text).toBe("File backup/archive.tar.gz downloaded");
+  });
+
+  it("handles /cloud delete and prints success message", async () => {
+    let capturedRequest: Record<string, unknown> | undefined;
+
+    const command = createCloudCommand({
+      requestStorageDeleteFn: async (request) => {
+        capturedRequest = request as Record<string, unknown>;
+        return {
+          success: true,
+          key: "backup/archive.tar.gz",
+          bucket: "wallet-bucket-001",
+          bucket_deleted: false,
+        };
+      },
+    });
+
+    const result = await command.handler({
+      channel: "test",
+      isAuthorizedSender: true,
+      args: "delete --wallet-address 0x1234abcd --object-key backup/archive.tar.gz",
+      commandBody: "delete",
+      config: {},
+    });
+
+    expect(capturedRequest).toEqual({
+      wallet_address: "0x1234abcd",
+      object_key: "backup/archive.tar.gz",
+      location: undefined,
+    });
+    expect(result.isError).not.toBe(true);
+    expect(result.text).toBe("File backup/archive.tar.gz deleted");
+  });
+
+  it("returns Cannot list storage object on invalid /cloud ls args", async () => {
+    const command = createCloudCommand();
+
+    const result = await command.handler({
+      channel: "test",
+      isAuthorizedSender: true,
+      args: "ls --wallet-address 0x1234abcd",
+      commandBody: "ls",
+      config: {},
+    });
+
+    expect(result.isError).toBe(true);
+    expect(result.text).toBe("Cannot list storage object");
+  });
+
+  it("returns Cannot download file when /cloud download fails", async () => {
+    const command = createCloudCommand({
+      requestStorageDownloadFn: async () => {
+        throw new Error("download failed");
+      },
+    });
+
+    const result = await command.handler({
+      channel: "test",
+      isAuthorizedSender: true,
+      args: "download --wallet-address 0x1234abcd --object-key backup/archive.tar.gz",
+      commandBody: "download",
+      config: {},
+    });
+
+    expect(result.isError).toBe(true);
+    expect(result.text).toBe("Cannot download file");
+  });
+
+  it("returns Cannot delete file when /cloud delete fails", async () => {
+    const command = createCloudCommand({
+      requestStorageDeleteFn: async () => {
+        throw new Error("delete failed");
+      },
+    });
+
+    const result = await command.handler({
+      channel: "test",
+      isAuthorizedSender: true,
+      args: "delete --wallet-address 0x1234abcd --object-key backup/archive.tar.gz",
+      commandBody: "delete",
+      config: {},
+    });
+
+    expect(result.isError).toBe(true);
+    expect(result.text).toBe("Cannot delete file");
+  });
 });
