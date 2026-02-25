@@ -63,8 +63,11 @@ import {
 import { SessionJournal } from "./journal.js";
 import {
   PRICE_STORAGE_PROXY_PATH,
+  UPLOAD_PROXY_PATH,
   forwardPriceStorageToBackend,
+  forwardStorageUploadToBackend,
   parsePriceStorageQuoteRequest,
+  parseStorageUploadRequest,
 } from "./cloud-price-storage.js";
 
 const BLOCKRUN_API = "https://blockrun.ai/api";
@@ -246,6 +249,22 @@ function safeWrite(res: ServerResponse, data: string | Buffer): boolean {
     return false;
   }
   return res.write(data);
+}
+
+function readHeaderValue(value: string | string[] | undefined): string | undefined {
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : undefined;
+  }
+  if (Array.isArray(value)) {
+    for (const candidate of value) {
+      const trimmed = candidate.trim();
+      if (trimmed.length > 0) {
+        return trimmed;
+      }
+    }
+  }
+  return undefined;
 }
 
 // Extra buffer for balance check (on top of estimateAmount's 20% buffer)
@@ -1063,6 +1082,105 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
           JSON.stringify({
             error: "proxy_error",
             message: `Failed to forward /cloud price-storage: ${err instanceof Error ? err.message : String(err)}`,
+          }),
+        );
+      }
+      return;
+    }
+
+    // Mnemospark backend proxy endpoint for /cloud upload command.
+    if (
+      req.method === "POST" &&
+      (req.url === UPLOAD_PROXY_PATH || req.url?.startsWith(`${UPLOAD_PROXY_PATH}?`))
+    ) {
+      try {
+        const bodyChunks: Buffer[] = [];
+        for await (const chunk of req) {
+          bodyChunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+        }
+
+        const bodyText = Buffer.concat(bodyChunks).toString("utf-8").trim();
+        let payload: unknown = {};
+        if (bodyText.length > 0) {
+          try {
+            payload = JSON.parse(bodyText);
+          } catch {
+            res.writeHead(400, { "Content-Type": "application/json" });
+            res.end(
+              JSON.stringify({
+                error: "Bad request",
+                message: "Invalid JSON body for /cloud upload",
+              }),
+            );
+            return;
+          }
+        }
+
+        const requestPayload = parseStorageUploadRequest(payload);
+        if (!requestPayload) {
+          res.writeHead(400, { "Content-Type": "application/json" });
+          res.end(
+            JSON.stringify({
+              error: "Bad request",
+              message:
+                "Missing required fields: quote_id, wallet_address, object_id, object_id_hash, quoted_storage_price, payload",
+            }),
+          );
+          return;
+        }
+
+        const requiredMicros = BigInt(
+          Math.max(1, Math.ceil(requestPayload.quoted_storage_price * 1_000_000)),
+        );
+        const uploadBalanceMonitor =
+          requestPayload.wallet_address.toLowerCase() === account.address.toLowerCase()
+            ? balanceMonitor
+            : new BalanceMonitor(requestPayload.wallet_address);
+        const sufficiency = await uploadBalanceMonitor.checkSufficient(requiredMicros);
+
+        if (!sufficiency.sufficient) {
+          res.writeHead(400, { "Content-Type": "application/json" });
+          res.end(
+            JSON.stringify({
+              error: "insufficient_balance",
+              message: `Insufficient USDC balance. Current: ${sufficiency.info.balanceUSD}, Required: ${uploadBalanceMonitor.formatUSDC(requiredMicros)}`,
+              wallet: requestPayload.wallet_address,
+              help: `Fund wallet ${requestPayload.wallet_address} on Base before running /cloud upload`,
+            }),
+          );
+          return;
+        }
+
+        const backendResponse = await forwardStorageUploadToBackend(requestPayload, {
+          backendBaseUrl: MNEMOSPARK_BACKEND_API_BASE_URL,
+          backendApiKey: MNEMOSPARK_BACKEND_API_KEY,
+          paymentSignature: readHeaderValue(req.headers["payment-signature"]),
+          legacyPayment: readHeaderValue(req.headers["x-payment"]),
+          idempotencyKey: readHeaderValue(req.headers["idempotency-key"]),
+        });
+
+        const responseHeaders: Record<string, string> = {
+          "Content-Type": backendResponse.contentType,
+        };
+
+        // Preserve v2 payment headers while also supporting legacy names.
+        if (backendResponse.paymentRequired) {
+          responseHeaders["PAYMENT-REQUIRED"] = backendResponse.paymentRequired;
+          responseHeaders["x-payment-required"] = backendResponse.paymentRequired;
+        }
+        if (backendResponse.paymentResponse) {
+          responseHeaders["PAYMENT-RESPONSE"] = backendResponse.paymentResponse;
+          responseHeaders["x-payment-response"] = backendResponse.paymentResponse;
+        }
+
+        res.writeHead(backendResponse.status, responseHeaders);
+        res.end(backendResponse.bodyText);
+      } catch (err) {
+        res.writeHead(502, { "Content-Type": "application/json" });
+        res.end(
+          JSON.stringify({
+            error: "proxy_error",
+            message: `Failed to forward /cloud upload: ${err instanceof Error ? err.message : String(err)}`,
           }),
         );
       }

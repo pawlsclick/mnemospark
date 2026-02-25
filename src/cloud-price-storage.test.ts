@@ -2,8 +2,11 @@ import { describe, expect, it } from "vitest";
 
 import {
   forwardPriceStorageToBackend,
+  forwardStorageUploadToBackend,
   requestPriceStorageViaProxy,
+  requestStorageUploadViaProxy,
   type PriceStorageQuoteRequest,
+  type StorageUploadRequest,
 } from "./cloud-price-storage.js";
 
 const SAMPLE_REQUEST: PriceStorageQuoteRequest = {
@@ -13,6 +16,24 @@ const SAMPLE_REQUEST: PriceStorageQuoteRequest = {
   gb: 0.015,
   provider: "aws",
   region: "us-east-1",
+};
+
+const SAMPLE_UPLOAD_REQUEST: StorageUploadRequest = {
+  quote_id: "quote-123",
+  wallet_address: "0x1234abcd",
+  object_id: "obj-001",
+  object_id_hash: "hash-001",
+  quoted_storage_price: 2.75,
+  payload: {
+    mode: "inline",
+    content_base64: "ZmFrZS1lbmNyeXB0ZWQtYnl0ZXM=",
+    content_sha256: "abcd1234",
+    content_length_bytes: 21,
+    wrapped_dek: "wrapped-dek",
+    encryption_algorithm: "AES-256-GCM",
+    bucket_name_hint: "mnemospark-1234",
+    key_store_path_hint: "/tmp/key",
+  },
 };
 
 describe("cloud price-storage transport", () => {
@@ -80,5 +101,76 @@ describe("cloud price-storage transport", () => {
     expect((capturedInit?.headers as Record<string, string>)["x-api-key"]).toBe("test-api-key");
     expect(forwarded.status).toBe(402);
     expect(forwarded.paymentRequired).toBe("legacy-required-header");
+  });
+
+  it("sends upload request to local proxy with Idempotency-Key and parses response", async () => {
+    let capturedUrl = "";
+    let capturedInit: RequestInit | undefined;
+
+    const upload = await requestStorageUploadViaProxy(SAMPLE_UPLOAD_REQUEST, {
+      proxyBaseUrl: "http://127.0.0.1:7120/",
+      idempotencyKey: "idemp-123",
+      fetchImpl: async (input, init) => {
+        capturedUrl = String(input);
+        capturedInit = init;
+        return new Response(
+          JSON.stringify({
+            quote_id: "quote-123",
+            addr: "0x1234abcd",
+            addr_hash: "addr-hash",
+            trans_id: "tx-001",
+            storage_price: 2.75,
+            object_id: "obj-001",
+            object_key: "obj-001.tar.gz.enc",
+            provider: "aws",
+            bucket_name: "mnemospark-1234",
+            location: "us-east-1",
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        );
+      },
+    });
+
+    expect(capturedUrl).toBe("http://127.0.0.1:7120/mnemospark/upload");
+    expect(capturedInit?.method).toBe("POST");
+    const headers = capturedInit?.headers as Record<string, string>;
+    expect(headers["Idempotency-Key"]).toBe("idemp-123");
+    expect(upload.object_key).toBe("obj-001.tar.gz.enc");
+  });
+
+  it("forwards upload request with payment and idempotency headers", async () => {
+    let capturedUrl = "";
+    let capturedInit: RequestInit | undefined;
+
+    const forwarded = await forwardStorageUploadToBackend(SAMPLE_UPLOAD_REQUEST, {
+      backendBaseUrl: "https://api.example.com/prod/",
+      backendApiKey: "test-api-key",
+      paymentSignature: "signed-payment-payload",
+      idempotencyKey: "idemp-456",
+      fetchImpl: async (input, init) => {
+        capturedUrl = String(input);
+        capturedInit = init;
+        return new Response(JSON.stringify({ ok: true }), {
+          status: 200,
+          headers: {
+            "Content-Type": "application/json",
+            "PAYMENT-RESPONSE": "response-header",
+          },
+        });
+      },
+    });
+
+    expect(capturedUrl).toBe("https://api.example.com/prod/storage/upload");
+    expect(capturedInit?.method).toBe("POST");
+    const headers = capturedInit?.headers as Record<string, string>;
+    expect(headers["x-api-key"]).toBe("test-api-key");
+    expect(headers["Idempotency-Key"]).toBe("idemp-456");
+    expect(headers["PAYMENT-SIGNATURE"]).toBe("signed-payment-payload");
+    expect(headers["x-payment"]).toBe("signed-payment-payload");
+    expect(forwarded.status).toBe(200);
+    expect(forwarded.paymentResponse).toBe("response-header");
   });
 });

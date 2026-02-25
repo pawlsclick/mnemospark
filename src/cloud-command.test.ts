@@ -1,10 +1,13 @@
 import { mkdtemp, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { privateKeyToAccount } from "viem/accounts";
 
 import { afterEach, describe, expect, it } from "vitest";
 
 import { buildBackupObject, createCloudCommand } from "./cloud-command.js";
+import { PaymentCache } from "./payment-cache.js";
 
 const sandboxDirs: string[] = [];
 
@@ -33,6 +36,10 @@ async function createSandbox() {
 
 function randomBytesFixture(size: number): Buffer {
   return Buffer.from("0011223344556677".slice(0, size * 2), "hex");
+}
+
+function sha256Hex(content: string): string {
+  return createHash("sha256").update(content, "utf-8").digest("hex");
 }
 
 describe("cloud command", () => {
@@ -184,6 +191,7 @@ describe("cloud command", () => {
     expect(result.isError).not.toBe(true);
     expect(result.text).toContain("Your storage quote `quote-abc123` is valid for 1 hour");
     expect(result.text).toContain("If you accept this quote run the command /cloud upload");
+    expect(result.text).toContain("--object-id-hash `hash-001`");
 
     const objectLogPath = join(homeDir, ".openclaw", "mnemospark", "object.log");
     const logContent = await readFile(objectLogPath, "utf-8");
@@ -233,5 +241,169 @@ describe("cloud command", () => {
 
     expect(result.isError).toBe(true);
     expect(result.text).toBe("Cannot price storage");
+  });
+
+  it("handles /cloud upload, builds encrypted payload, and logs upload response", async () => {
+    const { homeDir, tmpBackupDir } = await createSandbox();
+    const walletKey = `0x${"11".repeat(32)}` as const;
+    const walletAddress = privateKeyToAccount(walletKey).address;
+    const objectId = "obj-upload-001";
+    const archiveContent = "mnemospark upload content";
+    const objectHash = sha256Hex(archiveContent);
+    const archivePath = join(tmpBackupDir, objectId);
+    await writeFile(archivePath, archiveContent, "utf-8");
+
+    const objectLogPath = join(homeDir, ".openclaw", "mnemospark", "object.log");
+    await mkdir(join(homeDir, ".openclaw", "mnemospark"), { recursive: true });
+    await writeFile(
+      objectLogPath,
+      `2026-02-25 19:00:00,quote-abc123,2.75,${walletAddress},${objectId},${objectHash},0.015,aws,us-east-1\n`,
+      "utf-8",
+    );
+
+    let createPaymentFetchCalls = 0;
+    let capturedBody: Record<string, unknown> | undefined;
+    let capturedIdempotency: string | null = null;
+
+    const command = createCloudCommand({
+      objectLogHomeDir: homeDir,
+      backupOptions: { tmpDir: tmpBackupDir },
+      resolveWalletPrivateKeyFn: async () => walletKey,
+      idempotencyKeyFn: () => "idempotency-123",
+      nowDateFn: () => new Date(2026, 1, 25, 20, 10, 0),
+      createPaymentFetchFn: () => {
+        createPaymentFetchCalls += 1;
+        return {
+          fetch: async (_input, init) => {
+            capturedIdempotency = new Headers(init?.headers).get("Idempotency-Key");
+            if (typeof init?.body === "string") {
+              capturedBody = JSON.parse(init.body) as Record<string, unknown>;
+            }
+            return new Response(
+              JSON.stringify({
+                quote_id: "quote-abc123",
+                addr: walletAddress,
+                addr_hash: "addr-hash",
+                trans_id: "tx-001",
+                storage_price: 2.75,
+                object_id: objectId,
+                object_key: "obj-upload-001.tar.gz.enc",
+                provider: "aws",
+                bucket_name: "mnemospark-1234",
+                location: "us-east-1",
+              }),
+              {
+                status: 200,
+                headers: { "Content-Type": "application/json" },
+              },
+            );
+          },
+          cache: new PaymentCache(),
+        };
+      },
+    });
+
+    const result = await command.handler({
+      channel: "test",
+      isAuthorizedSender: true,
+      args: [
+        "upload",
+        "--quote-id quote-abc123",
+        `--wallet-address ${walletAddress}`,
+        `--object-id ${objectId}`,
+        `--object-id-hash ${objectHash}`,
+      ].join(" "),
+      commandBody: "upload",
+      config: {},
+    });
+
+    expect(createPaymentFetchCalls).toBe(1);
+    expect(capturedIdempotency).toBe("idempotency-123");
+    expect(capturedBody?.quoted_storage_price).toBe(2.75);
+    const payload = capturedBody?.payload as Record<string, unknown>;
+    expect(payload.mode).toBe("inline");
+    expect(typeof payload.content_base64).toBe("string");
+    expect(result.isError).not.toBe(true);
+    expect(result.text).toContain(
+      "Your file `obj-upload-001` with key `obj-upload-001.tar.gz.enc`",
+    );
+    expect(result.text).toContain("30-day USDC payment reminder");
+    expect(result.text).toContain("32-day deadline");
+
+    const logContent = await readFile(objectLogPath, "utf-8");
+    const lastLine = logContent.trim().split("\n").at(-1);
+    expect(lastLine).toBe(
+      `2026-02-25 20:10:00,quote-abc123,${walletAddress},addr-hash,tx-001,2.75,obj-upload-001,obj-upload-001.tar.gz.enc,aws,mnemospark-1234,us-east-1`,
+    );
+  });
+
+  it("returns parsed proxy message when /cloud upload balance check fails", async () => {
+    const { homeDir, tmpBackupDir } = await createSandbox();
+    const walletKey = `0x${"22".repeat(32)}` as const;
+    const walletAddress = privateKeyToAccount(walletKey).address;
+    const objectId = "obj-upload-002";
+    const archiveContent = "mnemospark upload content 2";
+    const objectHash = sha256Hex(archiveContent);
+    await writeFile(join(tmpBackupDir, objectId), archiveContent, "utf-8");
+
+    const objectLogPath = join(homeDir, ".openclaw", "mnemospark", "object.log");
+    await mkdir(join(homeDir, ".openclaw", "mnemospark"), { recursive: true });
+    await writeFile(
+      objectLogPath,
+      `2026-02-25 19:00:00,quote-xyz,2.75,${walletAddress},${objectId},${objectHash},0.015,aws,us-east-1\n`,
+      "utf-8",
+    );
+
+    const command = createCloudCommand({
+      objectLogHomeDir: homeDir,
+      backupOptions: { tmpDir: tmpBackupDir },
+      resolveWalletPrivateKeyFn: async () => walletKey,
+      createPaymentFetchFn: () => ({
+        fetch: async () =>
+          new Response(
+            JSON.stringify({
+              error: "insufficient_balance",
+              message: "Insufficient USDC balance. Current: $0.10, Required: $2.75",
+            }),
+            {
+              status: 400,
+              headers: { "Content-Type": "application/json" },
+            },
+          ),
+        cache: new PaymentCache(),
+      }),
+    });
+
+    const result = await command.handler({
+      channel: "test",
+      isAuthorizedSender: true,
+      args: [
+        "upload",
+        "--quote-id quote-xyz",
+        `--wallet-address ${walletAddress}`,
+        `--object-id ${objectId}`,
+        `--object-id-hash ${objectHash}`,
+      ].join(" "),
+      commandBody: "upload",
+      config: {},
+    });
+
+    expect(result.isError).toBe(true);
+    expect(result.text).toBe("Insufficient USDC balance. Current: $0.10, Required: $2.75");
+  });
+
+  it("returns Cannot upload storage object on invalid /cloud upload args", async () => {
+    const command = createCloudCommand();
+
+    const result = await command.handler({
+      channel: "test",
+      isAuthorizedSender: true,
+      args: "upload --quote-id quote-only",
+      commandBody: "upload --quote-id quote-only",
+      config: {},
+    });
+
+    expect(result.isError).toBe(true);
+    expect(result.text).toBe("Cannot upload storage object");
   });
 });
