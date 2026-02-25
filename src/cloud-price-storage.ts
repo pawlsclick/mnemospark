@@ -280,7 +280,7 @@ export function parseStorageUploadRequest(payload: unknown): StorageUploadReques
     quoted_storage_price: quotedStoragePrice,
     payload: {
       mode,
-      content_base64: contentBase64,
+      content_base64: contentBase64 ?? undefined,
       content_sha256: contentSha256,
       content_length_bytes: contentLengthBytes,
       wrapped_dek: wrappedDek,
@@ -331,7 +331,7 @@ export function parseStorageUploadResponse(payload: unknown): StorageUploadRespo
     bucket_name: bucketName,
     location,
     upload_url: uploadUrl ?? undefined,
-    upload_headers: uploadHeaders,
+    upload_headers: uploadHeaders ?? undefined,
   };
 }
 
