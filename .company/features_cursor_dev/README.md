@@ -17,16 +17,16 @@ Small, single-run feature specs for [Cursor Cloud Agents](https://cursor.com/doc
 
 ## Repo mapping (where to run the Cloud Agent)
 
-- **Backend features (01–10, 15–17):** Start the Cloud Agent from the **mnemospark-backend** repo. Seed that repo first by running from mnemospark:  
+- **Backend features (01–10, 15–17, auth-01–auth-04):** Start the Cloud Agent from the **mnemospark-backend** repo. Seed that repo first by running from mnemospark:  
   `./scripts/seed-mnemospark-backend.sh /path/to/mnemospark-backend`
-- **Client features (11–14):** Start the Cloud Agent from the **mnemospark** repo.
+- **Client features (11–14, auth-05–auth-07):** Start the Cloud Agent from the **mnemospark** repo.
 
 The agent must work **only in the repo it was started in**. Do **not** open, clone, or require access to BlockRun/ClawRouter, OpenRouter, or any other repository.
 
-| Features     | Repo to run agent from | Notes                                                                                                                                                                                            |
-| ------------ | ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| 01–10, 15–17 | **mnemospark-backend** | Seed first (see above). Backend infra (08, 15–17) is built with **CloudFormation** (or SAM) per [infrastructure_design/internet_facing_API.md](../infrastructure_design/internet_facing_API.md). |
-| 11–14        | **mnemospark**         | Plugin/client.                                                                                                                                                                                   |
+| Features                      | Repo to run agent from | Notes                                                                                                                                                                                                                                                                                   |
+| ----------------------------- | ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 01–10, 15–17, auth-01–auth-04 | **mnemospark-backend** | Seed first (see above). Backend infra (08, 15–17) is built with **CloudFormation** (or SAM) per [infrastructure_design/internet_facing_API.md](../infrastructure_design/internet_facing_API.md). Auth: [auth_no_api_key_wallet_proof_spec.md](../auth_no_api_key_wallet_proof_spec.md). |
+| 11–14, auth-05–auth-07        | **mnemospark**         | Plugin/client.                                                                                                                                                                                                                                                                          |
 
 **mnemospark proxy port:** For client features (11–14), the mnemospark proxy listens on **port 7120** by default. Agents and config should use `http://127.0.0.1:7120` when talking to the proxy (configurable via `MNEMOSPARK_PROXY_PORT`).
 
@@ -54,27 +54,35 @@ Each feature file includes:
 - **15** (WAF), **16** (observability), **17** (CloudFront, optional) after **08**.
 - **10** (housekeeping) after **04** (upload).
 - **11–14** (client) after backend routes exist.
+- **Auth (wallet proof):** auth-01 before auth-02 (authorizer must exist before attaching). auth-02 and auth-04 coordinate so Gateway and Lambdas switch coherently. auth-05 before auth-06 (signing module used by proxy). auth-06 depends on backend accepting wallet proof (auth-01, auth-02, auth-04). See [auth_no_api_key_wallet_proof_spec.md](../auth_no_api_key_wallet_proof_spec.md).
 
 ---
 
 ## Feature list
 
-| ID  | File                                                                                     | Description                                       |
-| --- | ---------------------------------------------------------------------------------------- | ------------------------------------------------- |
-| 01  | [cursor-dev-01-lambda-estimate-storage.md](cursor-dev-01-lambda-estimate-storage.md)     | Lambda POST /estimate/storage                     |
-| 02  | [cursor-dev-02-lambda-estimate-transfer.md](cursor-dev-02-lambda-estimate-transfer.md)   | Lambda POST /estimate/transfer                    |
-| 03  | [cursor-dev-03-lambda-price-storage.md](cursor-dev-03-lambda-price-storage.md)           | Lambda POST /price-storage                        |
-| 04  | [cursor-dev-04-lambda-storage-upload.md](cursor-dev-04-lambda-storage-upload.md)         | Lambda POST /storage/upload                       |
-| 05  | [cursor-dev-05-lambda-storage-ls.md](cursor-dev-05-lambda-storage-ls.md)                 | Lambda GET/POST /storage/ls                       |
-| 06  | [cursor-dev-06-lambda-storage-download.md](cursor-dev-06-lambda-storage-download.md)     | Lambda GET/POST /storage/download                 |
-| 07  | [cursor-dev-07-lambda-storage-delete.md](cursor-dev-07-lambda-storage-delete.md)         | Lambda POST/DELETE /storage/delete                |
-| 08  | [cursor-dev-08-api-gateway-auth.md](cursor-dev-08-api-gateway-auth.md)                   | API Gateway + API key + CORS (CloudFormation/SAM) |
-| 09  | [cursor-dev-09-dynamodb-tables.md](cursor-dev-09-dynamodb-tables.md)                     | DynamoDB tables (quotes + txn log)                |
-| 10  | [cursor-dev-10-housekeeping-32day.md](cursor-dev-10-housekeeping-32day.md)               | Housekeeping job (32-day deadline)                |
-| 15  | [cursor-dev-15-cfn-waf.md](cursor-dev-15-cfn-waf.md)                                     | CloudFormation: WAF                               |
-| 16  | [cursor-dev-16-cfn-observability.md](cursor-dev-16-cfn-observability.md)                 | CloudFormation: Observability                     |
-| 17  | [cursor-dev-17-cfn-cloudfront.md](cursor-dev-17-cfn-cloudfront.md)                       | CloudFormation: CloudFront (optional)             |
-| 11  | [cursor-dev-11-client-cloud-backup.md](cursor-dev-11-client-cloud-backup.md)             | Client /cloud backup                              |
-| 12  | [cursor-dev-12-client-price-storage.md](cursor-dev-12-client-price-storage.md)           | Client /cloud price-storage                       |
-| 13  | [cursor-dev-13-client-upload.md](cursor-dev-13-client-upload.md)                         | Client /cloud upload                              |
-| 14  | [cursor-dev-14-client-ls-download-delete.md](cursor-dev-14-client-ls-download-delete.md) | Client /cloud ls, download, delete                |
+| ID      | File                                                                                                 | Description                                           |
+| ------- | ---------------------------------------------------------------------------------------------------- | ----------------------------------------------------- |
+| 01      | [cursor-dev-01-lambda-estimate-storage.md](cursor-dev-01-lambda-estimate-storage.md)                 | Lambda POST /estimate/storage                         |
+| 02      | [cursor-dev-02-lambda-estimate-transfer.md](cursor-dev-02-lambda-estimate-transfer.md)               | Lambda POST /estimate/transfer                        |
+| 03      | [cursor-dev-03-lambda-price-storage.md](cursor-dev-03-lambda-price-storage.md)                       | Lambda POST /price-storage                            |
+| 04      | [cursor-dev-04-lambda-storage-upload.md](cursor-dev-04-lambda-storage-upload.md)                     | Lambda POST /storage/upload                           |
+| 05      | [cursor-dev-05-lambda-storage-ls.md](cursor-dev-05-lambda-storage-ls.md)                             | Lambda GET/POST /storage/ls                           |
+| 06      | [cursor-dev-06-lambda-storage-download.md](cursor-dev-06-lambda-storage-download.md)                 | Lambda GET/POST /storage/download                     |
+| 07      | [cursor-dev-07-lambda-storage-delete.md](cursor-dev-07-lambda-storage-delete.md)                     | Lambda POST/DELETE /storage/delete                    |
+| 08      | [cursor-dev-08-api-gateway-auth.md](cursor-dev-08-api-gateway-auth.md)                               | API Gateway + API key + CORS (CloudFormation/SAM)     |
+| 09      | [cursor-dev-09-dynamodb-tables.md](cursor-dev-09-dynamodb-tables.md)                                 | DynamoDB tables (quotes + txn log)                    |
+| 10      | [cursor-dev-10-housekeeping-32day.md](cursor-dev-10-housekeeping-32day.md)                           | Housekeeping job (32-day deadline)                    |
+| 15      | [cursor-dev-15-cfn-waf.md](cursor-dev-15-cfn-waf.md)                                                 | CloudFormation: WAF                                   |
+| 16      | [cursor-dev-16-cfn-observability.md](cursor-dev-16-cfn-observability.md)                             | CloudFormation: Observability                         |
+| 17      | [cursor-dev-17-cfn-cloudfront.md](cursor-dev-17-cfn-cloudfront.md)                                   | CloudFormation: CloudFront (optional)                 |
+| 11      | [cursor-dev-11-client-cloud-backup.md](cursor-dev-11-client-cloud-backup.md)                         | Client /cloud backup                                  |
+| 12      | [cursor-dev-12-client-price-storage.md](cursor-dev-12-client-price-storage.md)                       | Client /cloud price-storage                           |
+| 13      | [cursor-dev-13-client-upload.md](cursor-dev-13-client-upload.md)                                     | Client /cloud upload                                  |
+| 14      | [cursor-dev-14-client-ls-download-delete.md](cursor-dev-14-client-ls-download-delete.md)             | Client /cloud ls, download, delete                    |
+| auth-01 | [cursor-dev-auth-01-lambda-authorizer.md](cursor-dev-auth-01-lambda-authorizer.md)                   | Lambda authorizer (X-Wallet-Signature)                |
+| auth-02 | [cursor-dev-auth-02-api-gateway-authorizer.md](cursor-dev-auth-02-api-gateway-authorizer.md)         | API Gateway — remove API key, attach authorizer, CORS |
+| auth-03 | [cursor-dev-auth-03-waf-rate-limits.md](cursor-dev-auth-03-waf-rate-limits.md)                       | WAF — rate limits for /price-storage                  |
+| auth-04 | [cursor-dev-auth-04-lambdas-authorizer-context.md](cursor-dev-auth-04-lambdas-authorizer-context.md) | Lambdas — authorizer context, no x-api-key            |
+| auth-05 | [cursor-dev-auth-05-request-signing-module.md](cursor-dev-auth-05-request-signing-module.md)         | Request signing module (X-Wallet-Signature)           |
+| auth-06 | [cursor-dev-auth-06-proxy-wallet-signature.md](cursor-dev-auth-06-proxy-wallet-signature.md)         | Proxy — remove API key, add X-Wallet-Signature        |
+| auth-07 | [cursor-dev-auth-07-client-docs-error-handling.md](cursor-dev-auth-07-client-docs-error-handling.md) | Client/docs — remove API key, 401/403 errors          |
