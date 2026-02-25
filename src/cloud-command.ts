@@ -261,4 +261,4 @@ export function createCloudCommand(
   };
 }
 
-export { BackupObjectOptions, BackupObjectResult, CreateCloudCommandOptions };
+export type { BackupObjectOptions, BackupObjectResult, CreateCloudCommandOptions };
