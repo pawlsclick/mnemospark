@@ -1,43 +1,15 @@
 /**
- * Local x402 Proxy Server
+ * Local mnemospark proxy server.
  *
- * Sits between OpenClaw's pi-ai (which makes standard OpenAI-format requests)
- * and BlockRun's API (which requires x402 micropayments).
- *
- * Flow:
- *   pi-ai → http://localhost:{port}/v1/chat/completions
- *        → proxy forwards to https://blockrun.ai/api/v1/chat/completions
- *        → gets 402 → @x402/fetch signs payment → retries
- *        → streams response back to pi-ai
- *
- * Optimizations (v0.3.0):
- *   - SSE heartbeat: for streaming requests, sends headers + heartbeat immediately
- *     before the x402 flow, preventing OpenClaw's 10-15s timeout from firing.
- *   - Response dedup: hashes request bodies and caches responses for 30s,
- *     preventing double-charging when OpenClaw retries after timeout.
- *   - Payment cache: after first 402, pre-signs subsequent requests to skip
- *     the 402 round trip (~200ms savings per request).
- *   - Usage logging: log every request as JSON line to ~/.openclaw/blockrun/logs/
+ * This proxy only forwards mnemospark storage endpoints to the backend API and
+ * serves health checks. It does not handle chat completions or model routing.
  */
 
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { finished } from "node:stream";
 import type { AddressInfo } from "node:net";
 import { privateKeyToAccount } from "viem/accounts";
-import { createPaymentFetch, type PreAuthParams } from "./x402.js";
-import { BLOCKRUN_MODELS, resolveModelAlias, isReasoningModel } from "./models.js";
-import { getStats } from "./stats.js";
-import { RequestDeduplicator } from "./dedup.js";
-import { ResponseCache, type ResponseCacheConfig } from "./response-cache.js";
 import { BalanceMonitor } from "./balance.js";
-import { compressContext, shouldCompress, type NormalizedMessage } from "./compression/index.js";
-// Error classes available for programmatic use but not used in proxy
-// (universal free fallback means we don't throw balance errors anymore)
-// import { InsufficientFundsError, EmptyWalletError } from "./errors.js";
-import { USER_AGENT } from "./version.js";
-import { checkForUpdates } from "./updater.js";
 import { PROXY_PORT, MNEMOSPARK_BACKEND_API_BASE_URL } from "./config.js";
-import { SessionJournal } from "./journal.js";
 import { createWalletSignatureHeaderValue } from "./mnemospark-request-sign.js";
 import {
   PRICE_STORAGE_PROXY_PATH,
@@ -58,173 +30,9 @@ import {
   parseStorageObjectRequest,
 } from "./cloud-storage.js";
 
-const BLOCKRUN_API = "https://blockrun.ai/api";
-const BALANCE_FALLBACK_MODEL = "nvidia/gpt-oss-120b";
-const MAX_MESSAGES = 200; // BlockRun API limit - truncate older messages if exceeded
-const HEARTBEAT_INTERVAL_MS = 2_000;
-const DEFAULT_REQUEST_TIMEOUT_MS = 180_000; // 3 minutes (allows for on-chain tx + LLM response)
-const MAX_FALLBACK_ATTEMPTS = 5; // Maximum models to try in fallback chain (increased from 3 to ensure cheap models are tried)
 const HEALTH_CHECK_TIMEOUT_MS = 2_000; // Timeout for checking existing proxy
-const RATE_LIMIT_COOLDOWN_MS = 60_000; // 60 seconds cooldown for rate-limited models
 const PORT_RETRY_ATTEMPTS = 5; // Max attempts to bind port (handles TIME_WAIT)
 const PORT_RETRY_DELAY_MS = 1_000; // Delay between retry attempts
-
-/**
- * Transform upstream payment errors into user-friendly messages.
- * Parses the raw x402 error and formats it nicely.
- */
-function transformPaymentError(errorBody: string): string {
-  try {
-    // Try to parse the error JSON
-    const parsed = JSON.parse(errorBody) as {
-      error?: string;
-      details?: string;
-    };
-
-    // Check if this is a payment verification error
-    if (parsed.error === "Payment verification failed" && parsed.details) {
-      // Extract the nested JSON from details
-      // Format: "Verification failed: {json}\n"
-      const match = parsed.details.match(/Verification failed:\s*(\{.*\})/s);
-      if (match) {
-        const innerJson = JSON.parse(match[1]) as {
-          invalidMessage?: string;
-          invalidReason?: string;
-          payer?: string;
-        };
-
-        if (innerJson.invalidReason === "insufficient_funds" && innerJson.invalidMessage) {
-          // Parse "insufficient balance: 251 < 11463"
-          const balanceMatch = innerJson.invalidMessage.match(
-            /insufficient balance:\s*(\d+)\s*<\s*(\d+)/i,
-          );
-          if (balanceMatch) {
-            const currentMicros = parseInt(balanceMatch[1], 10);
-            const requiredMicros = parseInt(balanceMatch[2], 10);
-            const currentUSD = (currentMicros / 1_000_000).toFixed(6);
-            const requiredUSD = (requiredMicros / 1_000_000).toFixed(6);
-            const wallet = innerJson.payer || "unknown";
-            const shortWallet =
-              wallet.length > 12 ? `${wallet.slice(0, 6)}...${wallet.slice(-4)}` : wallet;
-
-            return JSON.stringify({
-              error: {
-                message: `Insufficient USDC balance. Current: $${currentUSD}, Required: ~$${requiredUSD}`,
-                type: "insufficient_funds",
-                wallet: wallet,
-                current_balance_usd: currentUSD,
-                required_usd: requiredUSD,
-                help: `Fund wallet ${shortWallet} with USDC on Base, or use free model: /model free`,
-              },
-            });
-          }
-        }
-
-        // Handle invalid_payload errors (signature issues, malformed payment)
-        if (innerJson.invalidReason === "invalid_payload") {
-          return JSON.stringify({
-            error: {
-              message: "Payment signature invalid. This may be a temporary issue.",
-              type: "invalid_payload",
-              help: "Try again. If this persists, reinstall mnemospark: openclaw plugins install mnemospark",
-            },
-          });
-        }
-      }
-    }
-
-    // Handle settlement failures (gas estimation, on-chain errors)
-    if (parsed.error === "Settlement failed" || parsed.details?.includes("Settlement failed")) {
-      const details = parsed.details || "";
-      const gasError = details.includes("unable to estimate gas");
-
-      return JSON.stringify({
-        error: {
-          message: gasError
-            ? "Payment failed: network congestion or gas issue. Try again."
-            : "Payment settlement failed. Try again in a moment.",
-          type: "settlement_failed",
-          help: "This is usually temporary. If it persists, try: /model free",
-        },
-      });
-    }
-  } catch {
-    // If parsing fails, return original
-  }
-  return errorBody;
-}
-
-/**
- * Track rate-limited models to avoid hitting them again.
- * Maps model ID to the timestamp when the rate limit was hit.
- */
-const rateLimitedModels = new Map<string, number>();
-
-/**
- * Check if a model is currently rate-limited (in cooldown period).
- */
-function isRateLimited(modelId: string): boolean {
-  const hitTime = rateLimitedModels.get(modelId);
-  if (!hitTime) return false;
-
-  const elapsed = Date.now() - hitTime;
-  if (elapsed >= RATE_LIMIT_COOLDOWN_MS) {
-    rateLimitedModels.delete(modelId);
-    return false;
-  }
-  return true;
-}
-
-/**
- * Mark a model as rate-limited.
- */
-function markRateLimited(modelId: string): void {
-  rateLimitedModels.set(modelId, Date.now());
-  console.log(`[mnemospark] Model ${modelId} rate-limited, will deprioritize for 60s`);
-}
-
-/**
- * Reorder models to put rate-limited ones at the end.
- */
-function prioritizeNonRateLimited(models: string[]): string[] {
-  const available: string[] = [];
-  const rateLimited: string[] = [];
-
-  for (const model of models) {
-    if (isRateLimited(model)) {
-      rateLimited.push(model);
-    } else {
-      available.push(model);
-    }
-  }
-
-  return [...available, ...rateLimited];
-}
-
-/**
- * Check if response socket is writable (prevents write-after-close errors).
- * Returns true only if all conditions are safe for writing.
- */
-function canWrite(res: ServerResponse): boolean {
-  return (
-    !res.writableEnded &&
-    !res.destroyed &&
-    res.socket !== null &&
-    !res.socket.destroyed &&
-    res.socket.writable
-  );
-}
-
-/**
- * Safe write with backpressure handling.
- * Returns true if write succeeded, false if socket is closed or write failed.
- */
-function safeWrite(res: ServerResponse, data: string | Buffer): boolean {
-  if (!canWrite(res)) {
-    return false;
-  }
-  return res.write(data);
-}
 
 function matchesProxyPath(url: string | undefined, path: string): boolean {
   return url === path || url?.startsWith(`${path}?`) === true;
@@ -246,13 +54,6 @@ function readHeaderValue(value: string | string[] | undefined): string | undefin
   return undefined;
 }
 
-function getSessionHeaderId(
-  headers: Record<string, string | string[] | undefined>,
-  headerName = "x-session-id",
-): string | undefined {
-  return readHeaderValue(headers[headerName] ?? headers[headerName.toLowerCase()]);
-}
-
 async function readProxyJsonBody(req: IncomingMessage): Promise<unknown> {
   const bodyChunks: Buffer[] = [];
   for await (const chunk of req) {
@@ -265,6 +66,11 @@ async function readProxyJsonBody(req: IncomingMessage): Promise<unknown> {
   }
 
   return JSON.parse(bodyText);
+}
+
+function sendJson(res: ServerResponse, status: number, body: unknown): void {
+  res.writeHead(status, { "Content-Type": "application/json" });
+  res.end(JSON.stringify(body));
 }
 
 function createBackendForwardHeaders(response: {
@@ -329,12 +135,6 @@ function createWalletRequiredBody(): string {
   });
 }
 
-// Extra buffer for balance check (on top of estimateAmount's 20% buffer)
-// Total effective buffer: 1.2 * 1.5 = 1.8x (80% safety margin)
-// This prevents x402 payment failures after streaming headers are sent,
-// which would trigger OpenClaw's 5-24 hour billing cooldown.
-const BALANCE_CHECK_BUFFER = 1.5;
-
 /**
  * Get the proxy port from pre-loaded configuration.
  * Port is validated at module load time, this just returns the cached value.
@@ -370,494 +170,6 @@ async function checkExistingProxy(port: number): Promise<string | undefined> {
   }
 }
 
-/**
- * Error patterns that indicate a provider-side issue (not user's fault).
- * These errors should trigger fallback to the next model in the chain.
- */
-const PROVIDER_ERROR_PATTERNS = [
-  /billing/i,
-  /insufficient.*balance/i,
-  /credits/i,
-  /quota.*exceeded/i,
-  /rate.*limit/i,
-  /model.*unavailable/i,
-  /model.*not.*available/i,
-  /service.*unavailable/i,
-  /capacity/i,
-  /overloaded/i,
-  /temporarily.*unavailable/i,
-  /api.*key.*invalid/i,
-  /authentication.*failed/i,
-  /request too large/i,
-  /request.*size.*exceeds/i,
-  /payload too large/i,
-];
-
-/**
- * "Successful" response bodies that are actually provider degradation placeholders.
- * Some upstream providers occasionally return these with HTTP 200.
- */
-const DEGRADED_RESPONSE_PATTERNS = [
-  /the ai service is temporarily overloaded/i,
-  /service is temporarily overloaded/i,
-  /please try again in a moment/i,
-];
-
-/**
- * Known low-quality loop signatures seen during provider degradation windows.
- */
-const DEGRADED_LOOP_PATTERNS = [
-  /the boxed is the response\./i,
-  /the response is the text\./i,
-  /the final answer is the boxed\./i,
-];
-
-function extractAssistantContent(payload: unknown): string | undefined {
-  if (!payload || typeof payload !== "object") return undefined;
-  const record = payload as Record<string, unknown>;
-  const choices = record.choices;
-  if (!Array.isArray(choices) || choices.length === 0) return undefined;
-
-  const firstChoice = choices[0];
-  if (!firstChoice || typeof firstChoice !== "object") return undefined;
-  const choice = firstChoice as Record<string, unknown>;
-  const message = choice.message;
-  if (!message || typeof message !== "object") return undefined;
-  const content = (message as Record<string, unknown>).content;
-  return typeof content === "string" ? content : undefined;
-}
-
-function hasKnownLoopSignature(text: string): boolean {
-  const matchCount = DEGRADED_LOOP_PATTERNS.reduce(
-    (count, pattern) => (pattern.test(text) ? count + 1 : count),
-    0,
-  );
-  if (matchCount >= 2) return true;
-
-  // Generic repetitive loop fallback for short repeated lines.
-  const lines = text
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean);
-  if (lines.length < 8) return false;
-
-  const counts = new Map<string, number>();
-  for (const line of lines) {
-    counts.set(line, (counts.get(line) ?? 0) + 1);
-  }
-
-  const maxRepeat = Math.max(...counts.values());
-  const uniqueRatio = counts.size / lines.length;
-  return maxRepeat >= 3 && uniqueRatio <= 0.45;
-}
-
-/**
- * Detect degraded 200-response payloads that should trigger model fallback.
- * Returns a short reason when fallback should happen, otherwise undefined.
- */
-export function detectDegradedSuccessResponse(body: string): string | undefined {
-  const trimmed = body.trim();
-  if (!trimmed) return undefined;
-
-  // Plain-text placeholder response.
-  if (DEGRADED_RESPONSE_PATTERNS.some((pattern) => pattern.test(trimmed))) {
-    return "degraded response: overloaded placeholder";
-  }
-
-  // Plain-text looping garbage response.
-  if (hasKnownLoopSignature(trimmed)) {
-    return "degraded response: repetitive loop output";
-  }
-
-  try {
-    const parsed = JSON.parse(trimmed) as Record<string, unknown>;
-
-    // Some providers return JSON error payloads with HTTP 200.
-    const errorField = parsed.error;
-    let errorText = "";
-    if (typeof errorField === "string") {
-      errorText = errorField;
-    } else if (errorField && typeof errorField === "object") {
-      const errObj = errorField as Record<string, unknown>;
-      errorText = [
-        typeof errObj.message === "string" ? errObj.message : "",
-        typeof errObj.type === "string" ? errObj.type : "",
-        typeof errObj.code === "string" ? errObj.code : "",
-      ]
-        .filter(Boolean)
-        .join(" ");
-    }
-    if (errorText && PROVIDER_ERROR_PATTERNS.some((pattern) => pattern.test(errorText))) {
-      return `degraded response: ${errorText.slice(0, 120)}`;
-    }
-
-    // Successful wrapper with bad assistant content.
-    const assistantContent = extractAssistantContent(parsed);
-    if (!assistantContent) return undefined;
-    if (DEGRADED_RESPONSE_PATTERNS.some((pattern) => pattern.test(assistantContent))) {
-      return "degraded response: overloaded assistant content";
-    }
-    if (hasKnownLoopSignature(assistantContent)) {
-      return "degraded response: repetitive assistant loop";
-    }
-  } catch {
-    // Not JSON - handled by plaintext checks above.
-  }
-
-  return undefined;
-}
-
-/**
- * HTTP status codes that indicate provider issues worth retrying with fallback.
- */
-const FALLBACK_STATUS_CODES = [
-  400, // Bad request - sometimes used for billing errors
-  401, // Unauthorized - provider API key issues
-  402, // Payment required - but from upstream, not x402
-  403, // Forbidden - provider restrictions
-  413, // Payload too large - request exceeds model's context limit
-  429, // Rate limited
-  500, // Internal server error
-  502, // Bad gateway
-  503, // Service unavailable
-  504, // Gateway timeout
-];
-
-/**
- * Check if an error response indicates a provider issue that should trigger fallback.
- */
-function isProviderError(status: number, body: string): boolean {
-  // Check status code first
-  if (!FALLBACK_STATUS_CODES.includes(status)) {
-    return false;
-  }
-
-  // For 5xx errors, always fallback
-  if (status >= 500) {
-    return true;
-  }
-
-  // For 4xx errors, check the body for known provider error patterns
-  return PROVIDER_ERROR_PATTERNS.some((pattern) => pattern.test(body));
-}
-
-/**
- * Valid message roles for OpenAI-compatible APIs.
- * Some clients send non-standard roles (e.g., "developer" instead of "system").
- */
-const VALID_ROLES = new Set(["system", "user", "assistant", "tool", "function"]);
-
-/**
- * Role mappings for non-standard roles.
- * Maps client-specific roles to standard OpenAI roles.
- */
-const ROLE_MAPPINGS: Record<string, string> = {
-  developer: "system", // OpenAI's newer API uses "developer" for system messages
-  model: "assistant", // Some APIs use "model" instead of "assistant"
-};
-
-type ChatMessage = { role: string; content: string | unknown };
-
-/**
- * Anthropic tool ID pattern: only alphanumeric, underscore, and hyphen allowed.
- * Error: "messages.X.content.Y.tool_use.id: String should match pattern '^[a-zA-Z0-9_-]+$'"
- */
-const VALID_TOOL_ID_PATTERN = /^[a-zA-Z0-9_-]+$/;
-
-/**
- * Sanitize a tool ID to match Anthropic's required pattern.
- * Replaces invalid characters with underscores.
- */
-function sanitizeToolId(id: string | undefined): string | undefined {
-  if (!id || typeof id !== "string") return id;
-  if (VALID_TOOL_ID_PATTERN.test(id)) return id;
-
-  // Replace invalid characters with underscores
-  return id.replace(/[^a-zA-Z0-9_-]/g, "_");
-}
-
-/**
- * Type for messages with tool calls (OpenAI format).
- */
-type MessageWithTools = ChatMessage & {
-  tool_calls?: Array<{ id?: string; type?: string; function?: unknown }>;
-  tool_call_id?: string;
-};
-
-/**
- * Type for content blocks that may contain tool IDs (Anthropic format in OpenAI wrapper).
- */
-type ContentBlock = {
-  type?: string;
-  id?: string;
-  tool_use_id?: string;
-  [key: string]: unknown;
-};
-
-/**
- * Sanitize all tool IDs in messages to match Anthropic's pattern.
- * Handles both OpenAI format (tool_calls, tool_call_id) and content block formats.
- */
-function sanitizeToolIds(messages: ChatMessage[]): ChatMessage[] {
-  if (!messages || messages.length === 0) return messages;
-
-  let hasChanges = false;
-  const sanitized = messages.map((msg) => {
-    const typedMsg = msg as MessageWithTools;
-    let msgChanged = false;
-    let newMsg = { ...msg } as MessageWithTools;
-
-    // Sanitize tool_calls[].id in assistant messages
-    if (typedMsg.tool_calls && Array.isArray(typedMsg.tool_calls)) {
-      const newToolCalls = typedMsg.tool_calls.map((tc) => {
-        if (tc.id && typeof tc.id === "string") {
-          const sanitized = sanitizeToolId(tc.id);
-          if (sanitized !== tc.id) {
-            msgChanged = true;
-            return { ...tc, id: sanitized };
-          }
-        }
-        return tc;
-      });
-      if (msgChanged) {
-        newMsg = { ...newMsg, tool_calls: newToolCalls };
-      }
-    }
-
-    // Sanitize tool_call_id in tool messages
-    if (typedMsg.tool_call_id && typeof typedMsg.tool_call_id === "string") {
-      const sanitized = sanitizeToolId(typedMsg.tool_call_id);
-      if (sanitized !== typedMsg.tool_call_id) {
-        msgChanged = true;
-        newMsg = { ...newMsg, tool_call_id: sanitized };
-      }
-    }
-
-    // Sanitize content blocks if content is an array (Anthropic-style content)
-    if (Array.isArray(typedMsg.content)) {
-      const newContent = (typedMsg.content as ContentBlock[]).map((block) => {
-        if (!block || typeof block !== "object") return block;
-
-        let blockChanged = false;
-        let newBlock = { ...block };
-
-        // tool_use blocks have "id"
-        if (block.type === "tool_use" && block.id && typeof block.id === "string") {
-          const sanitized = sanitizeToolId(block.id);
-          if (sanitized !== block.id) {
-            blockChanged = true;
-            newBlock = { ...newBlock, id: sanitized };
-          }
-        }
-
-        // tool_result blocks have "tool_use_id"
-        if (
-          block.type === "tool_result" &&
-          block.tool_use_id &&
-          typeof block.tool_use_id === "string"
-        ) {
-          const sanitized = sanitizeToolId(block.tool_use_id);
-          if (sanitized !== block.tool_use_id) {
-            blockChanged = true;
-            newBlock = { ...newBlock, tool_use_id: sanitized };
-          }
-        }
-
-        if (blockChanged) {
-          msgChanged = true;
-          return newBlock;
-        }
-        return block;
-      });
-
-      if (msgChanged) {
-        newMsg = { ...newMsg, content: newContent };
-      }
-    }
-
-    if (msgChanged) {
-      hasChanges = true;
-      return newMsg;
-    }
-    return msg;
-  });
-
-  return hasChanges ? sanitized : messages;
-}
-
-/**
- * Normalize message roles to standard OpenAI format.
- * Converts non-standard roles (e.g., "developer") to valid ones.
- */
-function normalizeMessageRoles(messages: ChatMessage[]): ChatMessage[] {
-  if (!messages || messages.length === 0) return messages;
-
-  let hasChanges = false;
-  const normalized = messages.map((msg) => {
-    if (VALID_ROLES.has(msg.role)) return msg;
-
-    const mappedRole = ROLE_MAPPINGS[msg.role];
-    if (mappedRole) {
-      hasChanges = true;
-      return { ...msg, role: mappedRole };
-    }
-
-    // Unknown role - default to "user" to avoid API errors
-    hasChanges = true;
-    return { ...msg, role: "user" };
-  });
-
-  return hasChanges ? normalized : messages;
-}
-
-/**
- * Normalize messages for Google models.
- * Google's Gemini API requires the first non-system message to be from "user".
- * If conversation starts with "assistant"/"model", prepend a placeholder user message.
- */
-
-function normalizeMessagesForGoogle(messages: ChatMessage[]): ChatMessage[] {
-  if (!messages || messages.length === 0) return messages;
-
-  // Find first non-system message
-  let firstNonSystemIdx = -1;
-  for (let i = 0; i < messages.length; i++) {
-    if (messages[i].role !== "system") {
-      firstNonSystemIdx = i;
-      break;
-    }
-  }
-
-  // If no non-system messages, return as-is
-  if (firstNonSystemIdx === -1) return messages;
-
-  const firstRole = messages[firstNonSystemIdx].role;
-
-  // If first non-system message is already "user", no change needed
-  if (firstRole === "user") return messages;
-
-  // If first non-system message is "assistant" or "model", prepend a user message
-  if (firstRole === "assistant" || firstRole === "model") {
-    const normalized = [...messages];
-    normalized.splice(firstNonSystemIdx, 0, {
-      role: "user",
-      content: "(continuing conversation)",
-    });
-    return normalized;
-  }
-
-  return messages;
-}
-
-/**
- * Check if a model is a Google model that requires message normalization.
- */
-function isGoogleModel(modelId: string): boolean {
-  return modelId.startsWith("google/") || modelId.startsWith("gemini");
-}
-
-/**
- * Extended message type for thinking-enabled conversations.
- */
-type ExtendedChatMessage = ChatMessage & {
-  tool_calls?: unknown[];
-  reasoning_content?: unknown;
-};
-
-/**
- * Normalize messages for thinking-enabled requests.
- * When thinking/extended_thinking is enabled, assistant messages with tool_calls
- * must have reasoning_content (can be empty string if not present).
- * Error: "400 thinking is enabled but reasoning_content is missing in assistant tool call message"
- */
-function normalizeMessagesForThinking(messages: ExtendedChatMessage[]): ExtendedChatMessage[] {
-  if (!messages || messages.length === 0) return messages;
-
-  let hasChanges = false;
-  const normalized = messages.map((msg) => {
-    // Skip if not assistant or already has reasoning_content
-    if (msg.role !== "assistant" || msg.reasoning_content !== undefined) {
-      return msg;
-    }
-
-    // Check for OpenAI format: tool_calls array
-    const hasOpenAIToolCalls =
-      msg.tool_calls && Array.isArray(msg.tool_calls) && msg.tool_calls.length > 0;
-
-    // Check for Anthropic format: content array with tool_use blocks
-    const hasAnthropicToolUse =
-      Array.isArray(msg.content) &&
-      (msg.content as Array<{ type?: string }>).some((block) => block?.type === "tool_use");
-
-    if (hasOpenAIToolCalls || hasAnthropicToolUse) {
-      hasChanges = true;
-      return { ...msg, reasoning_content: "" };
-    }
-    return msg;
-  });
-
-  return hasChanges ? normalized : messages;
-}
-
-/**
- * Truncate messages to stay under BlockRun's MAX_MESSAGES limit.
- * Keeps all system messages and the most recent conversation history.
- */
-function truncateMessages<T extends { role: string }>(messages: T[]): T[] {
-  if (!messages || messages.length <= MAX_MESSAGES) return messages;
-
-  // Separate system messages from conversation
-  const systemMsgs = messages.filter((m) => m.role === "system");
-  const conversationMsgs = messages.filter((m) => m.role !== "system");
-
-  // Keep all system messages + most recent conversation messages
-  const maxConversation = MAX_MESSAGES - systemMsgs.length;
-  const truncatedConversation = conversationMsgs.slice(-maxConversation);
-
-  console.log(
-    `[mnemospark] Truncated messages: ${messages.length} → ${systemMsgs.length + truncatedConversation.length} (kept ${systemMsgs.length} system + ${truncatedConversation.length} recent)`,
-  );
-
-  return [...systemMsgs, ...truncatedConversation];
-}
-
-// Kimi/Moonshot models use special Unicode tokens for thinking boundaries.
-// Pattern: <｜begin▁of▁thinking｜>content<｜end▁of▁thinking｜>
-// The ｜ is fullwidth vertical bar (U+FF5C), ▁ is lower one-eighth block (U+2581).
-
-// Match full Kimi thinking blocks: <｜begin...｜>content<｜end...｜>
-const KIMI_BLOCK_RE = /<[｜|][^<>]*begin[^<>]*[｜|]>[\s\S]*?<[｜|][^<>]*end[^<>]*[｜|]>/gi;
-
-// Match standalone Kimi tokens like <｜end▁of▁thinking｜>
-const KIMI_TOKEN_RE = /<[｜|][^<>]*[｜|]>/g;
-
-// Standard thinking tags that may leak through from various models
-const THINKING_TAG_RE = /<\s*\/?\s*(?:think(?:ing)?|thought|antthinking)\b[^>]*>/gi;
-
-// Full thinking blocks: <think>content</think>
-const THINKING_BLOCK_RE =
-  /<\s*(?:think(?:ing)?|thought|antthinking)\b[^>]*>[\s\S]*?<\s*\/\s*(?:think(?:ing)?|thought|antthinking)\s*>/gi;
-
-/**
- * Strip thinking tokens and blocks from model response content.
- * Handles both Kimi-style Unicode tokens and standard XML-style tags.
- *
- * NOTE: DSML tags (<｜DSML｜...>) are NOT stripped - those are tool calls
- * that should be handled by the API, not hidden from users.
- */
-function stripThinkingTokens(content: string): string {
-  if (!content) return content;
-  // Strip full Kimi thinking blocks first (begin...end with content)
-  let cleaned = content.replace(KIMI_BLOCK_RE, "");
-  // Strip remaining standalone Kimi tokens
-  cleaned = cleaned.replace(KIMI_TOKEN_RE, "");
-  // Strip full thinking blocks (<think>...</think>)
-  cleaned = cleaned.replace(THINKING_BLOCK_RE, "");
-  // Strip remaining standalone thinking tags
-  cleaned = cleaned.replace(THINKING_TAG_RE, "");
-  return cleaned;
-}
-
 /** Callback info for low balance warning */
 export type LowBalanceInfo = {
   balanceUSD: string;
@@ -873,35 +185,10 @@ export type InsufficientFundsInfo = {
 
 export type ProxyOptions = {
   walletKey: string;
-  apiBase?: string;
   /** Port to listen on (default: 7120) */
   port?: number;
-  /** Request timeout in ms (default: 180000 = 3 minutes). Covers on-chain tx + LLM response. */
-  requestTimeoutMs?: number;
-  /** Skip balance checks (for testing only). Default: false */
-  skipBalanceCheck?: boolean;
-  /**
-   * Auto-compress large requests to reduce network usage.
-   * When enabled, requests are automatically compressed using
-   * LLM-safe context compression (15-40% reduction).
-   * Default: true
-   */
-  autoCompressRequests?: boolean;
-  /**
-   * Threshold in KB to trigger auto-compression (default: 180).
-   * Requests larger than this are compressed before sending.
-   * Set to 0 to compress all requests.
-   */
-  compressionThresholdKB?: number;
-  /**
-   * Response caching config. When enabled, identical requests return
-   * cached responses instead of making new API calls.
-   * Default: enabled with 10 minute TTL, 200 max entries.
-   */
-  cacheConfig?: ResponseCacheConfig;
   onReady?: (port: number) => void;
   onError?: (error: Error) => void;
-  onPayment?: (info: { model: string; amount: string; network: string }) => void;
   /** Called when balance drops below $1.00 (warning, request still proceeds) */
   onLowBalance?: (info: LowBalanceInfo) => void;
   /** Called when balance is insufficient for a request (request fails) */
@@ -917,33 +204,7 @@ export type ProxyHandle = {
 };
 
 /**
- * Estimate USDC cost for a request based on model pricing.
- * Returns amount string in USDC smallest unit (6 decimals) or undefined if unknown.
- */
-function estimateAmount(
-  modelId: string,
-  bodyLength: number,
-  maxTokens: number,
-): string | undefined {
-  const model = BLOCKRUN_MODELS.find((m) => m.id === modelId);
-  if (!model) return undefined;
-
-  // Rough estimate: ~4 chars per token for input
-  const estimatedInputTokens = Math.ceil(bodyLength / 4);
-  const estimatedOutputTokens = maxTokens || model.maxOutput || 4096;
-
-  const costUsd =
-    (estimatedInputTokens / 1_000_000) * model.inputPrice +
-    (estimatedOutputTokens / 1_000_000) * model.outputPrice;
-
-  // Convert to USDC 6-decimal integer, add 20% buffer for estimation error
-  // Minimum 100 ($0.0001) to avoid zero-amount rejections
-  const amountMicros = Math.max(100, Math.ceil(costUsd * 1.2 * 1_000_000));
-  return amountMicros.toString();
-}
-
-/**
- * Start the local x402 proxy server.
+ * Start the local mnemospark backend proxy server.
  *
  * If a proxy is already running on the target port, reuses it instead of failing.
  * Port can be configured via MNEMOSPARK_PROXY_PORT environment variable.
@@ -951,8 +212,6 @@ function estimateAmount(
  * Returns a handle with the assigned port, base URL, and a close function.
  */
 export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
-  const apiBase = options.apiBase ?? BLOCKRUN_API;
-
   // Determine port: options.port > env var > default
   const listenPort = options.port ?? getProxyPort();
 
@@ -984,23 +243,10 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
     };
   }
 
-  // Create x402 payment-enabled fetch from wallet private key
   const walletPrivateKey = options.walletKey.trim() as `0x${string}`;
   const account = privateKeyToAccount(walletPrivateKey);
-  const { fetch: payFetch } = createPaymentFetch(walletPrivateKey);
-
-  // Create balance monitor for pre-request checks
   const balanceMonitor = new BalanceMonitor(account.address);
   const proxyWalletAddressLower = account.address.toLowerCase();
-
-  // Request deduplicator (shared across all requests)
-  const deduplicator = new RequestDeduplicator();
-
-  // Response cache for identical requests (longer TTL than dedup)
-  const responseCache = new ResponseCache(options.cacheConfig);
-
-  // Session journal for memory (enables agents to recall earlier work)
-  const sessionJournal = new SessionJournal();
 
   // Track active connections for graceful cleanup
   const connections = new Set<import("net").Socket>();
@@ -1025,31 +271,11 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
   };
 
   const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
-    // Add stream error handlers to prevent server crashes
     req.on("error", (err) => {
       console.error(`[mnemospark] Request stream error: ${err.message}`);
-      // Don't throw - just log and let request handler deal with it
     });
-
     res.on("error", (err) => {
       console.error(`[mnemospark] Response stream error: ${err.message}`);
-      // Don't try to write to failed socket - just log
-    });
-
-    // Finished wrapper for guaranteed cleanup on response completion/error
-    finished(res, (err) => {
-      if (err && err.code !== "ERR_STREAM_DESTROYED") {
-        console.error(`[mnemospark] Response finished with error: ${err.message}`);
-      }
-      // Note: heartbeatInterval cleanup happens in res.on("close") handler
-      // Note: completed and dedup cleanup happens in the res.on("close") handler below
-    });
-
-    // Request finished wrapper for complete stream lifecycle tracking
-    finished(req, (err) => {
-      if (err && err.code !== "ERR_STREAM_DESTROYED") {
-        console.error(`[mnemospark] Request finished with error: ${err.message}`);
-      }
     });
 
     // Mnemospark backend proxy endpoint for /cloud price-storage command.
@@ -1059,26 +285,20 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
         try {
           payload = await readProxyJsonBody(req);
         } catch {
-          res.writeHead(400, { "Content-Type": "application/json" });
-          res.end(
-            JSON.stringify({
-              error: "Bad request",
-              message: "Invalid JSON body for /cloud price-storage",
-            }),
-          );
+          sendJson(res, 400, {
+            error: "Bad request",
+            message: "Invalid JSON body for /cloud price-storage",
+          });
           return;
         }
 
         const requestPayload = parsePriceStorageQuoteRequest(payload);
         if (!requestPayload) {
-          res.writeHead(400, { "Content-Type": "application/json" });
-          res.end(
-            JSON.stringify({
-              error: "Bad request",
-              message:
-                "Missing required fields: wallet_address, object_id, object_id_hash, gb, provider, region",
-            }),
-          );
+          sendJson(res, 400, {
+            error: "Bad request",
+            message:
+              "Missing required fields: wallet_address, object_id, object_id_hash, gb, provider, region",
+          });
           return;
         }
 
@@ -1087,7 +307,6 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
           "/price-storage",
           requestPayload.wallet_address,
         );
-
         const backendResponse = await forwardPriceStorageToBackend(requestPayload, {
           backendBaseUrl: MNEMOSPARK_BACKEND_API_BASE_URL,
           walletSignature,
@@ -1109,17 +328,13 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
         }
 
         const responseHeaders = createBackendForwardHeaders(backendResponse);
-
         res.writeHead(backendResponse.status, responseHeaders);
         res.end(backendResponse.bodyText);
       } catch (err) {
-        res.writeHead(502, { "Content-Type": "application/json" });
-        res.end(
-          JSON.stringify({
-            error: "proxy_error",
-            message: `Failed to forward /cloud price-storage: ${err instanceof Error ? err.message : String(err)}`,
-          }),
-        );
+        sendJson(res, 502, {
+          error: "proxy_error",
+          message: `Failed to forward /cloud price-storage: ${err instanceof Error ? err.message : String(err)}`,
+        });
       }
       return;
     }
@@ -1131,34 +346,31 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
         try {
           payload = await readProxyJsonBody(req);
         } catch {
-          res.writeHead(400, { "Content-Type": "application/json" });
-          res.end(
-            JSON.stringify({
-              error: "Bad request",
-              message: "Invalid JSON body for /cloud upload",
-            }),
-          );
+          sendJson(res, 400, {
+            error: "Bad request",
+            message: "Invalid JSON body for /cloud upload",
+          });
           return;
         }
 
         const requestPayload = parseStorageUploadRequest(payload);
         if (!requestPayload) {
-          res.writeHead(400, { "Content-Type": "application/json" });
-          res.end(
-            JSON.stringify({
-              error: "Bad request",
-              message:
-                "Missing required fields: quote_id, wallet_address, object_id, object_id_hash, quoted_storage_price, payload",
-            }),
-          );
+          sendJson(res, 400, {
+            error: "Bad request",
+            message:
+              "Missing required fields: quote_id, wallet_address, object_id, object_id_hash, quoted_storage_price, payload",
+          });
           return;
         }
 
         if (requestPayload.wallet_address.toLowerCase() !== proxyWalletAddressLower) {
-          res.writeHead(403, { "Content-Type": "application/json" });
-          res.end(createAuthErrorBody("wallet proof invalid"));
+          sendJson(res, 403, {
+            error: "wallet_proof_invalid",
+            message: "wallet proof invalid",
+          });
           return;
         }
+
         const walletSignature = await createBackendWalletSignature(
           "POST",
           "/storage/upload",
@@ -1178,18 +390,28 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
             ? balanceMonitor
             : new BalanceMonitor(requestPayload.wallet_address);
         const sufficiency = await uploadBalanceMonitor.checkSufficient(requiredMicros);
+        const requiredUSD = uploadBalanceMonitor.formatUSDC(requiredMicros);
 
         if (!sufficiency.sufficient) {
-          res.writeHead(400, { "Content-Type": "application/json" });
-          res.end(
-            JSON.stringify({
-              error: "insufficient_balance",
-              message: `Insufficient USDC balance. Current: ${sufficiency.info.balanceUSD}, Required: ${uploadBalanceMonitor.formatUSDC(requiredMicros)}`,
-              wallet: requestPayload.wallet_address,
-              help: `Fund wallet ${requestPayload.wallet_address} on Base before running /cloud upload`,
-            }),
-          );
+          options.onInsufficientFunds?.({
+            balanceUSD: sufficiency.info.balanceUSD,
+            requiredUSD,
+            walletAddress: requestPayload.wallet_address,
+          });
+          sendJson(res, 400, {
+            error: "insufficient_balance",
+            message: `Insufficient USDC balance. Current: ${sufficiency.info.balanceUSD}, Required: ${requiredUSD}`,
+            wallet: requestPayload.wallet_address,
+            help: `Fund wallet ${requestPayload.wallet_address} on Base before running /cloud upload`,
+          });
           return;
+        }
+
+        if (sufficiency.info.isLow) {
+          options.onLowBalance?.({
+            balanceUSD: sufficiency.info.balanceUSD,
+            walletAddress: requestPayload.wallet_address,
+          });
         }
 
         const backendResponse = await forwardStorageUploadToBackend(requestPayload, {
@@ -1219,13 +441,10 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
         res.writeHead(backendResponse.status, responseHeaders);
         res.end(backendResponse.bodyText);
       } catch (err) {
-        res.writeHead(502, { "Content-Type": "application/json" });
-        res.end(
-          JSON.stringify({
-            error: "proxy_error",
-            message: `Failed to forward /cloud upload: ${err instanceof Error ? err.message : String(err)}`,
-          }),
-        );
+        sendJson(res, 502, {
+          error: "proxy_error",
+          message: `Failed to forward /cloud upload: ${err instanceof Error ? err.message : String(err)}`,
+        });
       }
       return;
     }
@@ -1237,33 +456,30 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
         try {
           payload = await readProxyJsonBody(req);
         } catch {
-          res.writeHead(400, { "Content-Type": "application/json" });
-          res.end(
-            JSON.stringify({
-              error: "Bad request",
-              message: "Invalid JSON body for /cloud ls",
-            }),
-          );
+          sendJson(res, 400, {
+            error: "Bad request",
+            message: "Invalid JSON body for /cloud ls",
+          });
           return;
         }
 
         const requestPayload = parseStorageObjectRequest(payload);
         if (!requestPayload) {
-          res.writeHead(400, { "Content-Type": "application/json" });
-          res.end(
-            JSON.stringify({
-              error: "Bad request",
-              message: "Missing required fields: wallet_address, object_key",
-            }),
-          );
+          sendJson(res, 400, {
+            error: "Bad request",
+            message: "Missing required fields: wallet_address, object_key",
+          });
           return;
         }
 
         if (requestPayload.wallet_address.toLowerCase() !== proxyWalletAddressLower) {
-          res.writeHead(403, { "Content-Type": "application/json" });
-          res.end(createAuthErrorBody("wallet proof invalid"));
+          sendJson(res, 403, {
+            error: "wallet_proof_invalid",
+            message: "wallet proof invalid",
+          });
           return;
         }
+
         const walletSignature = await createBackendWalletSignature(
           "POST",
           "/storage/ls",
@@ -1299,13 +515,10 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
         res.writeHead(backendResponse.status, responseHeaders);
         res.end(backendResponse.bodyText);
       } catch (err) {
-        res.writeHead(502, { "Content-Type": "application/json" });
-        res.end(
-          JSON.stringify({
-            error: "proxy_error",
-            message: `Failed to forward /cloud ls: ${err instanceof Error ? err.message : String(err)}`,
-          }),
-        );
+        sendJson(res, 502, {
+          error: "proxy_error",
+          message: `Failed to forward /cloud ls: ${err instanceof Error ? err.message : String(err)}`,
+        });
       }
       return;
     }
@@ -1317,33 +530,30 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
         try {
           payload = await readProxyJsonBody(req);
         } catch {
-          res.writeHead(400, { "Content-Type": "application/json" });
-          res.end(
-            JSON.stringify({
-              error: "Bad request",
-              message: "Invalid JSON body for /cloud download",
-            }),
-          );
+          sendJson(res, 400, {
+            error: "Bad request",
+            message: "Invalid JSON body for /cloud download",
+          });
           return;
         }
 
         const requestPayload = parseStorageObjectRequest(payload);
         if (!requestPayload) {
-          res.writeHead(400, { "Content-Type": "application/json" });
-          res.end(
-            JSON.stringify({
-              error: "Bad request",
-              message: "Missing required fields: wallet_address, object_key",
-            }),
-          );
+          sendJson(res, 400, {
+            error: "Bad request",
+            message: "Missing required fields: wallet_address, object_key",
+          });
           return;
         }
 
         if (requestPayload.wallet_address.toLowerCase() !== proxyWalletAddressLower) {
-          res.writeHead(403, { "Content-Type": "application/json" });
-          res.end(createAuthErrorBody("wallet proof invalid"));
+          sendJson(res, 403, {
+            error: "wallet_proof_invalid",
+            message: "wallet proof invalid",
+          });
           return;
         }
+
         const walletSignature = await createBackendWalletSignature(
           "POST",
           "/storage/download",
@@ -1384,23 +594,17 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
         }
 
         const downloadResult = await downloadStorageToDisk(requestPayload, backendResponse);
-        res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(
-          JSON.stringify({
-            success: true,
-            key: downloadResult.key,
-            file_path: downloadResult.filePath,
-            bytes_written: downloadResult.bytesWritten,
-          }),
-        );
+        sendJson(res, 200, {
+          success: true,
+          key: downloadResult.key,
+          file_path: downloadResult.filePath,
+          bytes_written: downloadResult.bytesWritten,
+        });
       } catch (err) {
-        res.writeHead(502, { "Content-Type": "application/json" });
-        res.end(
-          JSON.stringify({
-            error: "proxy_error",
-            message: `Failed to forward /cloud download: ${err instanceof Error ? err.message : String(err)}`,
-          }),
-        );
+        sendJson(res, 502, {
+          error: "proxy_error",
+          message: `Failed to forward /cloud download: ${err instanceof Error ? err.message : String(err)}`,
+        });
       }
       return;
     }
@@ -1412,33 +616,30 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
         try {
           payload = await readProxyJsonBody(req);
         } catch {
-          res.writeHead(400, { "Content-Type": "application/json" });
-          res.end(
-            JSON.stringify({
-              error: "Bad request",
-              message: "Invalid JSON body for /cloud delete",
-            }),
-          );
+          sendJson(res, 400, {
+            error: "Bad request",
+            message: "Invalid JSON body for /cloud delete",
+          });
           return;
         }
 
         const requestPayload = parseStorageObjectRequest(payload);
         if (!requestPayload) {
-          res.writeHead(400, { "Content-Type": "application/json" });
-          res.end(
-            JSON.stringify({
-              error: "Bad request",
-              message: "Missing required fields: wallet_address, object_key",
-            }),
-          );
+          sendJson(res, 400, {
+            error: "Bad request",
+            message: "Missing required fields: wallet_address, object_key",
+          });
           return;
         }
 
         if (requestPayload.wallet_address.toLowerCase() !== proxyWalletAddressLower) {
-          res.writeHead(403, { "Content-Type": "application/json" });
-          res.end(createAuthErrorBody("wallet proof invalid"));
+          sendJson(res, 403, {
+            error: "wallet_proof_invalid",
+            message: "wallet proof invalid",
+          });
           return;
         }
+
         const walletSignature = await createBackendWalletSignature(
           "POST",
           "/storage/delete",
@@ -1474,13 +675,10 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
         res.writeHead(backendResponse.status, responseHeaders);
         res.end(backendResponse.bodyText);
       } catch (err) {
-        res.writeHead(502, { "Content-Type": "application/json" });
-        res.end(
-          JSON.stringify({
-            error: "proxy_error",
-            message: `Failed to forward /cloud delete: ${err instanceof Error ? err.message : String(err)}`,
-          }),
-        );
+        sendJson(res, 502, {
+          error: "proxy_error",
+          message: `Failed to forward /cloud delete: ${err instanceof Error ? err.message : String(err)}`,
+        });
       }
       return;
     }
@@ -1506,97 +704,14 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
         }
       }
 
-      res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify(response));
+      sendJson(res, 200, response);
       return;
     }
 
-    // Cache stats endpoint
-    if (req.url === "/cache" || req.url?.startsWith("/cache?")) {
-      const stats = responseCache.getStats();
-      res.writeHead(200, {
-        "Content-Type": "application/json",
-        "Cache-Control": "no-cache",
-      });
-      res.end(JSON.stringify(stats, null, 2));
-      return;
-    }
-
-    // Stats API endpoint - returns JSON for programmatic access
-    if (req.url === "/stats" || req.url?.startsWith("/stats?")) {
-      try {
-        const url = new URL(req.url, "http://localhost");
-        const days = parseInt(url.searchParams.get("days") || "7", 10);
-        const stats = await getStats(Math.min(days, 30));
-
-        res.writeHead(200, {
-          "Content-Type": "application/json",
-          "Cache-Control": "no-cache",
-        });
-        res.end(JSON.stringify(stats, null, 2));
-      } catch (err) {
-        res.writeHead(500, { "Content-Type": "application/json" });
-        res.end(
-          JSON.stringify({
-            error: `Failed to get stats: ${err instanceof Error ? err.message : String(err)}`,
-          }),
-        );
-      }
-      return;
-    }
-
-    // --- Handle /v1/models locally (no upstream call needed) ---
-    if (req.url === "/v1/models" && req.method === "GET") {
-      const models = BLOCKRUN_MODELS.filter((m) => m.id !== "auto").map((m) => ({
-        id: m.id,
-        object: "model",
-        created: Math.floor(Date.now() / 1000),
-        owned_by: m.id.split("/")[0] || "unknown",
-      }));
-      res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ object: "list", data: models }));
-      return;
-    }
-
-    // Only proxy paths starting with /v1
-    if (!req.url?.startsWith("/v1")) {
-      res.writeHead(404, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ error: "Not found" }));
-      return;
-    }
-
-    try {
-      await proxyRequest(
-        req,
-        res,
-        apiBase,
-        payFetch,
-        options,
-        deduplicator,
-        balanceMonitor,
-        responseCache,
-        sessionJournal,
-      );
-    } catch (err) {
-      const error = err instanceof Error ? err : new Error(String(err));
-      options.onError?.(error);
-
-      if (!res.headersSent) {
-        res.writeHead(502, { "Content-Type": "application/json" });
-        res.end(
-          JSON.stringify({
-            error: { message: `Proxy error: ${error.message}`, type: "proxy_error" },
-          }),
-        );
-      } else if (!res.writableEnded) {
-        // Headers already sent (streaming) — send error as SSE event
-        res.write(
-          `data: ${JSON.stringify({ error: { message: error.message, type: "proxy_error" } })}\n\n`,
-        );
-        res.write("data: [DONE]\n\n");
-        res.end();
-      }
-    }
+    sendJson(res, 404, {
+      error: "Not found",
+      message: "Supported paths: /health and /mnemospark/* storage endpoints",
+    });
   });
 
   // Listen on configured port with retry logic for TIME_WAIT handling
@@ -1652,7 +767,7 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
       await tryListen(attempt);
       break; // Success
     } catch (err: unknown) {
-      const error = err as { code?: string; wallet?: string; attempt?: number };
+      const error = err as { code?: string; wallet?: string };
 
       if (error.code === "REUSE_EXISTING" && error.wallet) {
         // Proxy is running, reuse it
@@ -1692,15 +807,11 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
 
   options.onReady?.(port);
 
-  // Check for updates (non-blocking)
-  checkForUpdates();
-
   // Add runtime error handler AFTER successful listen
   // This handles errors that occur during server operation (not just startup)
   server.on("error", (err) => {
     console.error(`[mnemospark] Server runtime error: ${err.message}`);
     options.onError?.(err);
-    // Don't crash - log and continue
   });
 
   // Handle client connection errors (bad requests, socket errors)
@@ -1716,16 +827,12 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
   server.on("connection", (socket) => {
     connections.add(socket);
 
-    // Set 5-minute timeout for streaming requests
+    // Keep alignment with prior behavior for long-running uploads/downloads.
     socket.setTimeout(300_000);
 
     socket.on("timeout", () => {
       console.error(`[mnemospark] Socket timeout, destroying connection`);
       socket.destroy();
-    });
-
-    socket.on("end", () => {
-      // Half-closed by client (FIN received)
     });
 
     socket.on("error", (err) => {
@@ -1763,857 +870,4 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
         });
       }),
   };
-}
-
-/** Result of attempting a model request */
-type ModelRequestResult = {
-  success: boolean;
-  response?: Response;
-  errorBody?: string;
-  errorStatus?: number;
-  isProviderError?: boolean;
-};
-
-/**
- * Attempt a request with a specific model.
- * Returns the response or error details for fallback decision.
- */
-async function tryModelRequest(
-  upstreamUrl: string,
-  method: string,
-  headers: Record<string, string>,
-  body: Buffer,
-  modelId: string,
-  maxTokens: number,
-  payFetch: (
-    input: RequestInfo | URL,
-    init?: RequestInit,
-    preAuth?: PreAuthParams,
-  ) => Promise<Response>,
-  balanceMonitor: BalanceMonitor,
-  signal: AbortSignal,
-): Promise<ModelRequestResult> {
-  // Update model in body and normalize messages
-  let requestBody = body;
-  try {
-    const parsed = JSON.parse(body.toString()) as Record<string, unknown>;
-    parsed.model = modelId;
-
-    // Normalize message roles (e.g., "developer" -> "system")
-    if (Array.isArray(parsed.messages)) {
-      parsed.messages = normalizeMessageRoles(parsed.messages as ChatMessage[]);
-    }
-
-    // Truncate messages to stay under BlockRun's limit (200 messages)
-    if (Array.isArray(parsed.messages)) {
-      parsed.messages = truncateMessages(parsed.messages as ChatMessage[]);
-    }
-
-    // Sanitize tool IDs to match Anthropic's pattern (alphanumeric, underscore, hyphen only)
-    if (Array.isArray(parsed.messages)) {
-      parsed.messages = sanitizeToolIds(parsed.messages as ChatMessage[]);
-    }
-
-    // Normalize messages for Google models (first non-system message must be "user")
-    if (isGoogleModel(modelId) && Array.isArray(parsed.messages)) {
-      parsed.messages = normalizeMessagesForGoogle(parsed.messages as ChatMessage[]);
-    }
-
-    // Normalize messages for thinking-enabled requests (add reasoning_content to tool calls)
-    // Check request flags AND target model - reasoning models have thinking enabled server-side
-    const hasThinkingEnabled = !!(
-      parsed.thinking ||
-      parsed.extended_thinking ||
-      isReasoningModel(modelId)
-    );
-    if (hasThinkingEnabled && Array.isArray(parsed.messages)) {
-      parsed.messages = normalizeMessagesForThinking(parsed.messages as ExtendedChatMessage[]);
-    }
-
-    requestBody = Buffer.from(JSON.stringify(parsed));
-  } catch {
-    // If body isn't valid JSON, use as-is
-  }
-
-  // Estimate cost for pre-auth
-  const estimated = estimateAmount(modelId, requestBody.length, maxTokens);
-  const preAuth: PreAuthParams | undefined = estimated ? { estimatedAmount: estimated } : undefined;
-
-  try {
-    const response = await payFetch(
-      upstreamUrl,
-      {
-        method,
-        headers,
-        body: requestBody.length > 0 ? new Uint8Array(requestBody) : undefined,
-        signal,
-      },
-      preAuth,
-    );
-
-    // Check for provider errors
-    if (response.status !== 200) {
-      // Clone response to read body without consuming it
-      const errorBody = await response.text();
-      const isProviderErr = isProviderError(response.status, errorBody);
-
-      return {
-        success: false,
-        errorBody,
-        errorStatus: response.status,
-        isProviderError: isProviderErr,
-      };
-    }
-
-    // Detect provider degradation hidden inside HTTP 200 responses.
-    const contentType = response.headers.get("content-type") || "";
-    if (contentType.includes("json") || contentType.includes("text")) {
-      try {
-        const responseBody = await response.clone().text();
-        const degradedReason = detectDegradedSuccessResponse(responseBody);
-        if (degradedReason) {
-          return {
-            success: false,
-            errorBody: degradedReason,
-            errorStatus: 503,
-            isProviderError: true,
-          };
-        }
-      } catch {
-        // Ignore body inspection failures and pass through response.
-      }
-    }
-
-    return { success: true, response };
-  } catch (err) {
-    const errorMsg = err instanceof Error ? err.message : String(err);
-    return {
-      success: false,
-      errorBody: errorMsg,
-      errorStatus: 500,
-      isProviderError: true, // Network errors are retryable
-    };
-  }
-}
-
-/**
- * Proxy a single request through x402 payment flow to BlockRun API.
- *
- * Optimizations applied in order:
- *   1. Dedup check — if same request body seen within 30s, replay cached response
- *   2. Streaming heartbeat — for stream:true, send 200 + heartbeats immediately
- *   3. Payment pre-auth — estimate USDC amount and pre-sign to skip 402 round trip
- *   4. Provider fallback — on provider errors, retry with free fallback model
- */
-async function proxyRequest(
-  req: IncomingMessage,
-  res: ServerResponse,
-  apiBase: string,
-  payFetch: (
-    input: RequestInfo | URL,
-    init?: RequestInit,
-    preAuth?: PreAuthParams,
-  ) => Promise<Response>,
-  options: ProxyOptions,
-  deduplicator: RequestDeduplicator,
-  balanceMonitor: BalanceMonitor,
-  responseCache: ResponseCache,
-  sessionJournal: SessionJournal,
-): Promise<void> {
-  // Build upstream URL: /v1/chat/completions → https://blockrun.ai/api/v1/chat/completions
-  const upstreamUrl = `${apiBase}${req.url}`;
-
-  // Collect request body
-  const bodyChunks: Buffer[] = [];
-  for await (const chunk of req) {
-    bodyChunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-  }
-  let body = Buffer.concat(bodyChunks);
-
-  let isStreaming = false;
-  let modelId = "";
-  let maxTokens = 4096;
-  let accumulatedContent = ""; // For session journal event extraction
-  const isChatCompletion = req.url?.includes("/chat/completions");
-
-  // Extract session ID early for journal operations
-  const sessionId = getSessionHeaderId(
-    req.headers as Record<string, string | string[] | undefined>,
-  );
-
-  if (isChatCompletion && body.length > 0) {
-    try {
-      const parsed = JSON.parse(body.toString()) as Record<string, unknown>;
-      isStreaming = parsed.stream === true;
-      modelId = (parsed.model as string) || "";
-      maxTokens = (parsed.max_tokens as number) || 4096;
-      let bodyModified = false;
-
-      // --- Session Journal: Inject context if needed ---
-      // Check if the last user message asks about past work
-      if (sessionId && Array.isArray(parsed.messages)) {
-        const messages = parsed.messages as Array<{ role: string; content: unknown }>;
-        const lastUserMsg = [...messages].reverse().find((m) => m.role === "user");
-        const lastContent = typeof lastUserMsg?.content === "string" ? lastUserMsg.content : "";
-
-        if (sessionJournal.needsContext(lastContent)) {
-          const journalText = sessionJournal.format(sessionId);
-          if (journalText) {
-            // Find system message and prepend journal, or add a new system message
-            const sysIdx = messages.findIndex((m) => m.role === "system");
-            if (sysIdx >= 0 && typeof messages[sysIdx].content === "string") {
-              messages[sysIdx] = {
-                ...messages[sysIdx],
-                content: journalText + "\n\n" + messages[sysIdx].content,
-              };
-            } else {
-              messages.unshift({ role: "system", content: journalText });
-            }
-            parsed.messages = messages;
-            bodyModified = true;
-            console.log(
-              `[mnemospark] Injected session journal (${journalText.length} chars) for session ${sessionId.slice(0, 8)}...`,
-            );
-          }
-        }
-      }
-
-      // Force stream: false — BlockRun API doesn't support streaming yet
-      // mnemospark handles SSE heartbeat simulation for upstream compatibility
-      if (parsed.stream === true) {
-        parsed.stream = false;
-        bodyModified = true;
-      }
-
-      // Normalize model and resolve aliases (e.g., "claude" -> "anthropic/claude-sonnet-4-6")
-      const receivedModel = typeof parsed.model === "string" ? parsed.model : "";
-      const normalizedModel = receivedModel.trim().toLowerCase();
-      const resolvedModel = normalizedModel ? resolveModelAlias(normalizedModel) : "";
-
-      if (resolvedModel) {
-        if (resolvedModel !== receivedModel) {
-          parsed.model = resolvedModel;
-          bodyModified = true;
-        }
-        modelId = resolvedModel;
-      }
-
-      console.log(
-        `[mnemospark] Received model: "${receivedModel}" -> normalized: "${normalizedModel}" -> resolved: "${resolvedModel || "(empty)"}"`,
-      );
-
-      // Rebuild body if modified
-      if (bodyModified) {
-        body = Buffer.from(JSON.stringify(parsed));
-      }
-    } catch (err) {
-      // Log preprocessing errors so they're not silently swallowed
-      const errorMsg = err instanceof Error ? err.message : String(err);
-      console.error(`[mnemospark] Request preprocessing error: ${errorMsg}`);
-      options.onError?.(new Error(`Request preprocessing failed: ${errorMsg}`));
-    }
-  }
-
-  // --- Auto-compression ---
-  // Compress large requests to reduce network usage and improve performance
-  const autoCompress = options.autoCompressRequests ?? true;
-  const compressionThreshold = options.compressionThresholdKB ?? 180;
-  const requestSizeKB = Math.ceil(body.length / 1024);
-
-  if (autoCompress && requestSizeKB > compressionThreshold) {
-    try {
-      console.log(
-        `[mnemospark] Request size ${requestSizeKB}KB exceeds threshold ${compressionThreshold}KB, applying compression...`,
-      );
-
-      // Parse messages for compression
-      const parsed = JSON.parse(body.toString()) as {
-        messages?: NormalizedMessage[];
-        [key: string]: unknown;
-      };
-
-      if (parsed.messages && parsed.messages.length > 0 && shouldCompress(parsed.messages)) {
-        // Apply compression with conservative settings
-        const compressionResult = await compressContext(parsed.messages, {
-          enabled: true,
-          preserveRaw: false, // Don't need originals in proxy
-          layers: {
-            deduplication: true, // Safe: removes duplicate messages
-            whitespace: true, // Safe: normalizes whitespace
-            dictionary: false, // Disabled: requires model to understand codebook
-            paths: false, // Disabled: requires model to understand path codes
-            jsonCompact: true, // Safe: just removes JSON whitespace
-            observation: false, // Disabled: may lose important context
-            dynamicCodebook: false, // Disabled: requires model to understand codes
-          },
-          dictionary: {
-            maxEntries: 50,
-            minPhraseLength: 15,
-            includeCodebookHeader: false,
-          },
-        });
-
-        const compressedSizeKB = Math.ceil(compressionResult.compressedChars / 1024);
-        const savings = (((requestSizeKB - compressedSizeKB) / requestSizeKB) * 100).toFixed(1);
-
-        console.log(
-          `[mnemospark] Compressed ${requestSizeKB}KB → ${compressedSizeKB}KB (${savings}% reduction)`,
-        );
-
-        // Update request body with compressed messages
-        parsed.messages = compressionResult.messages;
-        body = Buffer.from(JSON.stringify(parsed));
-      }
-    } catch (err) {
-      // Compression failed - continue with original request
-      console.warn(
-        `[mnemospark] Compression failed: ${err instanceof Error ? err.message : String(err)}`,
-      );
-    }
-  }
-
-  // --- Response cache check (long-term, 10min TTL) ---
-  const cacheKey = ResponseCache.generateKey(body);
-  const reqHeaders: Record<string, string> = {};
-  for (const [key, value] of Object.entries(req.headers)) {
-    if (typeof value === "string") reqHeaders[key] = value;
-  }
-  if (responseCache.shouldCache(body, reqHeaders)) {
-    const cachedResponse = responseCache.get(cacheKey);
-    if (cachedResponse) {
-      console.log(`[mnemospark] Cache HIT for ${cachedResponse.model} (saved API call)`);
-      res.writeHead(cachedResponse.status, cachedResponse.headers);
-      res.end(cachedResponse.body);
-      return;
-    }
-  }
-
-  // --- Dedup check (short-term, 30s TTL for retries) ---
-  const dedupKey = RequestDeduplicator.hash(body);
-
-  // Check dedup cache (catches retries within 30s)
-  const cached = deduplicator.getCached(dedupKey);
-  if (cached) {
-    res.writeHead(cached.status, cached.headers);
-    res.end(cached.body);
-    return;
-  }
-
-  // Check in-flight — wait for the original request to complete
-  const inflight = deduplicator.getInflight(dedupKey);
-  if (inflight) {
-    const result = await inflight;
-    res.writeHead(result.status, result.headers);
-    res.end(result.body);
-    return;
-  }
-
-  // Register this request as in-flight
-  deduplicator.markInflight(dedupKey);
-
-  // --- Pre-request balance check ---
-  // Estimate cost and check if wallet has sufficient balance
-  // Skip if skipBalanceCheck is set (for testing) or if using free model
-  let estimatedCostMicros: bigint | undefined;
-  const isFreeModel = modelId === BALANCE_FALLBACK_MODEL;
-
-  if (modelId && !options.skipBalanceCheck && !isFreeModel) {
-    const estimated = estimateAmount(modelId, body.length, maxTokens);
-    if (estimated) {
-      estimatedCostMicros = BigInt(estimated);
-
-      // Apply extra buffer for balance check to prevent x402 failures after streaming starts.
-      // This is aggressive to avoid triggering OpenClaw's 5-24 hour billing cooldown.
-      const bufferedCostMicros =
-        (estimatedCostMicros * BigInt(Math.ceil(BALANCE_CHECK_BUFFER * 100))) / 100n;
-
-      // Check balance before proceeding (using buffered amount)
-      const sufficiency = await balanceMonitor.checkSufficient(bufferedCostMicros);
-
-      if (sufficiency.info.isEmpty || !sufficiency.sufficient) {
-        // Wallet is empty or insufficient — ALWAYS fallback to free model
-        // This ensures new users with empty wallets can still use mnemospark
-        const originalModel = modelId;
-        console.log(
-          `[mnemospark] Wallet ${sufficiency.info.isEmpty ? "empty" : "insufficient"} ($${sufficiency.info.balanceUSD}), falling back to free model: ${BALANCE_FALLBACK_MODEL} (requested: ${originalModel})`,
-        );
-        modelId = BALANCE_FALLBACK_MODEL;
-        // Update the body with new model
-        const parsed = JSON.parse(body.toString()) as Record<string, unknown>;
-        parsed.model = BALANCE_FALLBACK_MODEL;
-        body = Buffer.from(JSON.stringify(parsed));
-
-        // Notify about the fallback
-        options.onLowBalance?.({
-          balanceUSD: sufficiency.info.balanceUSD,
-          walletAddress: sufficiency.info.walletAddress,
-        });
-      } else if (sufficiency.info.isLow) {
-        // Balance is low but sufficient — warn and proceed
-        options.onLowBalance?.({
-          balanceUSD: sufficiency.info.balanceUSD,
-          walletAddress: sufficiency.info.walletAddress,
-        });
-      }
-    }
-  }
-
-  // --- Streaming: early header flush + heartbeat ---
-  let heartbeatInterval: ReturnType<typeof setInterval> | undefined;
-  let headersSentEarly = false;
-
-  if (isStreaming) {
-    // Send 200 + SSE headers immediately, before x402 flow
-    res.writeHead(200, {
-      "content-type": "text/event-stream",
-      "cache-control": "no-cache",
-      connection: "keep-alive",
-    });
-    headersSentEarly = true;
-
-    // First heartbeat immediately
-    safeWrite(res, ": heartbeat\n\n");
-
-    // Continue heartbeats every 2s while waiting for upstream
-    heartbeatInterval = setInterval(() => {
-      if (canWrite(res)) {
-        safeWrite(res, ": heartbeat\n\n");
-      } else {
-        // Socket closed, stop heartbeat
-        clearInterval(heartbeatInterval);
-        heartbeatInterval = undefined;
-      }
-    }, HEARTBEAT_INTERVAL_MS);
-  }
-
-  // Forward headers, stripping host, connection, and content-length
-  const headers: Record<string, string> = {};
-  for (const [key, value] of Object.entries(req.headers)) {
-    if (
-      key === "host" ||
-      key === "connection" ||
-      key === "transfer-encoding" ||
-      key === "content-length"
-    )
-      continue;
-    if (typeof value === "string") {
-      headers[key] = value;
-    }
-  }
-  if (!headers["content-type"]) {
-    headers["content-type"] = "application/json";
-  }
-  headers["user-agent"] = USER_AGENT;
-
-  // --- Client disconnect cleanup ---
-  let completed = false;
-  res.on("close", () => {
-    if (heartbeatInterval) {
-      clearInterval(heartbeatInterval);
-      heartbeatInterval = undefined;
-    }
-    // Remove from in-flight if client disconnected before completion
-    if (!completed) {
-      deduplicator.removeInflight(dedupKey);
-    }
-  });
-
-  // --- Request timeout ---
-  const timeoutMs = options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-
-  try {
-    // --- Build fallback list ---
-    // For explicit model requests, add free model as emergency fallback
-    // in case the primary model fails due to insufficient funds mid-request
-    let modelsToTry: string[];
-    if (modelId && modelId !== BALANCE_FALLBACK_MODEL) {
-      modelsToTry = [modelId, BALANCE_FALLBACK_MODEL];
-    } else {
-      modelsToTry = modelId ? [modelId] : [];
-    }
-
-    // Deprioritize rate-limited models (put them at the end) and cap attempts.
-    modelsToTry = prioritizeNonRateLimited(modelsToTry);
-    modelsToTry = modelsToTry.slice(0, MAX_FALLBACK_ATTEMPTS);
-
-    // --- Fallback loop: try each model until success ---
-    let upstream: Response | undefined;
-    let lastError: { body: string; status: number } | undefined;
-    let actualModelUsed = modelId;
-
-    for (let i = 0; i < modelsToTry.length; i++) {
-      const tryModel = modelsToTry[i];
-      const isLastAttempt = i === modelsToTry.length - 1;
-
-      console.log(`[mnemospark] Trying model ${i + 1}/${modelsToTry.length}: ${tryModel}`);
-
-      const result = await tryModelRequest(
-        upstreamUrl,
-        req.method ?? "POST",
-        headers,
-        body,
-        tryModel,
-        maxTokens,
-        payFetch,
-        balanceMonitor,
-        controller.signal,
-      );
-
-      if (result.success && result.response) {
-        upstream = result.response;
-        actualModelUsed = tryModel;
-        console.log(`[mnemospark] Success with model: ${tryModel}`);
-        break;
-      }
-
-      // Request failed
-      lastError = {
-        body: result.errorBody || "Unknown error",
-        status: result.errorStatus || 500,
-      };
-
-      // If it's a provider error and not the last attempt, try next model
-      if (result.isProviderError && !isLastAttempt) {
-        // Track 429 rate limits to deprioritize this model for future requests
-        if (result.errorStatus === 429) {
-          markRateLimited(tryModel);
-        }
-        console.log(
-          `[mnemospark] Provider error from ${tryModel}, trying fallback: ${result.errorBody?.slice(0, 100)}`,
-        );
-        continue;
-      }
-
-      // Not a provider error or last attempt — stop trying
-      if (!result.isProviderError) {
-        console.log(
-          `[mnemospark] Non-provider error from ${tryModel}, not retrying: ${result.errorBody?.slice(0, 100)}`,
-        );
-      }
-      break;
-    }
-
-    // Clear timeout — request attempts completed
-    clearTimeout(timeoutId);
-
-    // Clear heartbeat — real data is about to flow
-    if (heartbeatInterval) {
-      clearInterval(heartbeatInterval);
-      heartbeatInterval = undefined;
-    }
-
-    // --- Handle case where all models failed ---
-    if (!upstream) {
-      const rawErrBody = lastError?.body || "All models in fallback chain failed";
-      const errStatus = lastError?.status || 502;
-
-      // Transform payment errors into user-friendly messages
-      const transformedErr = transformPaymentError(rawErrBody);
-
-      if (headersSentEarly) {
-        // Streaming: send error as SSE event
-        // If transformed error is already JSON, parse and use it; otherwise wrap in standard format
-        let errPayload: string;
-        try {
-          const parsed = JSON.parse(transformedErr);
-          errPayload = JSON.stringify(parsed);
-        } catch {
-          errPayload = JSON.stringify({
-            error: { message: rawErrBody, type: "provider_error", status: errStatus },
-          });
-        }
-        const errEvent = `data: ${errPayload}\n\n`;
-        safeWrite(res, errEvent);
-        safeWrite(res, "data: [DONE]\n\n");
-        res.end();
-
-        const errBuf = Buffer.from(errEvent + "data: [DONE]\n\n");
-        deduplicator.complete(dedupKey, {
-          status: 200,
-          headers: { "content-type": "text/event-stream" },
-          body: errBuf,
-          completedAt: Date.now(),
-        });
-      } else {
-        // Non-streaming: send transformed error response
-        res.writeHead(errStatus, { "Content-Type": "application/json" });
-        res.end(transformedErr);
-
-        deduplicator.complete(dedupKey, {
-          status: errStatus,
-          headers: { "content-type": "application/json" },
-          body: Buffer.from(transformedErr),
-          completedAt: Date.now(),
-        });
-      }
-      return;
-    }
-
-    // --- Stream response and collect for dedup cache ---
-    const responseChunks: Buffer[] = [];
-
-    if (headersSentEarly) {
-      // Streaming: headers already sent. Response should be 200 at this point
-      // (non-200 responses are handled in the fallback loop above)
-
-      // Convert non-streaming JSON response to SSE streaming format for client
-      // (BlockRun API returns JSON since we forced stream:false)
-      // OpenClaw expects: object="chat.completion.chunk" with choices[].delta (not message)
-      // We emit proper incremental deltas to match OpenAI's streaming format exactly
-      if (upstream.body) {
-        const reader = upstream.body.getReader();
-        const chunks: Uint8Array[] = [];
-        try {
-          while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            chunks.push(value);
-          }
-        } finally {
-          reader.releaseLock();
-        }
-
-        // Combine chunks and transform to streaming format
-        const jsonBody = Buffer.concat(chunks);
-        const jsonStr = jsonBody.toString();
-        try {
-          const rsp = JSON.parse(jsonStr) as {
-            id?: string;
-            object?: string;
-            created?: number;
-            model?: string;
-            choices?: Array<{
-              index?: number;
-              message?: {
-                role?: string;
-                content?: string;
-                tool_calls?: Array<{
-                  id: string;
-                  type: string;
-                  function: { name: string; arguments: string };
-                }>;
-              };
-              delta?: {
-                role?: string;
-                content?: string;
-                tool_calls?: Array<{
-                  id: string;
-                  type: string;
-                  function: { name: string; arguments: string };
-                }>;
-              };
-              finish_reason?: string | null;
-            }>;
-            usage?: unknown;
-          };
-
-          // Build base chunk structure (reused for all chunks)
-          // Match OpenAI's exact format including system_fingerprint
-          const baseChunk = {
-            id: rsp.id ?? `chatcmpl-${Date.now()}`,
-            object: "chat.completion.chunk",
-            created: rsp.created ?? Math.floor(Date.now() / 1000),
-            model: rsp.model ?? "unknown",
-            system_fingerprint: null,
-          };
-
-          // Process each choice (usually just one)
-          if (rsp.choices && Array.isArray(rsp.choices)) {
-            for (const choice of rsp.choices) {
-              // Strip thinking tokens (Kimi <｜...｜> and standard <think> tags)
-              const rawContent = choice.message?.content ?? choice.delta?.content ?? "";
-              const content = stripThinkingTokens(rawContent);
-              const role = choice.message?.role ?? choice.delta?.role ?? "assistant";
-              const index = choice.index ?? 0;
-
-              // Accumulate content for session journal
-              if (content) {
-                accumulatedContent += content;
-              }
-
-              // Chunk 1: role only (mimics OpenAI's first chunk)
-              const roleChunk = {
-                ...baseChunk,
-                choices: [{ index, delta: { role }, logprobs: null, finish_reason: null }],
-              };
-              const roleData = `data: ${JSON.stringify(roleChunk)}\n\n`;
-              safeWrite(res, roleData);
-              responseChunks.push(Buffer.from(roleData));
-
-              // Chunk 2: content (single chunk with full content)
-              if (content) {
-                const contentChunk = {
-                  ...baseChunk,
-                  choices: [{ index, delta: { content }, logprobs: null, finish_reason: null }],
-                };
-                const contentData = `data: ${JSON.stringify(contentChunk)}\n\n`;
-                safeWrite(res, contentData);
-                responseChunks.push(Buffer.from(contentData));
-              }
-
-              // Chunk 2b: tool_calls (forward tool calls from upstream)
-              const toolCalls = choice.message?.tool_calls ?? choice.delta?.tool_calls;
-              if (toolCalls && toolCalls.length > 0) {
-                const toolCallChunk = {
-                  ...baseChunk,
-                  choices: [
-                    {
-                      index,
-                      delta: { tool_calls: toolCalls },
-                      logprobs: null,
-                      finish_reason: null,
-                    },
-                  ],
-                };
-                const toolCallData = `data: ${JSON.stringify(toolCallChunk)}\n\n`;
-                safeWrite(res, toolCallData);
-                responseChunks.push(Buffer.from(toolCallData));
-              }
-
-              // Chunk 3: finish_reason (signals completion)
-              const finishChunk = {
-                ...baseChunk,
-                choices: [
-                  {
-                    index,
-                    delta: {},
-                    logprobs: null,
-                    finish_reason:
-                      toolCalls && toolCalls.length > 0
-                        ? "tool_calls"
-                        : (choice.finish_reason ?? "stop"),
-                  },
-                ],
-              };
-              const finishData = `data: ${JSON.stringify(finishChunk)}\n\n`;
-              safeWrite(res, finishData);
-              responseChunks.push(Buffer.from(finishData));
-            }
-          }
-        } catch {
-          // If parsing fails, send raw response as single chunk
-          const sseData = `data: ${jsonStr}\n\n`;
-          safeWrite(res, sseData);
-          responseChunks.push(Buffer.from(sseData));
-        }
-      }
-
-      // Send SSE terminator
-      safeWrite(res, "data: [DONE]\n\n");
-      responseChunks.push(Buffer.from("data: [DONE]\n\n"));
-      res.end();
-
-      // Cache for dedup
-      deduplicator.complete(dedupKey, {
-        status: 200,
-        headers: { "content-type": "text/event-stream" },
-        body: Buffer.concat(responseChunks),
-        completedAt: Date.now(),
-      });
-    } else {
-      // Non-streaming: forward status and headers from upstream
-      const responseHeaders: Record<string, string> = {};
-      upstream.headers.forEach((value, key) => {
-        // Skip hop-by-hop headers and content-encoding (fetch already decompresses)
-        if (key === "transfer-encoding" || key === "connection" || key === "content-encoding")
-          return;
-        responseHeaders[key] = value;
-      });
-
-      res.writeHead(upstream.status, responseHeaders);
-
-      if (upstream.body) {
-        const reader = upstream.body.getReader();
-        try {
-          while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            const chunk = Buffer.from(value);
-            safeWrite(res, chunk);
-            responseChunks.push(chunk);
-          }
-        } finally {
-          reader.releaseLock();
-        }
-      }
-
-      res.end();
-
-      const responseBody = Buffer.concat(responseChunks);
-
-      // Cache for dedup (short-term, 30s)
-      deduplicator.complete(dedupKey, {
-        status: upstream.status,
-        headers: responseHeaders,
-        body: responseBody,
-        completedAt: Date.now(),
-      });
-
-      // Cache for response cache (long-term, 10min) - only successful non-streaming
-      if (upstream.status === 200 && responseCache.shouldCache(body)) {
-        responseCache.set(cacheKey, {
-          body: responseBody,
-          status: upstream.status,
-          headers: responseHeaders,
-          model: modelId,
-        });
-        console.log(`[mnemospark] Cached response for ${modelId} (${responseBody.length} bytes)`);
-      }
-
-      // Extract content from non-streaming response for session journal
-      try {
-        const rspJson = JSON.parse(responseBody.toString()) as {
-          choices?: Array<{ message?: { content?: string } }>;
-        };
-        if (rspJson.choices?.[0]?.message?.content) {
-          accumulatedContent = rspJson.choices[0].message.content;
-        }
-      } catch {
-        // Ignore parse errors - journal just won't have content for this response
-      }
-    }
-
-    // --- Session Journal: Extract and record events from response ---
-    if (sessionId && accumulatedContent) {
-      const events = sessionJournal.extractEvents(accumulatedContent);
-      if (events.length > 0) {
-        sessionJournal.record(sessionId, events, actualModelUsed);
-        console.log(
-          `[mnemospark] Recorded ${events.length} events to session journal for session ${sessionId.slice(0, 8)}...`,
-        );
-      }
-    }
-
-    // --- Optimistic balance deduction after successful response ---
-    if (estimatedCostMicros !== undefined) {
-      balanceMonitor.deductEstimated(estimatedCostMicros);
-    }
-
-    // Mark request as completed (for client disconnect cleanup)
-    completed = true;
-  } catch (err) {
-    // Clear timeout on error
-    clearTimeout(timeoutId);
-
-    // Clear heartbeat on error
-    if (heartbeatInterval) {
-      clearInterval(heartbeatInterval);
-      heartbeatInterval = undefined;
-    }
-
-    // Remove in-flight entry so retries aren't blocked
-    deduplicator.removeInflight(dedupKey);
-
-    // Invalidate balance cache on payment failure (might be out of date)
-    balanceMonitor.invalidate();
-
-    // Convert abort error to more descriptive timeout error
-    if (err instanceof Error && err.name === "AbortError") {
-      throw new Error(`Request timed out after ${timeoutMs}ms`);
-    }
-
-    throw err;
-  }
 }

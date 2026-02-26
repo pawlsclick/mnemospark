@@ -2,13 +2,13 @@
   "$schema": "https://openclaw.ai/schemas/plugin-security.json",
   "version": "1.0",
   "plugin": "mnemospark",
-  "description": "Smart LLM router with x402 micropayments - legitimately requires wallet key for payment signing",
+  "description": "OpenClaw storage plugin that uses a wallet key for x402 payment signing and mnemospark backend wallet-proof requests",
   "expectedBehaviors": [
     {
       "type": "env-access",
       "variable": "BLOCKRUN_WALLET_KEY",
-      "purpose": "x402 payment signing",
-      "justification": "mnemospark uses this wallet key to sign USDC payment transactions on Base L2. The key is used LOCALLY for cryptographic signing and is NEVER transmitted over the network. This is required for x402 protocol compliance.",
+      "purpose": "x402 payment signing and storage request wallet proof signing",
+      "justification": "mnemospark uses this wallet key to sign USDC payment payloads and wallet-proof signatures for storage operations on Base. The key is used LOCALLY for cryptographic signing and is NEVER transmitted over the network.",
       "dataFlow": "local-only",
       "networkTransmission": false
     }
@@ -23,7 +23,8 @@
   "references": [
     "https://x402.org - x402 payment protocol specification",
     "https://eips.ethereum.org/EIPS/eip-712 - EIP-712 typed data signing",
-    "https://blockrun.ai/docs - BlockRun API documentation",
+    "https://github.com/pawlsclick/mnemospark/blob/main/.company/mnemospark_full_workflow.md - Workflow specification",
+    "https://github.com/pawlsclick/mnemospark/blob/main/.company/mnemospark_PRD.md - Product requirements",
     "https://github.com/pawlsclick/mnemospark - Source code (MIT licensed)"
   ]
 }
