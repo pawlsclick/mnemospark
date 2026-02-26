@@ -16,7 +16,6 @@ const mod = await import(distUrl);
 
 const required = [
   ["default", "plugin"],
-  ["blockrunProvider", "provider"],
   ["startProxy", "proxy"],
 ];
 
