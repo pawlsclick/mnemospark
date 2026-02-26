@@ -68,10 +68,6 @@ export const MODEL_ALIASES: Record<string, string> = {
   // MiniMax
   minimax: "minimax/minimax-m2.5",
 
-  // Routing profile aliases (common variations)
-  "auto-router": "auto",
-  router: "auto",
-
   // Note: auto, free, eco, premium are virtual routing profiles registered in BLOCKRUN_MODELS
   // They don't need aliases since they're already top-level model IDs
 };
