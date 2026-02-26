@@ -17,7 +17,6 @@
  *     preventing double-charging when OpenClaw retries after timeout.
  *   - Payment cache: after first 402, pre-signs subsequent requests to skip
  *     the 402 round trip (~200ms savings per request).
- *   - Smart routing: when model is "blockrun/auto", classify query and pick cheapest model.
  *   - Usage logging: log every request as JSON line to ~/.openclaw/blockrun/logs/
  */
 
@@ -26,24 +25,7 @@ import { finished } from "node:stream";
 import type { AddressInfo } from "node:net";
 import { privateKeyToAccount } from "viem/accounts";
 import { createPaymentFetch, type PreAuthParams } from "./x402.js";
-import {
-  route,
-  getFallbackChain,
-  getFallbackChainFiltered,
-  calculateModelCost,
-  DEFAULT_ROUTING_CONFIG,
-  type RouterOptions,
-  type RoutingDecision,
-  type RoutingConfig,
-  type ModelPricing,
-} from "./router/index.js";
-import {
-  BLOCKRUN_MODELS,
-  resolveModelAlias,
-  getModelContextWindow,
-  isReasoningModel,
-} from "./models.js";
-import { logUsage, type UsageEntry } from "./logger.js";
+import { BLOCKRUN_MODELS, resolveModelAlias, isReasoningModel } from "./models.js";
 import { getStats } from "./stats.js";
 import { RequestDeduplicator } from "./dedup.js";
 import { ResponseCache, type ResponseCacheConfig } from "./response-cache.js";
@@ -53,7 +35,6 @@ import { compressContext, shouldCompress, type NormalizedMessage } from "./compr
 // (universal free fallback means we don't throw balance errors anymore)
 // import { InsufficientFundsError, EmptyWalletError } from "./errors.js";
 import { USER_AGENT } from "./version.js";
-import { SessionStore, getSessionId, type SessionConfig } from "./session.js";
 import { checkForUpdates } from "./updater.js";
 import { PROXY_PORT, MNEMOSPARK_BACKEND_API_BASE_URL } from "./config.js";
 import { SessionJournal } from "./journal.js";
@@ -78,20 +59,7 @@ import {
 } from "./cloud-storage.js";
 
 const BLOCKRUN_API = "https://blockrun.ai/api";
-// Routing profile models - virtual models that trigger intelligent routing
-const AUTO_MODEL = "blockrun/auto";
-
-const ROUTING_PROFILES = new Set([
-  "blockrun/free",
-  "free",
-  "blockrun/eco",
-  "eco",
-  "blockrun/auto",
-  "auto",
-  "blockrun/premium",
-  "premium",
-]);
-const FREE_MODEL = "nvidia/gpt-oss-120b"; // Free model for empty wallet fallback
+const BALANCE_FALLBACK_MODEL = "nvidia/gpt-oss-120b";
 const MAX_MESSAGES = 200; // BlockRun API limit - truncate older messages if exceeded
 const HEARTBEAT_INTERVAL_MS = 2_000;
 const DEFAULT_REQUEST_TIMEOUT_MS = 180_000; // 3 minutes (allows for on-chain tx + LLM response)
@@ -276,6 +244,13 @@ function readHeaderValue(value: string | string[] | undefined): string | undefin
     }
   }
   return undefined;
+}
+
+function getSessionHeaderId(
+  headers: Record<string, string | string[] | undefined>,
+  headerName = "x-session-id",
+): string | undefined {
+  return readHeaderValue(headers[headerName] ?? headers[headerName.toLowerCase()]);
 }
 
 async function readProxyJsonBody(req: IncomingMessage): Promise<unknown> {
@@ -901,16 +876,10 @@ export type ProxyOptions = {
   apiBase?: string;
   /** Port to listen on (default: 7120) */
   port?: number;
-  routingConfig?: Partial<RoutingConfig>;
   /** Request timeout in ms (default: 180000 = 3 minutes). Covers on-chain tx + LLM response. */
   requestTimeoutMs?: number;
   /** Skip balance checks (for testing only). Default: false */
   skipBalanceCheck?: boolean;
-  /**
-   * Session persistence config. When enabled, maintains model selection
-   * across requests within a session to prevent mid-task model switching.
-   */
-  sessionConfig?: Partial<SessionConfig>;
   /**
    * Auto-compress large requests to reduce network usage.
    * When enabled, requests are automatically compressed using
@@ -933,7 +902,6 @@ export type ProxyOptions = {
   onReady?: (port: number) => void;
   onError?: (error: Error) => void;
   onPayment?: (info: { model: string; amount: string; network: string }) => void;
-  onRouted?: (decision: RoutingDecision) => void;
   /** Called when balance drops below $1.00 (warning, request still proceeds) */
   onLowBalance?: (info: LowBalanceInfo) => void;
   /** Called when balance is insufficient for a request (request fails) */
@@ -947,33 +915,6 @@ export type ProxyHandle = {
   balanceMonitor: BalanceMonitor;
   close: () => Promise<void>;
 };
-
-/**
- * Build model pricing map from BLOCKRUN_MODELS.
- */
-function buildModelPricing(): Map<string, ModelPricing> {
-  const map = new Map<string, ModelPricing>();
-  for (const m of BLOCKRUN_MODELS) {
-    if (m.id === AUTO_MODEL) continue; // skip meta-model
-    map.set(m.id, { inputPrice: m.inputPrice, outputPrice: m.outputPrice });
-  }
-  return map;
-}
-
-/**
- * Merge partial routing config overrides with defaults.
- */
-function mergeRoutingConfig(overrides?: Partial<RoutingConfig>): RoutingConfig {
-  if (!overrides) return DEFAULT_ROUTING_CONFIG;
-  return {
-    ...DEFAULT_ROUTING_CONFIG,
-    ...overrides,
-    classifier: { ...DEFAULT_ROUTING_CONFIG.classifier, ...overrides.classifier },
-    scoring: { ...DEFAULT_ROUTING_CONFIG.scoring, ...overrides.scoring },
-    tiers: { ...DEFAULT_ROUTING_CONFIG.tiers, ...overrides.tiers },
-    overrides: { ...DEFAULT_ROUTING_CONFIG.overrides, ...overrides.overrides },
-  };
-}
 
 /**
  * Estimate USDC cost for a request based on model pricing.
@@ -1052,22 +993,11 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
   const balanceMonitor = new BalanceMonitor(account.address);
   const proxyWalletAddressLower = account.address.toLowerCase();
 
-  // Build router options (100% local — no external API calls for routing)
-  const routingConfig = mergeRoutingConfig(options.routingConfig);
-  const modelPricing = buildModelPricing();
-  const routerOpts: RouterOptions = {
-    config: routingConfig,
-    modelPricing,
-  };
-
   // Request deduplicator (shared across all requests)
   const deduplicator = new RequestDeduplicator();
 
   // Response cache for identical requests (longer TTL than dedup)
   const responseCache = new ResponseCache(options.cacheConfig);
-
-  // Session store for model persistence (prevents mid-task model switching)
-  const sessionStore = new SessionStore(options.sessionConfig);
 
   // Session journal for memory (enables agents to recall earlier work)
   const sessionJournal = new SessionJournal();
@@ -1617,7 +1547,7 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
 
     // --- Handle /v1/models locally (no upstream call needed) ---
     if (req.url === "/v1/models" && req.method === "GET") {
-      const models = BLOCKRUN_MODELS.filter((m) => m.id !== "blockrun/auto").map((m) => ({
+      const models = BLOCKRUN_MODELS.filter((m) => m.id !== "auto").map((m) => ({
         id: m.id,
         object: "model",
         created: Math.floor(Date.now() / 1000),
@@ -1642,10 +1572,8 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
         apiBase,
         payFetch,
         options,
-        routerOpts,
         deduplicator,
         balanceMonitor,
-        sessionStore,
         responseCache,
         sessionJournal,
       );
@@ -1820,7 +1748,6 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
           rej(new Error("[mnemospark] Close timeout after 4s"));
         }, 4000);
 
-        sessionStore.close();
         // Destroy all active connections before closing server
         for (const socket of connections) {
           socket.destroy();
@@ -1976,8 +1903,7 @@ async function tryModelRequest(
  *   1. Dedup check — if same request body seen within 30s, replay cached response
  *   2. Streaming heartbeat — for stream:true, send 200 + heartbeats immediately
  *   3. Payment pre-auth — estimate USDC amount and pre-sign to skip 402 round trip
- *   4. Smart routing — when model is "blockrun/auto", pick cheapest capable model
- *   5. Fallback chain — on provider errors, try next model in tier's fallback list
+ *   4. Provider fallback — on provider errors, retry with free fallback model
  */
 async function proxyRequest(
   req: IncomingMessage,
@@ -1989,15 +1915,11 @@ async function proxyRequest(
     preAuth?: PreAuthParams,
   ) => Promise<Response>,
   options: ProxyOptions,
-  routerOpts: RouterOptions,
   deduplicator: RequestDeduplicator,
   balanceMonitor: BalanceMonitor,
-  sessionStore: SessionStore,
   responseCache: ResponseCache,
   sessionJournal: SessionJournal,
 ): Promise<void> {
-  const startTime = Date.now();
-
   // Build upstream URL: /v1/chat/completions → https://blockrun.ai/api/v1/chat/completions
   const upstreamUrl = `${apiBase}${req.url}`;
 
@@ -2008,17 +1930,16 @@ async function proxyRequest(
   }
   let body = Buffer.concat(bodyChunks);
 
-  // --- Smart routing ---
-  let routingDecision: RoutingDecision | undefined;
   let isStreaming = false;
   let modelId = "";
   let maxTokens = 4096;
-  let routingProfile: "free" | "eco" | "auto" | "premium" | null = null;
   let accumulatedContent = ""; // For session journal event extraction
   const isChatCompletion = req.url?.includes("/chat/completions");
 
   // Extract session ID early for journal operations
-  const sessionId = getSessionId(req.headers as Record<string, string | string[] | undefined>);
+  const sessionId = getSessionHeaderId(
+    req.headers as Record<string, string | string[] | undefined>,
+  );
 
   if (isChatCompletion && body.length > 0) {
     try {
@@ -2064,134 +1985,32 @@ async function proxyRequest(
         bodyModified = true;
       }
 
-      // Normalize model name for comparison (trim whitespace, lowercase)
-      const normalizedModel =
-        typeof parsed.model === "string" ? parsed.model.trim().toLowerCase() : "";
+      // Normalize model and resolve aliases (e.g., "claude" -> "anthropic/claude-sonnet-4-6")
+      const receivedModel = typeof parsed.model === "string" ? parsed.model : "";
+      const normalizedModel = receivedModel.trim().toLowerCase();
+      const resolvedModel = normalizedModel ? resolveModelAlias(normalizedModel) : "";
 
-      // Resolve model aliases (e.g., "claude" -> "anthropic/claude-sonnet-4-6")
-      const resolvedModel = resolveModelAlias(normalizedModel);
-      const wasAlias = resolvedModel !== normalizedModel;
-
-      const isRoutingProfile = ROUTING_PROFILES.has(normalizedModel);
-
-      // Extract routing profile type (free/eco/auto/premium)
-      if (isRoutingProfile) {
-        const profileName = normalizedModel.replace("blockrun/", "");
-        routingProfile = profileName as "free" | "eco" | "auto" | "premium";
-      }
-
-      // Debug: log received model name
-      console.log(
-        `[mnemospark] Received model: "${parsed.model}" -> normalized: "${normalizedModel}"${wasAlias ? ` -> alias: "${resolvedModel}"` : ""}${routingProfile ? `, profile: ${routingProfile}` : ""}`,
-      );
-
-      // If alias was resolved, update the model in the request
-      if (wasAlias && !isRoutingProfile) {
-        parsed.model = resolvedModel;
-        modelId = resolvedModel;
-        bodyModified = true;
-      }
-
-      // Handle routing profiles (free/eco/auto/premium)
-      if (isRoutingProfile) {
-        // Free profile - direct shortcut to nvidia/gpt-oss-120b (no tier routing)
-        if (routingProfile === "free") {
-          const freeModel = "nvidia/gpt-oss-120b";
-          console.log(`[mnemospark] Free profile - using ${freeModel} directly`);
-          parsed.model = freeModel;
-          modelId = freeModel;
+      if (resolvedModel) {
+        if (resolvedModel !== receivedModel) {
+          parsed.model = resolvedModel;
           bodyModified = true;
-
-          // Log usage for free profile
-          await logUsage({
-            timestamp: new Date().toISOString(),
-            model: freeModel,
-            tier: "SIMPLE",
-            cost: 0,
-            baselineCost: 0,
-            savings: 1.0, // 100% savings
-            latencyMs: 0,
-          });
-        } else {
-          // eco/auto/premium - use tier routing
-          // Check for session persistence - use pinned model if available
-          const sessionId = getSessionId(
-            req.headers as Record<string, string | string[] | undefined>,
-          );
-          const existingSession = sessionId ? sessionStore.getSession(sessionId) : undefined;
-
-          if (existingSession) {
-            // Use the session's pinned model instead of re-routing
-            console.log(
-              `[mnemospark] Session ${sessionId?.slice(0, 8)}... using pinned model: ${existingSession.model}`,
-            );
-            parsed.model = existingSession.model;
-            modelId = existingSession.model;
-            bodyModified = true;
-            sessionStore.touchSession(sessionId!);
-          } else {
-            // No session or expired - route normally
-            // Extract prompt from messages
-            type ChatMessage = { role: string; content: string };
-            const messages = parsed.messages as ChatMessage[] | undefined;
-            let lastUserMsg: ChatMessage | undefined;
-            if (messages) {
-              for (let i = messages.length - 1; i >= 0; i--) {
-                if (messages[i].role === "user") {
-                  lastUserMsg = messages[i];
-                  break;
-                }
-              }
-            }
-            const systemMsg = messages?.find((m: ChatMessage) => m.role === "system");
-            const prompt = typeof lastUserMsg?.content === "string" ? lastUserMsg.content : "";
-            const systemPrompt =
-              typeof systemMsg?.content === "string" ? systemMsg.content : undefined;
-
-            // Tool detection no longer forces agentic mode
-            // Agentic mode is now triggered by keyword-based detection (agenticScore >= 0.6)
-            // This allows simple queries with tools to use cheaper models
-            const tools = parsed.tools as unknown[] | undefined;
-            const hasTools = Array.isArray(tools) && tools.length > 0;
-
-            if (hasTools) {
-              console.log(
-                `[mnemospark] Tools detected (${tools.length}), agentic mode via keywords`,
-              );
-            }
-
-            routingDecision = route(prompt, systemPrompt, maxTokens, {
-              ...routerOpts,
-              routingProfile: routingProfile ?? undefined,
-            });
-
-            // Replace model in body
-            parsed.model = routingDecision.model;
-            modelId = routingDecision.model;
-            bodyModified = true;
-
-            // Pin this model to the session for future requests
-            if (sessionId) {
-              sessionStore.setSession(sessionId, routingDecision.model, routingDecision.tier);
-              console.log(
-                `[mnemospark] Session ${sessionId.slice(0, 8)}... pinned to model: ${routingDecision.model}`,
-              );
-            }
-
-            options.onRouted?.(routingDecision);
-          }
         }
+        modelId = resolvedModel;
       }
+
+      console.log(
+        `[mnemospark] Received model: "${receivedModel}" -> normalized: "${normalizedModel}" -> resolved: "${resolvedModel || "(empty)"}"`,
+      );
 
       // Rebuild body if modified
       if (bodyModified) {
         body = Buffer.from(JSON.stringify(parsed));
       }
     } catch (err) {
-      // Log routing errors so they're not silently swallowed
+      // Log preprocessing errors so they're not silently swallowed
       const errorMsg = err instanceof Error ? err.message : String(err);
-      console.error(`[mnemospark] Routing error: ${errorMsg}`);
-      options.onError?.(new Error(`Routing failed: ${errorMsg}`));
+      console.error(`[mnemospark] Request preprocessing error: ${errorMsg}`);
+      options.onError?.(new Error(`Request preprocessing failed: ${errorMsg}`));
     }
   }
 
@@ -2296,7 +2115,7 @@ async function proxyRequest(
   // Estimate cost and check if wallet has sufficient balance
   // Skip if skipBalanceCheck is set (for testing) or if using free model
   let estimatedCostMicros: bigint | undefined;
-  const isFreeModel = modelId === FREE_MODEL;
+  const isFreeModel = modelId === BALANCE_FALLBACK_MODEL;
 
   if (modelId && !options.skipBalanceCheck && !isFreeModel) {
     const estimated = estimateAmount(modelId, body.length, maxTokens);
@@ -2316,12 +2135,12 @@ async function proxyRequest(
         // This ensures new users with empty wallets can still use mnemospark
         const originalModel = modelId;
         console.log(
-          `[mnemospark] Wallet ${sufficiency.info.isEmpty ? "empty" : "insufficient"} ($${sufficiency.info.balanceUSD}), falling back to free model: ${FREE_MODEL} (requested: ${originalModel})`,
+          `[mnemospark] Wallet ${sufficiency.info.isEmpty ? "empty" : "insufficient"} ($${sufficiency.info.balanceUSD}), falling back to free model: ${BALANCE_FALLBACK_MODEL} (requested: ${originalModel})`,
         );
-        modelId = FREE_MODEL;
+        modelId = BALANCE_FALLBACK_MODEL;
         // Update the body with new model
         const parsed = JSON.parse(body.toString()) as Record<string, unknown>;
-        parsed.model = FREE_MODEL;
+        parsed.model = BALANCE_FALLBACK_MODEL;
         body = Buffer.from(JSON.stringify(parsed));
 
         // Notify about the fallback
@@ -2405,53 +2224,19 @@ async function proxyRequest(
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
-    // --- Build fallback chain ---
-    // If we have a routing decision, get the full fallback chain for the tier
-    // Otherwise, just use the current model (no fallback for explicit model requests)
+    // --- Build fallback list ---
+    // For explicit model requests, add free model as emergency fallback
+    // in case the primary model fails due to insufficient funds mid-request
     let modelsToTry: string[];
-    if (routingDecision) {
-      // Estimate total context: input tokens (~4 chars per token) + max output tokens
-      const estimatedInputTokens = Math.ceil(body.length / 4);
-      const estimatedTotalTokens = estimatedInputTokens + maxTokens;
-
-      // Get tier configs (use agentic tiers if routing decided to use them)
-      const useAgenticTiers =
-        routingDecision.reasoning?.includes("agentic") && routerOpts.config.agenticTiers;
-      const tierConfigs = useAgenticTiers
-        ? routerOpts.config.agenticTiers!
-        : routerOpts.config.tiers;
-
-      // Get full chain first, then filter by context
-      const fullChain = getFallbackChain(routingDecision.tier, tierConfigs);
-      const contextFiltered = getFallbackChainFiltered(
-        routingDecision.tier,
-        tierConfigs,
-        estimatedTotalTokens,
-        getModelContextWindow,
-      );
-
-      // Log if models were filtered out due to context limits
-      const contextExcluded = fullChain.filter((m) => !contextFiltered.includes(m));
-      if (contextExcluded.length > 0) {
-        console.log(
-          `[mnemospark] Context filter (~${estimatedTotalTokens} tokens): excluded ${contextExcluded.join(", ")}`,
-        );
-      }
-
-      // Limit to MAX_FALLBACK_ATTEMPTS to prevent infinite loops
-      modelsToTry = contextFiltered.slice(0, MAX_FALLBACK_ATTEMPTS);
-
-      // Deprioritize rate-limited models (put them at the end)
-      modelsToTry = prioritizeNonRateLimited(modelsToTry);
+    if (modelId && modelId !== BALANCE_FALLBACK_MODEL) {
+      modelsToTry = [modelId, BALANCE_FALLBACK_MODEL];
     } else {
-      // For explicit model requests, add free model as emergency fallback
-      // in case the primary model fails due to insufficient funds mid-request
-      if (modelId && modelId !== FREE_MODEL) {
-        modelsToTry = [modelId, FREE_MODEL];
-      } else {
-        modelsToTry = modelId ? [modelId] : [];
-      }
+      modelsToTry = modelId ? [modelId] : [];
     }
+
+    // Deprioritize rate-limited models (put them at the end) and cap attempts.
+    modelsToTry = prioritizeNonRateLimited(modelsToTry);
+    modelsToTry = modelsToTry.slice(0, MAX_FALLBACK_ATTEMPTS);
 
     // --- Fallback loop: try each model until success ---
     let upstream: Response | undefined;
@@ -2517,28 +2302,6 @@ async function proxyRequest(
     if (heartbeatInterval) {
       clearInterval(heartbeatInterval);
       heartbeatInterval = undefined;
-    }
-
-    // Update routing decision with actual model used (for logging)
-    // IMPORTANT: Recalculate cost for the actual model, not the original primary
-    if (routingDecision && actualModelUsed !== routingDecision.model) {
-      const estimatedInputTokens = Math.ceil(body.length / 4);
-      const newCosts = calculateModelCost(
-        actualModelUsed,
-        routerOpts.modelPricing,
-        estimatedInputTokens,
-        maxTokens,
-        routingProfile ?? undefined,
-      );
-      routingDecision = {
-        ...routingDecision,
-        model: actualModelUsed,
-        reasoning: `${routingDecision.reasoning} | fallback to ${actualModelUsed}`,
-        costEstimate: newCosts.costEstimate,
-        baselineCost: newCosts.baselineCost,
-        savings: newCosts.savings,
-      };
-      options.onRouted?.(routingDecision);
     }
 
     // --- Handle case where all models failed ---
@@ -2852,33 +2615,5 @@ async function proxyRequest(
     }
 
     throw err;
-  }
-
-  // --- Usage logging (fire-and-forget) ---
-  // Note: Recalculate cost using full body length (not just system+user message)
-  // and apply 20% buffer to match actual x402 payment (see estimateAmount())
-  if (routingDecision) {
-    // Use full body length for accurate cost (matches x402 payment estimation)
-    const estimatedInputTokens = Math.ceil(body.length / 4);
-    const accurateCosts = calculateModelCost(
-      routingDecision.model,
-      routerOpts.modelPricing,
-      estimatedInputTokens,
-      maxTokens,
-      routingProfile ?? undefined,
-    );
-    // Apply 20% buffer to match x402 pre-auth
-    const costWithBuffer = accurateCosts.costEstimate * 1.2;
-    const baselineWithBuffer = accurateCosts.baselineCost * 1.2;
-    const entry: UsageEntry = {
-      timestamp: new Date().toISOString(),
-      model: routingDecision.model,
-      tier: routingDecision.tier,
-      cost: costWithBuffer,
-      baselineCost: baselineWithBuffer,
-      savings: accurateCosts.savings,
-      latencyMs: Date.now() - startTime,
-    };
-    logUsage(entry).catch(() => {});
   }
 }

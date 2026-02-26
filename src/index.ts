@@ -26,7 +26,6 @@ import type {
 import { blockrunProvider, setActiveProxy } from "./provider.js";
 import { startProxy, getProxyPort } from "./proxy.js";
 import { resolveOrGenerateWalletKey, WALLET_FILE } from "./auth.js";
-import type { RoutingConfig } from "./router/index.js";
 import { BalanceMonitor } from "./balance.js";
 
 /**
@@ -227,8 +226,7 @@ function injectModelsConfig(logger: { info: (msg: string) => void }): void {
     }
   }
 
-  // Set blockrun/auto as default model ONLY on first install (not every load!)
-  // This respects user's model selection and prevents hijacking their choice.
+  // Ensure agents/defaults objects exist for alias allowlist maintenance.
   if (!config.agents) {
     config.agents = {};
     needsWrite = true;
@@ -239,19 +237,6 @@ function injectModelsConfig(logger: { info: (msg: string) => void }): void {
     needsWrite = true;
   }
   const defaults = agents.defaults as Record<string, unknown>;
-  if (!defaults.model) {
-    defaults.model = {};
-    needsWrite = true;
-  }
-  const model = defaults.model as Record<string, unknown>;
-
-  // ONLY set default if no primary model exists (first install)
-  // Do NOT override user's selection on subsequent loads
-  if (!model.primary) {
-    model.primary = "blockrun/auto";
-    logger.info("Set default model to blockrun/auto (first install)");
-    needsWrite = true;
-  }
 
   // Add key model aliases to allowlist for /model picker visibility
   // Only add essential aliases, not all 50+ models to avoid config pollution
@@ -321,7 +306,7 @@ function injectModelsConfig(logger: { info: (msg: string) => void }): void {
       const tmpPath = `${configPath}.tmp.${process.pid}`;
       writeFileSync(tmpPath, JSON.stringify(config, null, 2));
       renameSync(tmpPath, configPath);
-      logger.info("Smart routing enabled (blockrun/auto)");
+      logger.info("Updated BlockRun provider configuration");
     } catch (err) {
       logger.info(`Failed to write config: ${err instanceof Error ? err.message : String(err)}`);
     }
@@ -440,24 +425,13 @@ async function startProxyInBackground(api: OpenClawPluginApi): Promise<void> {
     api.logger.info(`Using wallet from BLOCKRUN_WALLET_KEY: ${address}`);
   }
 
-  // Resolve routing config overrides from plugin config
-  const routingConfig = api.pluginConfig?.routing as Partial<RoutingConfig> | undefined;
-
   const proxy = await startProxy({
     walletKey,
-    routingConfig,
     onReady: (port) => {
       api.logger.info(`BlockRun x402 proxy listening on port ${port}`);
     },
     onError: (error) => {
       api.logger.error(`BlockRun proxy error: ${error.message}`);
-    },
-    onRouted: (decision) => {
-      const cost = decision.costEstimate.toFixed(4);
-      const saved = (decision.savings * 100).toFixed(0);
-      api.logger.info(
-        `[${decision.tier}] ${decision.model} $${cost} (saved ${saved}%) | ${decision.reasoning}`,
-      );
     },
     onLowBalance: (info) => {
       api.logger.warn(`[!] Low balance: ${info.balanceUSD}. Fund wallet: ${info.walletAddress}`);
@@ -472,7 +446,7 @@ async function startProxyInBackground(api: OpenClawPluginApi): Promise<void> {
   setActiveProxy(proxy);
   activeProxyHandle = proxy;
 
-  api.logger.info(`mnemospark ready — smart routing enabled`);
+  api.logger.info(`mnemospark ready`);
   api.logger.info(`Pricing: Simple ~$0.001 | Code ~$0.01 | Complex ~$0.05 | Free: $0`);
 
   // Non-blocking balance check AFTER proxy is ready (won't hang startup)
@@ -664,18 +638,6 @@ const plugin: OpenClawPluginDefinition = {
       models: OPENCLAW_MODELS,
     };
 
-    // Set blockrun/auto as default ONLY if no model is set (first install)
-    // Do NOT override user's model selection on subsequent loads
-    if (!api.config.agents) api.config.agents = {};
-    const agents = api.config.agents as Record<string, unknown>;
-    if (!agents.defaults) agents.defaults = {};
-    const defaults = agents.defaults as Record<string, unknown>;
-    if (!defaults.model) defaults.model = {};
-    const model = defaults.model as Record<string, unknown>;
-    if (!model.primary) {
-      model.primary = "blockrun/auto";
-    }
-
     api.logger.info("BlockRun provider registered (30+ models via x402)");
 
     // Register /wallet command for wallet management
@@ -776,14 +738,6 @@ export {
   getAgenticModels,
   getModelContextWindow,
 } from "./models.js";
-export {
-  route,
-  DEFAULT_ROUTING_CONFIG,
-  getFallbackChain,
-  getFallbackChainFiltered,
-  calculateModelCost,
-} from "./router/index.js";
-export type { RoutingDecision, RoutingConfig, Tier } from "./router/index.js";
 export { logUsage } from "./logger.js";
 export type { UsageEntry } from "./logger.js";
 export { RequestDeduplicator } from "./dedup.js";
@@ -807,7 +761,5 @@ export { fetchWithRetry, isRetryable, DEFAULT_RETRY_CONFIG } from "./retry.js";
 export type { RetryConfig } from "./retry.js";
 export { getStats, formatStatsAscii } from "./stats.js";
 export type { DailyStats, AggregatedStats } from "./stats.js";
-export { SessionStore, getSessionId, DEFAULT_SESSION_CONFIG } from "./session.js";
-export type { SessionEntry, SessionConfig } from "./session.js";
 export { ResponseCache } from "./response-cache.js";
 export type { CachedLLMResponse, ResponseCacheConfig } from "./response-cache.js";

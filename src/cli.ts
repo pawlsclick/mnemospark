@@ -101,11 +101,6 @@ async function main(): Promise<void> {
     onError: (error) => {
       console.error(`[mnemospark] Error: ${error.message}`);
     },
-    onRouted: (decision) => {
-      const cost = decision.costEstimate.toFixed(4);
-      const saved = (decision.savings * 100).toFixed(0);
-      console.log(`[mnemospark] [${decision.tier}] ${decision.model} $${cost} (saved ${saved}%)`);
-    },
     onLowBalance: (info) => {
       console.warn(`[mnemospark] Low balance: ${info.balanceUSD}. Fund: ${info.walletAddress}`);
     },
