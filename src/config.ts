@@ -29,13 +29,3 @@ export const PROXY_PORT = (() => {
 export const MNEMOSPARK_BACKEND_API_BASE_URL = (
   process.env.MNEMOSPARK_BACKEND_API_BASE_URL ?? ""
 ).trim();
-
-/**
- * Mnemospark backend API key for proxy → backend calls.
- * Supports a legacy fallback env name for compatibility.
- */
-export const MNEMOSPARK_BACKEND_API_KEY = (
-  process.env.MNEMOSPARK_BACKEND_API_KEY ??
-  process.env.MNEMOSPARK_API_KEY ??
-  ""
-).trim();
