@@ -1,14 +1,12 @@
 # mnemospark
 
-Smart LLM router and inference toolkit — fork of [BlockRun's ClawRouter](https://github.com/BlockRunAI/ClawRouter). 30+ models, one wallet, x402 micropayments.
-
-**Repository:** [github.com/pawlsclick/mnemospark](https://github.com/pawlsclick/mnemospark)
-
----
+Coming soon...
 
 ## What is mnemospark?
 
 mnemospark is a fork of BlockRun’s ClawRouter, maintained as its own project. It reuses ClawRouter’s x402 payments and OpenClaw integration while evolving independently.
+
+Check out ClawRouter if you haven't yet [BlockRun's ClawRouter](https://github.com/BlockRunAI/ClawRouter). 30+ models, one wallet, x402 micropayments.
 
 - **x402 micropayments** — coming soon...
 - **Open source** — MIT licensed
