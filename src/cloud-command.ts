@@ -717,10 +717,14 @@ async function prepareUploadPayload(
 
 async function uploadPresignedObjectIfNeeded(
   uploadResponse: StorageUploadResponse,
+  uploadMode: UploadPayload["mode"],
   encryptedContent: Buffer,
   fetchImpl: FetchLike = fetch,
 ): Promise<void> {
   if (!uploadResponse.upload_url) {
+    if (uploadMode === "presigned") {
+      throw new Error("Cannot upload storage object: missing presigned upload URL.");
+    }
     return;
   }
 
@@ -1017,6 +1021,7 @@ export function createCloudCommand(
 
           await uploadPresignedObjectIfNeeded(
             uploadResponse,
+            preparedPayload.payload.mode,
             preparedPayload.encryptedContent,
             fetchImpl,
           );

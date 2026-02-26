@@ -394,6 +394,74 @@ describe("cloud command", () => {
     expect(result.text).toBe("Insufficient USDC balance. Current: $0.10, Required: $2.75");
   });
 
+  it("returns error when presigned upload response is missing upload URL", async () => {
+    const { homeDir, tmpBackupDir } = await createSandbox();
+    const walletKey = `0x${"33".repeat(32)}` as const;
+    const walletAddress = privateKeyToAccount(walletKey).address;
+    const objectId = "obj-upload-presigned-001";
+    const archiveContent = "x".repeat(4_500_100);
+    const objectHash = sha256Hex(archiveContent);
+    await writeFile(join(tmpBackupDir, objectId), archiveContent, "utf-8");
+
+    const objectLogPath = join(homeDir, ".openclaw", "mnemospark", "object.log");
+    await mkdir(join(homeDir, ".openclaw", "mnemospark"), { recursive: true });
+    const initialLogLine = `2026-02-25 19:00:00,quote-presigned,2.75,${walletAddress},${objectId},${objectHash},0.015,aws,us-east-1`;
+    await writeFile(objectLogPath, `${initialLogLine}\n`, "utf-8");
+
+    let capturedBody: Record<string, unknown> | undefined;
+    const command = createCloudCommand({
+      objectLogHomeDir: homeDir,
+      backupOptions: { tmpDir: tmpBackupDir },
+      resolveWalletPrivateKeyFn: async () => walletKey,
+      createPaymentFetchFn: () => ({
+        fetch: async (_input, init) => {
+          if (typeof init?.body === "string") {
+            capturedBody = JSON.parse(init.body) as Record<string, unknown>;
+          }
+          return new Response(
+            JSON.stringify({
+              quote_id: "quote-presigned",
+              addr: walletAddress,
+              object_id: objectId,
+              object_key: "obj-upload-presigned-001.tar.gz.enc",
+              provider: "aws",
+              bucket_name: "mnemospark-1234",
+              location: "us-east-1",
+            }),
+            {
+              status: 200,
+              headers: { "Content-Type": "application/json" },
+            },
+          );
+        },
+        cache: new PaymentCache(),
+      }),
+    });
+
+    const result = await command.handler({
+      channel: "test",
+      isAuthorizedSender: true,
+      args: [
+        "upload",
+        "--quote-id quote-presigned",
+        `--wallet-address ${walletAddress}`,
+        `--object-id ${objectId}`,
+        `--object-id-hash ${objectHash}`,
+      ].join(" "),
+      commandBody: "upload",
+      config: {},
+    });
+
+    const payload = capturedBody?.payload as Record<string, unknown>;
+    expect(payload.mode).toBe("presigned");
+    expect(payload.content_base64).toBeUndefined();
+    expect(result.isError).toBe(true);
+    expect(result.text).toBe("Cannot upload storage object: missing presigned upload URL.");
+
+    const logContent = await readFile(objectLogPath, "utf-8");
+    expect(logContent.trim()).toBe(initialLogLine);
+  });
+
   it("returns Cannot upload storage object on invalid /cloud upload args", async () => {
     const command = createCloudCommand();
 
