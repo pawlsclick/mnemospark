@@ -1,4 +1,12 @@
 import { PROXY_PORT } from "./config.js";
+import {
+  asNonEmptyString,
+  asNumber,
+  asRecord,
+  normalizeBaseUrl,
+  normalizePaymentRequired,
+  normalizePaymentResponse,
+} from "./cloud-utils.js";
 import { normalizeWalletSignature } from "./wallet-signature.js";
 
 export const PRICE_STORAGE_PROXY_PATH = "/mnemospark/price-storage";
@@ -103,38 +111,6 @@ type BackendUploadForwardResult = {
   paymentRequired?: string;
   paymentResponse?: string;
 };
-
-function normalizeBaseUrl(baseUrl: string): string {
-  return baseUrl.replace(/\/+$/, "");
-}
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return null;
-  }
-  return value as Record<string, unknown>;
-}
-
-function asNumber(value: unknown): number | null {
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return value;
-  }
-  if (typeof value === "string" && value.trim().length > 0) {
-    const parsed = Number.parseFloat(value);
-    if (Number.isFinite(parsed)) {
-      return parsed;
-    }
-  }
-  return null;
-}
-
-function asNonEmptyString(value: unknown): string | null {
-  if (typeof value !== "string") {
-    return null;
-  }
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : null;
-}
 
 function asStringRecord(value: unknown): Record<string, string> | null {
   const record = asRecord(value);
@@ -334,14 +310,6 @@ export function parseStorageUploadResponse(payload: unknown): StorageUploadRespo
     upload_url: uploadUrl ?? undefined,
     upload_headers: uploadHeaders ?? undefined,
   };
-}
-
-function normalizePaymentRequired(headers: Headers): string | undefined {
-  return headers.get("PAYMENT-REQUIRED") ?? headers.get("x-payment-required") ?? undefined;
-}
-
-function normalizePaymentResponse(headers: Headers): string | undefined {
-  return headers.get("PAYMENT-RESPONSE") ?? headers.get("x-payment-response") ?? undefined;
 }
 
 export async function requestPriceStorageViaProxy(
