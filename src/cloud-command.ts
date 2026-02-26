@@ -138,7 +138,6 @@ type CreateCloudCommandOptions = {
     request: StorageObjectRequest,
     options?: ProxyStorageOptions,
   ) => Promise<StorageDeleteResponse>;
-  proxyQuoteOptions?: ProxyQuoteOptions;
   proxyStorageOptions?: ProxyStorageOptions;
   objectLogHomeDir?: string;
 };
