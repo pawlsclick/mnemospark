@@ -38,7 +38,8 @@ python examples/data_transfer_cost_estimate.py --direction out --gb 500  # egres
 
 ## Configuration
 
-TBD
+- **Required environment:** `MNEMOSPARK_BACKEND_API_BASE_URL` (or use the default) so the proxy can reach the mnemospark backend. A **wallet** is required for storage commands (price-storage, upload, ls, download, delete); configure via BlockRun/mnemospark wallet key (see workflow docs).
+- **No backend API key** — do not set or pass `MNEMOSPARK_BACKEND_API_KEY` or `x-api-key`. Backend authentication is **wallet proof**: the proxy signs each request with the user's wallet; the backend verifies the signature. The canonical API specification is in the [mnemospark-docs](https://github.com/pawlsclick/mnemospark-docs) repo.
 
 ---
 

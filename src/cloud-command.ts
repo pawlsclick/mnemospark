@@ -49,19 +49,35 @@ const PAYMENT_REMINDER_INTERVAL_DAYS = 30;
 const PAYMENT_DELETE_DEADLINE_DAYS = 32;
 const TAR_OVERHEAD_BYTES = 10 * 1024 * 1024; // Conservative headroom for tar metadata.
 
+const REQUIRED_PRICE_STORAGE =
+  "--wallet-address, --object-id, --object-id-hash, --gb, --provider, --region";
+const REQUIRED_UPLOAD = "--quote-id, --wallet-address, --object-id, --object-id-hash";
+const REQUIRED_STORAGE_OBJECT = "--wallet-address, --object-key";
+
 const CLOUD_HELP_TEXT = [
   "☁️ **mnemospark Cloud Commands**",
   "",
-  "• `/cloud` or `/cloud help`",
-  "• `/cloud backup <file>`",
-  "• `/cloud backup <directory>`",
-  "• `/cloud price-storage --wallet-address <addr> --object-id <id> --object-id-hash <hash> --gb <gb> --provider <provider> --region <region>`",
-  "• `/cloud upload --quote-id <quote-id> --wallet-address <addr> --object-id <id> --object-id-hash <hash>`",
-  "• `/cloud ls --wallet-address <addr> --object-key <s3-key>`",
-  "• `/cloud download --wallet-address <addr> --object-key <s3-key>`",
-  "• `/cloud delete --wallet-address <addr> --object-key <s3-key>`",
+  "• `/cloud` or `/cloud help` — show this message",
   "",
-  "Backup creates a tar+gzip object in /tmp and appends object metadata to ~/.openclaw/mnemospark/object.log.",
+  "• `/cloud backup <file>` or `/cloud backup <directory>`",
+  "  Required: <file> or <directory> (path to back up)",
+  "",
+  "• `/cloud price-storage --wallet-address <addr> --object-id <id> --object-id-hash <hash> --gb <gb> --provider <provider> --region <region>`",
+  "  Required: " + REQUIRED_PRICE_STORAGE,
+  "",
+  "• `/cloud upload --quote-id <quote-id> --wallet-address <addr> --object-id <id> --object-id-hash <hash>`",
+  "  Required: " + REQUIRED_UPLOAD,
+  "",
+  "• `/cloud ls --wallet-address <addr> --object-key <s3-key>`",
+  "  Required: " + REQUIRED_STORAGE_OBJECT,
+  "",
+  "• `/cloud download --wallet-address <addr> --object-key <s3-key>`",
+  "  Required: " + REQUIRED_STORAGE_OBJECT,
+  "",
+  "• `/cloud delete --wallet-address <addr> --object-key <s3-key>`",
+  "  Required: " + REQUIRED_STORAGE_OBJECT,
+  "",
+  "Backup creates a tar+gzip object in /tmp and appends object metadata to ~/.openclaw/mnemospark/object.log. All storage commands (price-storage, upload, ls, download, delete) require --wallet-address.",
 ].join("\n");
 
 type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
@@ -838,35 +854,35 @@ export function createCloudCommand(
 
       if (parsed.mode === "price-storage-invalid") {
         return {
-          text: "Cannot price storage",
+          text: `Cannot price storage: required arguments are ${REQUIRED_PRICE_STORAGE}.`,
           isError: true,
         };
       }
 
       if (parsed.mode === "upload-invalid") {
         return {
-          text: "Cannot upload storage object",
+          text: `Cannot upload storage object: required arguments are ${REQUIRED_UPLOAD}.`,
           isError: true,
         };
       }
 
       if (parsed.mode === "ls-invalid") {
         return {
-          text: "Cannot list storage object",
+          text: `Cannot list storage object: required arguments are ${REQUIRED_STORAGE_OBJECT}.`,
           isError: true,
         };
       }
 
       if (parsed.mode === "download-invalid") {
         return {
-          text: "Cannot download file",
+          text: `Cannot download file: required arguments are ${REQUIRED_STORAGE_OBJECT}.`,
           isError: true,
         };
       }
 
       if (parsed.mode === "delete-invalid") {
         return {
-          text: "Cannot delete file",
+          text: `Cannot delete file: required arguments are ${REQUIRED_STORAGE_OBJECT}.`,
           isError: true,
         };
       }

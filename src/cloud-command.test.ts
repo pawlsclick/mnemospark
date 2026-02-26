@@ -213,7 +213,9 @@ describe("cloud command", () => {
     });
 
     expect(result.isError).toBe(true);
-    expect(result.text).toBe("Cannot price storage");
+    expect(result.text).toBe(
+      "Cannot price storage: required arguments are --wallet-address, --object-id, --object-id-hash, --gb, --provider, --region.",
+    );
   });
 
   it("returns Cannot price storage when proxy quote request fails", async () => {
@@ -404,7 +406,9 @@ describe("cloud command", () => {
     });
 
     expect(result.isError).toBe(true);
-    expect(result.text).toBe("Cannot upload storage object");
+    expect(result.text).toBe(
+      "Cannot upload storage object: required arguments are --quote-id, --wallet-address, --object-id, --object-id-hash.",
+    );
   });
 
   it("handles /cloud ls and prints object metadata message", async () => {
@@ -515,7 +519,9 @@ describe("cloud command", () => {
     });
 
     expect(result.isError).toBe(true);
-    expect(result.text).toBe("Cannot list storage object");
+    expect(result.text).toBe(
+      "Cannot list storage object: required arguments are --wallet-address, --object-key.",
+    );
   });
 
   it("returns Cannot download file when /cloud download fails", async () => {
