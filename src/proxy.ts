@@ -336,10 +336,7 @@ export function normalizeBackendAuthFailure(
   return {
     status,
     contentType: "application/json",
-    bodyText: JSON.stringify({
-      error: message.replace(/\s+/g, "_"),
-      message,
-    }),
+    bodyText: createAuthErrorBody(message),
   };
 }
 
