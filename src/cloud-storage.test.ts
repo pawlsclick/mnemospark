@@ -8,6 +8,7 @@ import {
   downloadStorageToDisk,
   forwardStorageDeleteToBackend,
   forwardStorageDownloadToBackend,
+  forwardStorageLsToBackend,
   requestStorageLsViaProxy,
   type BackendStorageForwardResult,
   type StorageObjectRequest,
@@ -65,13 +66,13 @@ describe("cloud storage transport", () => {
     expect(lsResult.bucket).toBe("wallet-bucket-001");
   });
 
-  it("forwards delete request to backend with api key and payment headers", async () => {
+  it("forwards delete request to backend with wallet proof header", async () => {
     let capturedUrl = "";
     let capturedInit: RequestInit | undefined;
 
     const forwarded = await forwardStorageDeleteToBackend(SAMPLE_REQUEST, {
       backendBaseUrl: "https://api.example.com/prod/",
-      backendApiKey: "test-api-key",
+      walletSignature: "wallet-proof-header",
       fetchImpl: async (input, init) => {
         capturedUrl = String(input);
         capturedInit = init;
@@ -87,19 +88,23 @@ describe("cloud storage transport", () => {
 
     expect(capturedUrl).toBe("https://api.example.com/prod/storage/delete");
     expect(capturedInit?.method).toBe("POST");
-    expect((capturedInit?.headers as Record<string, string>)["x-api-key"]).toBe("test-api-key");
+    const headers = capturedInit?.headers as Record<string, string>;
+    expect(headers["X-Wallet-Signature"]).toBe("wallet-proof-header");
+    expect(headers["x-api-key"]).toBeUndefined();
     expect(forwarded.status).toBe(200);
     expect(forwarded.paymentResponse).toBe("payment-ok");
   });
 
   it("forwards download request to backend /storage/download", async () => {
     let capturedUrl = "";
+    let capturedInit: RequestInit | undefined;
 
     const forwarded = await forwardStorageDownloadToBackend(SAMPLE_REQUEST, {
       backendBaseUrl: "https://api.example.com/prod/",
-      backendApiKey: "test-api-key",
-      fetchImpl: async (input) => {
+      walletSignature: "wallet-proof-header",
+      fetchImpl: async (input, init) => {
         capturedUrl = String(input);
+        capturedInit = init;
         return new Response("download-bytes", {
           status: 200,
           headers: {
@@ -110,8 +115,19 @@ describe("cloud storage transport", () => {
     });
 
     expect(capturedUrl).toBe("https://api.example.com/prod/storage/download");
+    const headers = capturedInit?.headers as Record<string, string>;
+    expect(headers["X-Wallet-Signature"]).toBe("wallet-proof-header");
+    expect(headers["x-api-key"]).toBeUndefined();
     expect(forwarded.status).toBe(200);
     expect(forwarded.bodyBuffer.toString("utf-8")).toBe("download-bytes");
+  });
+
+  it("requires wallet proof for storage endpoint forwarding", async () => {
+    await expect(
+      forwardStorageLsToBackend(SAMPLE_REQUEST, {
+        backendBaseUrl: "https://api.example.com/prod/",
+      }),
+    ).rejects.toThrow("Wallet required for storage endpoints");
   });
 
   it("downloads file via presigned URL and writes to disk", async () => {

@@ -55,12 +55,9 @@ import { compressContext, shouldCompress, type NormalizedMessage } from "./compr
 import { USER_AGENT } from "./version.js";
 import { SessionStore, getSessionId, type SessionConfig } from "./session.js";
 import { checkForUpdates } from "./updater.js";
-import {
-  PROXY_PORT,
-  MNEMOSPARK_BACKEND_API_BASE_URL,
-  MNEMOSPARK_BACKEND_API_KEY,
-} from "./config.js";
+import { PROXY_PORT, MNEMOSPARK_BACKEND_API_BASE_URL } from "./config.js";
 import { SessionJournal } from "./journal.js";
+import { createWalletSignatureHeaderValue } from "./mnemospark-request-sign.js";
 import {
   PRICE_STORAGE_PROXY_PATH,
   UPLOAD_PROXY_PATH,
@@ -315,6 +312,49 @@ function createBackendForwardHeaders(response: {
   }
 
   return responseHeaders;
+}
+
+type BackendAuthFailure = {
+  status: number;
+  contentType: string;
+  bodyText: string;
+};
+
+function isLikelyWalletProofFailure(bodyText: string): boolean {
+  return /(wallet|signature|proof|nonce|timestamp|expired|authoriz)/i.test(bodyText);
+}
+
+export function normalizeBackendAuthFailure(
+  status: number,
+  bodyText: string,
+): BackendAuthFailure | undefined {
+  if (status !== 401 && status !== 403) {
+    return undefined;
+  }
+
+  const message = isLikelyWalletProofFailure(bodyText) ? "wallet proof invalid" : "unauthorized";
+  return {
+    status,
+    contentType: "application/json",
+    bodyText: JSON.stringify({
+      error: message.replace(/\s+/g, "_"),
+      message,
+    }),
+  };
+}
+
+function createAuthErrorBody(message: "unauthorized" | "wallet proof invalid"): string {
+  return JSON.stringify({
+    error: message.replace(/\s+/g, "_"),
+    message,
+  });
+}
+
+function createWalletRequiredBody(): string {
+  return JSON.stringify({
+    error: "wallet_required",
+    message: "wallet required for storage endpoints",
+  });
 }
 
 // Extra buffer for balance check (on top of estimateAmount's 20% buffer)
@@ -1007,11 +1047,13 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
   }
 
   // Create x402 payment-enabled fetch from wallet private key
-  const account = privateKeyToAccount(options.walletKey as `0x${string}`);
-  const { fetch: payFetch } = createPaymentFetch(options.walletKey as `0x${string}`);
+  const walletPrivateKey = options.walletKey.trim() as `0x${string}`;
+  const account = privateKeyToAccount(walletPrivateKey);
+  const { fetch: payFetch } = createPaymentFetch(walletPrivateKey);
 
   // Create balance monitor for pre-request checks
   const balanceMonitor = new BalanceMonitor(account.address);
+  const proxyWalletAddressLower = account.address.toLowerCase();
 
   // Build router options (100% local — no external API calls for routing)
   const routingConfig = mergeRoutingConfig(options.routingConfig);
@@ -1035,6 +1077,25 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
 
   // Track active connections for graceful cleanup
   const connections = new Set<import("net").Socket>();
+
+  const createBackendWalletSignature = async (
+    method: "GET" | "POST" | "DELETE",
+    path: string,
+    walletAddress: string,
+  ): Promise<string | undefined> => {
+    if (walletAddress.toLowerCase() !== proxyWalletAddressLower) {
+      return undefined;
+    }
+
+    try {
+      return await createWalletSignatureHeaderValue(method, path, walletAddress, walletPrivateKey);
+    } catch (err) {
+      console.warn(
+        `[mnemospark] Failed to create wallet proof for ${path}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return undefined;
+    }
+  };
 
   const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
     // Add stream error handlers to prevent server crashes
@@ -1094,10 +1155,31 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
           return;
         }
 
+        const walletSignature = await createBackendWalletSignature(
+          "POST",
+          "/price-storage",
+          requestPayload.wallet_address,
+        );
+
         const backendResponse = await forwardPriceStorageToBackend(requestPayload, {
           backendBaseUrl: MNEMOSPARK_BACKEND_API_BASE_URL,
-          backendApiKey: MNEMOSPARK_BACKEND_API_KEY,
+          walletSignature,
         });
+
+        const authFailure = normalizeBackendAuthFailure(
+          backendResponse.status,
+          backendResponse.bodyText,
+        );
+        if (authFailure) {
+          const responseHeaders = createBackendForwardHeaders({
+            contentType: authFailure.contentType,
+            paymentRequired: backendResponse.paymentRequired,
+            paymentResponse: backendResponse.paymentResponse,
+          });
+          res.writeHead(authFailure.status, responseHeaders);
+          res.end(authFailure.bodyText);
+          return;
+        }
 
         const responseHeaders = createBackendForwardHeaders(backendResponse);
 
@@ -1145,6 +1227,22 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
           return;
         }
 
+        if (requestPayload.wallet_address.toLowerCase() !== proxyWalletAddressLower) {
+          res.writeHead(403, { "Content-Type": "application/json" });
+          res.end(createAuthErrorBody("wallet proof invalid"));
+          return;
+        }
+        const walletSignature = await createBackendWalletSignature(
+          "POST",
+          "/storage/upload",
+          requestPayload.wallet_address,
+        );
+        if (!walletSignature) {
+          res.writeHead(400, { "Content-Type": "application/json" });
+          res.end(createWalletRequiredBody());
+          return;
+        }
+
         const requiredMicros = BigInt(
           Math.max(1, Math.ceil(requestPayload.quoted_storage_price * 1_000_000)),
         );
@@ -1169,11 +1267,26 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
 
         const backendResponse = await forwardStorageUploadToBackend(requestPayload, {
           backendBaseUrl: MNEMOSPARK_BACKEND_API_BASE_URL,
-          backendApiKey: MNEMOSPARK_BACKEND_API_KEY,
+          walletSignature,
           paymentSignature: readHeaderValue(req.headers["payment-signature"]),
           legacyPayment: readHeaderValue(req.headers["x-payment"]),
           idempotencyKey: readHeaderValue(req.headers["idempotency-key"]),
         });
+
+        const authFailure = normalizeBackendAuthFailure(
+          backendResponse.status,
+          backendResponse.bodyText,
+        );
+        if (authFailure) {
+          const responseHeaders = createBackendForwardHeaders({
+            contentType: authFailure.contentType,
+            paymentRequired: backendResponse.paymentRequired,
+            paymentResponse: backendResponse.paymentResponse,
+          });
+          res.writeHead(authFailure.status, responseHeaders);
+          res.end(authFailure.bodyText);
+          return;
+        }
 
         const responseHeaders = createBackendForwardHeaders(backendResponse);
         res.writeHead(backendResponse.status, responseHeaders);
@@ -1219,10 +1332,41 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
           return;
         }
 
+        if (requestPayload.wallet_address.toLowerCase() !== proxyWalletAddressLower) {
+          res.writeHead(403, { "Content-Type": "application/json" });
+          res.end(createAuthErrorBody("wallet proof invalid"));
+          return;
+        }
+        const walletSignature = await createBackendWalletSignature(
+          "POST",
+          "/storage/ls",
+          requestPayload.wallet_address,
+        );
+        if (!walletSignature) {
+          res.writeHead(400, { "Content-Type": "application/json" });
+          res.end(createWalletRequiredBody());
+          return;
+        }
+
         const backendResponse = await forwardStorageLsToBackend(requestPayload, {
           backendBaseUrl: MNEMOSPARK_BACKEND_API_BASE_URL,
-          backendApiKey: MNEMOSPARK_BACKEND_API_KEY,
+          walletSignature,
         });
+
+        const authFailure = normalizeBackendAuthFailure(
+          backendResponse.status,
+          backendResponse.bodyText,
+        );
+        if (authFailure) {
+          const responseHeaders = createBackendForwardHeaders({
+            contentType: authFailure.contentType,
+            paymentRequired: backendResponse.paymentRequired,
+            paymentResponse: backendResponse.paymentResponse,
+          });
+          res.writeHead(authFailure.status, responseHeaders);
+          res.end(authFailure.bodyText);
+          return;
+        }
 
         const responseHeaders = createBackendForwardHeaders(backendResponse);
         res.writeHead(backendResponse.status, responseHeaders);
@@ -1268,10 +1412,41 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
           return;
         }
 
+        if (requestPayload.wallet_address.toLowerCase() !== proxyWalletAddressLower) {
+          res.writeHead(403, { "Content-Type": "application/json" });
+          res.end(createAuthErrorBody("wallet proof invalid"));
+          return;
+        }
+        const walletSignature = await createBackendWalletSignature(
+          "POST",
+          "/storage/download",
+          requestPayload.wallet_address,
+        );
+        if (!walletSignature) {
+          res.writeHead(400, { "Content-Type": "application/json" });
+          res.end(createWalletRequiredBody());
+          return;
+        }
+
         const backendResponse = await forwardStorageDownloadToBackend(requestPayload, {
           backendBaseUrl: MNEMOSPARK_BACKEND_API_BASE_URL,
-          backendApiKey: MNEMOSPARK_BACKEND_API_KEY,
+          walletSignature,
         });
+
+        const authFailure = normalizeBackendAuthFailure(
+          backendResponse.status,
+          backendResponse.bodyText,
+        );
+        if (authFailure) {
+          const responseHeaders = createBackendForwardHeaders({
+            contentType: authFailure.contentType,
+            paymentRequired: backendResponse.paymentRequired,
+            paymentResponse: backendResponse.paymentResponse,
+          });
+          res.writeHead(authFailure.status, responseHeaders);
+          res.end(authFailure.bodyText);
+          return;
+        }
 
         // Forward backend failures directly so client gets original status/details.
         if (backendResponse.status < 200 || backendResponse.status >= 300) {
@@ -1332,10 +1507,41 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
           return;
         }
 
+        if (requestPayload.wallet_address.toLowerCase() !== proxyWalletAddressLower) {
+          res.writeHead(403, { "Content-Type": "application/json" });
+          res.end(createAuthErrorBody("wallet proof invalid"));
+          return;
+        }
+        const walletSignature = await createBackendWalletSignature(
+          "POST",
+          "/storage/delete",
+          requestPayload.wallet_address,
+        );
+        if (!walletSignature) {
+          res.writeHead(400, { "Content-Type": "application/json" });
+          res.end(createWalletRequiredBody());
+          return;
+        }
+
         const backendResponse = await forwardStorageDeleteToBackend(requestPayload, {
           backendBaseUrl: MNEMOSPARK_BACKEND_API_BASE_URL,
-          backendApiKey: MNEMOSPARK_BACKEND_API_KEY,
+          walletSignature,
         });
+
+        const authFailure = normalizeBackendAuthFailure(
+          backendResponse.status,
+          backendResponse.bodyText,
+        );
+        if (authFailure) {
+          const responseHeaders = createBackendForwardHeaders({
+            contentType: authFailure.contentType,
+            paymentRequired: backendResponse.paymentRequired,
+            paymentResponse: backendResponse.paymentResponse,
+          });
+          res.writeHead(authFailure.status, responseHeaders);
+          res.end(authFailure.bodyText);
+          return;
+        }
 
         const responseHeaders = createBackendForwardHeaders(backendResponse);
         res.writeHead(backendResponse.status, responseHeaders);

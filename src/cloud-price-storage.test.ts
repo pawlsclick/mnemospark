@@ -76,13 +76,13 @@ describe("cloud price-storage transport", () => {
     expect(quote.storage_price).toBe(3.5);
   });
 
-  it("forwards price-storage request to backend with x-api-key and normalizes payment header", async () => {
+  it("forwards price-storage request to backend with optional wallet signature", async () => {
     let capturedUrl = "";
     let capturedInit: RequestInit | undefined;
 
     const forwarded = await forwardPriceStorageToBackend(SAMPLE_REQUEST, {
       backendBaseUrl: "https://api.example.com/prod/",
-      backendApiKey: "test-api-key",
+      walletSignature: "wallet-proof-header",
       fetchImpl: async (input, init) => {
         capturedUrl = String(input);
         capturedInit = init;
@@ -98,7 +98,9 @@ describe("cloud price-storage transport", () => {
 
     expect(capturedUrl).toBe("https://api.example.com/prod/price-storage");
     expect(capturedInit?.method).toBe("POST");
-    expect((capturedInit?.headers as Record<string, string>)["x-api-key"]).toBe("test-api-key");
+    const headers = capturedInit?.headers as Record<string, string>;
+    expect(headers["X-Wallet-Signature"]).toBe("wallet-proof-header");
+    expect(headers["x-api-key"]).toBeUndefined();
     expect(forwarded.status).toBe(402);
     expect(forwarded.paymentRequired).toBe("legacy-required-header");
   });
@@ -147,7 +149,7 @@ describe("cloud price-storage transport", () => {
 
     const forwarded = await forwardStorageUploadToBackend(SAMPLE_UPLOAD_REQUEST, {
       backendBaseUrl: "https://api.example.com/prod/",
-      backendApiKey: "test-api-key",
+      walletSignature: "wallet-proof-header",
       paymentSignature: "signed-payment-payload",
       idempotencyKey: "idemp-456",
       fetchImpl: async (input, init) => {
@@ -166,11 +168,20 @@ describe("cloud price-storage transport", () => {
     expect(capturedUrl).toBe("https://api.example.com/prod/storage/upload");
     expect(capturedInit?.method).toBe("POST");
     const headers = capturedInit?.headers as Record<string, string>;
-    expect(headers["x-api-key"]).toBe("test-api-key");
+    expect(headers["X-Wallet-Signature"]).toBe("wallet-proof-header");
+    expect(headers["x-api-key"]).toBeUndefined();
     expect(headers["Idempotency-Key"]).toBe("idemp-456");
     expect(headers["PAYMENT-SIGNATURE"]).toBe("signed-payment-payload");
     expect(headers["x-payment"]).toBe("signed-payment-payload");
     expect(forwarded.status).toBe(200);
     expect(forwarded.paymentResponse).toBe("response-header");
+  });
+
+  it("requires wallet proof for upload forwarding", async () => {
+    await expect(
+      forwardStorageUploadToBackend(SAMPLE_UPLOAD_REQUEST, {
+        backendBaseUrl: "https://api.example.com/prod/",
+      }),
+    ).rejects.toThrow("Wallet required for storage endpoints");
   });
 });

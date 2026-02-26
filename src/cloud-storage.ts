@@ -43,7 +43,7 @@ type ProxyStorageOptions = {
 
 type BackendStorageOptions = {
   backendBaseUrl?: string;
-  backendApiKey?: string;
+  walletSignature?: string;
   fetchImpl?: FetchLike;
 };
 
@@ -106,6 +106,11 @@ function normalizePaymentRequired(headers: Headers): string | undefined {
 
 function normalizePaymentResponse(headers: Headers): string | undefined {
   return headers.get("PAYMENT-RESPONSE") ?? headers.get("x-payment-response") ?? undefined;
+}
+
+function normalizeWalletSignature(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed && trimmed.length > 0 ? trimmed : undefined;
 }
 
 function asBooleanOrDefault(value: unknown, defaultValue: boolean): boolean {
@@ -224,13 +229,15 @@ async function forwardStorageToBackend(
 ): Promise<BackendStorageForwardResult> {
   const fetchImpl = options.fetchImpl ?? fetch;
   const backendBaseUrl = (options.backendBaseUrl ?? "").trim();
-  const backendApiKey = (options.backendApiKey ?? "").trim();
+  const walletSignature = normalizeWalletSignature(options.walletSignature);
 
   if (!backendBaseUrl) {
     throw new Error("MNEMOSPARK_BACKEND_API_BASE_URL is not configured");
   }
-  if (!backendApiKey) {
-    throw new Error("MNEMOSPARK_BACKEND_API_KEY is not configured");
+  if (!walletSignature) {
+    throw new Error(
+      "Wallet required for storage endpoints: wallet key must be present to sign requests.",
+    );
   }
 
   const targetUrl = `${normalizeBaseUrl(backendBaseUrl)}${path}`;
@@ -238,7 +245,7 @@ async function forwardStorageToBackend(
     method,
     headers: {
       "Content-Type": "application/json",
-      "x-api-key": backendApiKey,
+      "X-Wallet-Signature": walletSignature,
     },
     body: JSON.stringify(request),
   });
