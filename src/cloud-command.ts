@@ -23,6 +23,17 @@ import {
   type ProxyQuoteOptions,
   type ProxyUploadOptions,
 } from "./cloud-price-storage.js";
+import {
+  parseStorageObjectRequest,
+  requestStorageDeleteViaProxy,
+  requestStorageDownloadViaProxy,
+  requestStorageLsViaProxy,
+  type ProxyStorageOptions,
+  type StorageDeleteResponse,
+  type StorageDownloadProxyResponse,
+  type StorageLsResponse,
+  type StorageObjectRequest,
+} from "./cloud-storage.js";
 import type { OpenClawPluginCommandDefinition } from "./types.js";
 import { createPaymentFetch, type PaymentFetchResult } from "./x402.js";
 
@@ -46,6 +57,9 @@ const CLOUD_HELP_TEXT = [
   "• `/cloud backup <directory>`",
   "• `/cloud price-storage --wallet-address <addr> --object-id <id> --object-id-hash <hash> --gb <gb> --provider <provider> --region <region>`",
   "• `/cloud upload --quote-id <quote-id> --wallet-address <addr> --object-id <id> --object-id-hash <hash>`",
+  "• `/cloud ls --wallet-address <addr> --object-key <s3-key>`",
+  "• `/cloud download --wallet-address <addr> --object-key <s3-key>`",
+  "• `/cloud delete --wallet-address <addr> --object-key <s3-key>`",
   "",
   "Backup creates a tar+gzip object in /tmp and appends object metadata to ~/.openclaw/mnemospark/object.log.",
 ].join("\n");
@@ -83,6 +97,12 @@ type ParsedCloudArgs =
   | { mode: "price-storage-invalid" }
   | { mode: "upload"; uploadRequest: UploadCommandRequest }
   | { mode: "upload-invalid" }
+  | { mode: "ls"; storageObjectRequest: StorageObjectRequest }
+  | { mode: "ls-invalid" }
+  | { mode: "download"; storageObjectRequest: StorageObjectRequest }
+  | { mode: "download-invalid" }
+  | { mode: "delete"; storageObjectRequest: StorageObjectRequest }
+  | { mode: "delete-invalid" }
   | { mode: "unknown" };
 
 type CreateCloudCommandOptions = {
@@ -106,6 +126,20 @@ type CreateCloudCommandOptions = {
   idempotencyKeyFn?: () => string;
   proxyQuoteOptions?: ProxyQuoteOptions;
   proxyUploadOptions?: ProxyUploadOptions;
+  requestStorageLsFn?: (
+    request: StorageObjectRequest,
+    options?: ProxyStorageOptions,
+  ) => Promise<StorageLsResponse>;
+  requestStorageDownloadFn?: (
+    request: StorageObjectRequest,
+    options?: ProxyStorageOptions,
+  ) => Promise<StorageDownloadProxyResponse>;
+  requestStorageDeleteFn?: (
+    request: StorageObjectRequest,
+    options?: ProxyStorageOptions,
+  ) => Promise<StorageDeleteResponse>;
+  proxyQuoteOptions?: ProxyQuoteOptions;
+  proxyStorageOptions?: ProxyStorageOptions;
   objectLogHomeDir?: string;
 };
 
@@ -232,6 +266,54 @@ function parseCloudArgs(args?: string): ParsedCloudArgs {
         object_id_hash: objectIdHash,
       },
     };
+  }
+
+  if (subcommand === "ls") {
+    const flags = parseNamedFlags(rest);
+    if (!flags) {
+      return { mode: "ls-invalid" };
+    }
+    const request = parseStorageObjectRequest({
+      wallet_address: flags["wallet-address"],
+      object_key: flags["object-key"],
+      location: flags.location ?? flags.region,
+    });
+    if (!request) {
+      return { mode: "ls-invalid" };
+    }
+    return { mode: "ls", storageObjectRequest: request };
+  }
+
+  if (subcommand === "download") {
+    const flags = parseNamedFlags(rest);
+    if (!flags) {
+      return { mode: "download-invalid" };
+    }
+    const request = parseStorageObjectRequest({
+      wallet_address: flags["wallet-address"],
+      object_key: flags["object-key"],
+      location: flags.location ?? flags.region,
+    });
+    if (!request) {
+      return { mode: "download-invalid" };
+    }
+    return { mode: "download", storageObjectRequest: request };
+  }
+
+  if (subcommand === "delete") {
+    const flags = parseNamedFlags(rest);
+    if (!flags) {
+      return { mode: "delete-invalid" };
+    }
+    const request = parseStorageObjectRequest({
+      wallet_address: flags["wallet-address"],
+      object_key: flags["object-key"],
+      location: flags.location ?? flags.region,
+    });
+    if (!request) {
+      return { mode: "delete-invalid" };
+    }
+    return { mode: "delete", storageObjectRequest: request };
   }
 
   return { mode: "unknown" };
@@ -718,6 +800,11 @@ function formatPriceStorageUserMessage(quote: PriceStorageQuoteResponse): string
   ].join("\n");
 }
 
+function formatStorageLsUserMessage(result: StorageLsResponse, requestedObjectKey: string): string {
+  const objectId = result.object_id ?? result.key;
+  return `${objectId} with ${requestedObjectKey} is ${result.size_bytes} in ${result.bucket}`;
+}
+
 export function createCloudCommand(
   options: CreateCloudCommandOptions = {},
 ): OpenClawPluginCommandDefinition {
@@ -730,6 +817,9 @@ export function createCloudCommand(
   const fetchImpl = options.fetchImpl ?? fetch;
   const nowDateFn = options.nowDateFn ?? (() => new Date());
   const idempotencyKeyFn = options.idempotencyKeyFn ?? randomUUID;
+  const requestStorageLs = options.requestStorageLsFn ?? requestStorageLsViaProxy;
+  const requestStorageDownload = options.requestStorageDownloadFn ?? requestStorageDownloadViaProxy;
+  const requestStorageDelete = options.requestStorageDeleteFn ?? requestStorageDeleteViaProxy;
   const objectLogHomeDir = options.objectLogHomeDir ?? options.backupOptions?.homeDir;
 
   return {
@@ -757,6 +847,27 @@ export function createCloudCommand(
       if (parsed.mode === "upload-invalid") {
         return {
           text: "Cannot upload storage object",
+          isError: true,
+        };
+      }
+
+      if (parsed.mode === "ls-invalid") {
+        return {
+          text: "Cannot list storage object",
+          isError: true,
+        };
+      }
+
+      if (parsed.mode === "download-invalid") {
+        return {
+          text: "Cannot download file",
+          isError: true,
+        };
+      }
+
+      if (parsed.mode === "delete-invalid") {
+        return {
+          text: "Cannot delete file",
           isError: true,
         };
       }
@@ -902,6 +1013,66 @@ export function createCloudCommand(
         } catch (error) {
           return {
             text: extractUploadErrorMessage(error) ?? "Cannot upload storage object",
+            isError: true,
+          };
+        }
+      }
+
+      if (parsed.mode === "ls") {
+        try {
+          const lsResult = await requestStorageLs(
+            parsed.storageObjectRequest,
+            options.proxyStorageOptions,
+          );
+          if (!lsResult.success) {
+            throw new Error("ls failed");
+          }
+          return {
+            text: formatStorageLsUserMessage(lsResult, parsed.storageObjectRequest.object_key),
+          };
+        } catch {
+          return {
+            text: "Cannot list storage object",
+            isError: true,
+          };
+        }
+      }
+
+      if (parsed.mode === "download") {
+        try {
+          const downloadResult = await requestStorageDownload(
+            parsed.storageObjectRequest,
+            options.proxyStorageOptions,
+          );
+          if (!downloadResult.success) {
+            throw new Error("download failed");
+          }
+          return {
+            text: `File ${parsed.storageObjectRequest.object_key} downloaded`,
+          };
+        } catch {
+          return {
+            text: "Cannot download file",
+            isError: true,
+          };
+        }
+      }
+
+      if (parsed.mode === "delete") {
+        try {
+          const deleteResult = await requestStorageDelete(
+            parsed.storageObjectRequest,
+            options.proxyStorageOptions,
+          );
+          if (!deleteResult.success) {
+            throw new Error("delete failed");
+          }
+          return {
+            text: `File ${parsed.storageObjectRequest.object_key} deleted`,
+          };
+        } catch {
+          return {
+            text: "Cannot delete file",
             isError: true,
           };
         }

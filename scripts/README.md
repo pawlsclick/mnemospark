@@ -41,9 +41,13 @@ sudo apt install -y jq
 
 Or run `./scripts/install-jq.sh` if present.
 
-## Seed mnemospark-backend
+## Documentation (`.company`)
 
-Before running Cursor Cloud Agent on backend features (01–10, 15–17), seed the **mnemospark-backend** repo from this repo:
+Documentation lives in the **mnemospark-docs** Git submodule at `.company`. After cloning this repo, run `git submodule update --init` to populate `.company` (or clone with `git clone --recurse-submodules`). Do not edit `.company` here; edit in the [mnemospark-docs](https://github.com/pawlsclick/mnemospark-docs) repo, then update the submodule pointer in this repo.
+
+## Seed mnemospark-backend (examples and legacy)
+
+Before running Cursor Cloud Agent on backend features (01–10, 15–18), you may seed **mnemospark-backend** with examples from this repo (docs are now provided via the mnemospark-docs submodule in both repos):
 
 ```bash
 ./scripts/seed-mnemospark-backend.sh /path/to/mnemospark-backend
