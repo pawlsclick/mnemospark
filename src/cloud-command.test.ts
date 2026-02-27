@@ -245,7 +245,7 @@ describe("cloud command", () => {
     expect(result.text).toBe("Cannot price storage");
   });
 
-  it("handles /cloud upload, builds encrypted payload, and logs upload response", async () => {
+  it("handles /cloud upload, builds encrypted payload, logs upload response, and keeps archive by default", async () => {
     const { homeDir, tmpBackupDir } = await createSandbox();
     const walletKey = `0x${"11".repeat(32)}` as const;
     const walletAddress = privateKeyToAccount(walletKey).address;
@@ -337,6 +337,93 @@ describe("cloud command", () => {
     expect(lastLine).toBe(
       `2026-02-25 20:10:00,quote-abc123,${walletAddress},addr-hash,tx-001,2.75,obj-upload-001,obj-upload-001.tar.gz.enc,aws,mnemospark-1234,us-east-1`,
     );
+
+    // By default, local backup archive should remain on disk.
+    const archiveExists = await stat(archivePath);
+    expect(archiveExists.isFile()).toBe(true);
+  });
+
+  it("optionally deletes local backup archive after successful /cloud upload when flag is set", async () => {
+    const { homeDir, tmpBackupDir } = await createSandbox();
+    const walletKey = `0x${"44".repeat(32)}` as const;
+    const walletAddress = privateKeyToAccount(walletKey).address;
+    const objectId = "obj-upload-cleanup-001";
+    const archiveContent = "mnemospark upload content cleanup";
+    const objectHash = sha256Hex(archiveContent);
+    const archivePath = join(tmpBackupDir, objectId);
+    await writeFile(archivePath, archiveContent, "utf-8");
+
+    const objectLogPath = join(homeDir, ".openclaw", "mnemospark", "object.log");
+    await mkdir(join(homeDir, ".openclaw", "mnemospark"), { recursive: true });
+    await writeFile(
+      objectLogPath,
+      `2026-02-25 19:00:00,quote-cleanup,2.75,${walletAddress},${objectId},${objectHash},0.015,aws,us-east-1\n`,
+      "utf-8",
+    );
+
+    let createPaymentFetchCalls = 0;
+    const previousEnv = process.env.MNEMOSPARK_DELETE_BACKUP_AFTER_UPLOAD;
+    process.env.MNEMOSPARK_DELETE_BACKUP_AFTER_UPLOAD = "1";
+
+    try {
+      const command = createCloudCommand({
+        objectLogHomeDir: homeDir,
+        backupOptions: { tmpDir: tmpBackupDir },
+        resolveWalletPrivateKeyFn: async () => walletKey,
+        idempotencyKeyFn: () => "idempotency-cleanup-123",
+        nowDateFn: () => new Date(2026, 1, 25, 21, 0, 0),
+        createPaymentFetchFn: () => {
+          createPaymentFetchCalls += 1;
+          return {
+            fetch: async () =>
+              new Response(
+                JSON.stringify({
+                  quote_id: "quote-cleanup",
+                  addr: walletAddress,
+                  addr_hash: "addr-hash-cleanup",
+                  trans_id: "tx-cleanup-001",
+                  storage_price: 2.75,
+                  object_id: objectId,
+                  object_key: "obj-upload-cleanup-001.tar.gz.enc",
+                  provider: "aws",
+                  bucket_name: "mnemospark-5678",
+                  location: "us-east-1",
+                }),
+                {
+                  status: 200,
+                  headers: { "Content-Type": "application/json" },
+                },
+              ),
+            cache: new PaymentCache(),
+          };
+        },
+      });
+
+      const result = await command.handler({
+        channel: "test",
+        isAuthorizedSender: true,
+        args: [
+          "upload",
+          "--quote-id quote-cleanup",
+          `--wallet-address ${walletAddress}`,
+          `--object-id ${objectId}`,
+          `--object-id-hash ${objectHash}`,
+        ].join(" "),
+        commandBody: "upload",
+        config: {},
+      });
+
+      expect(createPaymentFetchCalls).toBe(1);
+      expect(result.isError).not.toBe(true);
+
+      await expect(stat(archivePath)).rejects.toThrow();
+    } finally {
+      if (previousEnv === undefined) {
+        delete process.env.MNEMOSPARK_DELETE_BACKUP_AFTER_UPLOAD;
+      } else {
+        process.env.MNEMOSPARK_DELETE_BACKUP_AFTER_UPLOAD = previousEnv;
+      }
+    }
   });
 
   it("returns parsed proxy message when /cloud upload balance check fails", async () => {

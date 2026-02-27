@@ -29,29 +29,34 @@ import { homedir } from "node:os";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 import type { ProviderAuthMethod, ProviderAuthContext, ProviderAuthResult } from "./types.js";
 
-const WALLET_DIR = join(homedir(), ".openclaw", "blockrun");
+const LEGACY_WALLET_DIR = join(homedir(), ".openclaw", "blockrun");
+const LEGACY_WALLET_FILE = join(LEGACY_WALLET_DIR, "wallet.key");
+const WALLET_DIR = join(homedir(), ".openclaw", "mnemospark", "wallet");
 const WALLET_FILE = join(WALLET_DIR, "wallet.key");
 
-// Export for use by wallet command
-export { WALLET_FILE };
+// Export for use by wallet command and CLI
+export { WALLET_FILE, LEGACY_WALLET_FILE };
 
 /**
  * Try to load a previously auto-generated wallet key from disk.
  */
 async function loadSavedWallet(): Promise<string | undefined> {
-  try {
-    const key = (await readFile(WALLET_FILE, "utf-8")).trim();
-    if (key.startsWith("0x") && key.length === 66) {
-      console.log(`[mnemospark] ✓ Loaded existing wallet from ${WALLET_FILE}`);
-      return key;
-    }
-    console.warn(`[mnemospark] ⚠ Wallet file exists but is invalid (wrong format)`);
-  } catch (err) {
-    // File doesn't exist yet - this is expected on first run
-    if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
-      console.error(
-        `[mnemospark] ✗ Failed to read wallet file: ${err instanceof Error ? err.message : String(err)}`,
-      );
+  // Prefer mnemospark-specific wallet file, fall back to legacy Blockrun path.
+  for (const path of [WALLET_FILE, LEGACY_WALLET_FILE]) {
+    try {
+      const key = (await readFile(path, "utf-8")).trim();
+      if (key.startsWith("0x") && key.length === 66) {
+        console.log(`[mnemospark] ✓ Loaded existing wallet from ${path}`);
+        return key;
+      }
+      console.warn(`[mnemospark] ⚠ Wallet file exists but is invalid (wrong format): ${path}`);
+    } catch (err) {
+      // File doesn't exist yet - this is expected on first run
+      if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+        console.error(
+          `[mnemospark] ✗ Failed to read wallet file ${path}: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
     }
   }
   return undefined;

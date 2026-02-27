@@ -5,7 +5,7 @@ import {
   randomBytes as randomBytesNode,
   randomUUID,
 } from "node:crypto";
-import { createReadStream, existsSync, statfsSync } from "node:fs";
+import { createReadStream, statfsSync } from "node:fs";
 import { appendFile, lstat, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
@@ -38,10 +38,11 @@ import type { OpenClawPluginCommandDefinition } from "./types.js";
 import { createPaymentFetch, type PaymentFetchResult } from "./x402.js";
 
 const SUPPORTED_BACKUP_PLATFORMS = new Set<NodeJS.Platform>(["darwin", "linux"]);
-const DEFAULT_TMP_DIR = "/tmp";
+const BACKUP_DIR_SUBPATH = join(".openclaw", "mnemospark", "backup");
+const DEFAULT_BACKUP_DIR = join(homedir(), BACKUP_DIR_SUBPATH);
 const OBJECT_LOG_SUBPATH = join(".openclaw", "mnemospark", "object.log");
 const BLOCKRUN_WALLET_KEY_SUBPATH = join(".openclaw", "blockrun", "wallet.key");
-const MNEMOSPARK_WALLET_KEY_SUBPATH = join(".openclaw", "mnemospark", "key", "wallet.key");
+const MNEMOSPARK_WALLET_KEY_SUBPATH = join(".openclaw", "mnemospark", "wallet", "wallet.key");
 const KEY_STORE_SUBPATH = join(".openclaw", "mnemospark", "keys");
 const INLINE_UPLOAD_MAX_BYTES = 4_500_000;
 const AES_GCM_NONCE_BYTES = 12;
@@ -77,7 +78,7 @@ const CLOUD_HELP_TEXT = [
   "• `/cloud delete --wallet-address <addr> --object-key <s3-key>`",
   "  Required: " + REQUIRED_STORAGE_OBJECT,
   "",
-  "Backup creates a tar+gzip object in /tmp and appends object metadata to ~/.openclaw/mnemospark/object.log. All storage commands (price-storage, upload, ls, download, delete) require --wallet-address.",
+  "Backup creates a tar+gzip object in ~/.openclaw/mnemospark/backup and appends object metadata to ~/.openclaw/mnemospark/object.log. All storage commands (price-storage, upload, ls, download, delete) require --wallet-address.",
 ].join("\n");
 
 type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
@@ -427,20 +428,27 @@ export async function buildBackupObject(
     throw new Error("Backup target must be a file or directory");
   }
 
-  const tmpDir = options.tmpDir ?? DEFAULT_TMP_DIR;
-  if (!existsSync(tmpDir)) {
-    throw new Error("Temporary directory does not exist");
+  const tmpDir = options.tmpDir ?? DEFAULT_BACKUP_DIR;
+  let tmpStats;
+  try {
+    tmpStats = await stat(tmpDir);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      await mkdir(tmpDir, { recursive: true });
+      tmpStats = await stat(tmpDir);
+    } else {
+      throw error;
+    }
   }
-  const tmpStats = await stat(tmpDir);
   if (!tmpStats.isDirectory()) {
-    throw new Error("Temporary path is not a directory");
+    throw new Error("Backup path is not a directory");
   }
 
   const inputSizeBytes = await calculateInputSizeBytes(targetPath);
   const availableDiskBytes = getAvailableDiskBytes(tmpDir, options);
   const requiredDiskBytes = inputSizeBytes + TAR_OVERHEAD_BYTES;
   if (availableDiskBytes < requiredDiskBytes) {
-    throw new Error("Insufficient /tmp disk space for backup object");
+    throw new Error("Insufficient disk space for backup object");
   }
 
   const objectId = createObjectId(options);
@@ -769,6 +777,22 @@ async function appendStorageUploadLog(
   );
 }
 
+async function maybeCleanupLocalBackupArchive(archivePath: string): Promise<void> {
+  const flag = process.env.MNEMOSPARK_DELETE_BACKUP_AFTER_UPLOAD;
+  if (!flag) {
+    return;
+  }
+  const normalized = flag.trim().toLowerCase();
+  if (normalized !== "1" && normalized !== "true" && normalized !== "yes" && normalized !== "y") {
+    return;
+  }
+  try {
+    await rm(archivePath, { force: true });
+  } catch {
+    // Best-effort cleanup; ignore failures.
+  }
+}
+
 function formatStorageUploadUserMessage(upload: StorageUploadResponse): string {
   return [
     `Your file \`${upload.object_id}\` with key \`${upload.object_key}\` has been stored using \`${upload.provider}\` in \`${upload.bucket_name}\` \`${upload.location}\``,
@@ -956,7 +980,7 @@ export function createCloudCommand(
           }
 
           const archivePath = join(
-            options.backupOptions?.tmpDir ?? DEFAULT_TMP_DIR,
+            options.backupOptions?.tmpDir ?? DEFAULT_BACKUP_DIR,
             parsed.uploadRequest.object_id,
           );
           let archiveStats;
@@ -1026,6 +1050,7 @@ export function createCloudCommand(
             fetchImpl,
           );
           await appendStorageUploadLog(uploadResponse, objectLogHomeDir, nowDateFn);
+          await maybeCleanupLocalBackupArchive(archivePath);
 
           return {
             text: formatStorageUploadUserMessage(uploadResponse),
