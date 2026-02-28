@@ -335,7 +335,7 @@ describe("cloud command", () => {
       "Your file `obj-upload-001` with key `obj-upload-001.tar.gz.enc` has been stored using `aws` in `mnemospark-1234` `us-east-1`",
     );
     expect(messageLines[1]).toContain("A cron job `");
-    expect(messageLines[1]).toContain("every 30 days");
+    expect(messageLines[1]).toContain("monthly");
     expect(messageLines[1]).toContain("**32-day deadline**");
     expect(messageLines[2]).toBe("Thank you for using mnemospark!");
 
@@ -364,7 +364,7 @@ describe("cloud command", () => {
     expect(cronEntry.objectKey).toBe("obj-upload-001.tar.gz.enc");
     expect(cronEntry.quoteId).toBe("quote-abc123");
     expect(cronEntry.storagePrice).toBe(2.75);
-    expect(cronEntry.schedule).toBe("0 0 */30 * *");
+    expect(cronEntry.schedule).toBe("0 0 1 * *");
 
     // By default, local backup archive should remain on disk.
     const archiveExists = await stat(archivePath);
@@ -676,7 +676,7 @@ describe("cloud command", () => {
       `${JSON.stringify({
         cronId,
         createdAt: "2026-02-25 20:10:00",
-        schedule: "0 0 */30 * *",
+        schedule: "0 0 1 * *",
         command:
           'mnemospark-pay-storage --quote-id "quote-abc123" --wallet-address "0x1234abcd" --object-id "obj-001" --object-key "backup/archive.tar.gz" --storage-price "2.75"',
         quoteId: "quote-abc123",

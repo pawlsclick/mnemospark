@@ -49,7 +49,10 @@ const INLINE_UPLOAD_MAX_BYTES = 4_500_000;
 const AES_GCM_NONCE_BYTES = 12;
 const PAYMENT_REMINDER_INTERVAL_DAYS = 30;
 const PAYMENT_DELETE_DEADLINE_DAYS = 32;
-const PAYMENT_CRON_SCHEDULE = "0 0 */30 * *";
+// Standard cron cannot express "every 30 days" from an arbitrary date. */30 in day-of-month
+// means days 1 and 31, so in 31-day months it fires twice one day apart (e.g. Jan 31, Feb 1).
+// Use 1st of each month so the job runs once per month.
+const PAYMENT_CRON_SCHEDULE = "0 0 1 * *";
 const CRON_LOG_ROW_PREFIX = "cron";
 const TAR_OVERHEAD_BYTES = 10 * 1024 * 1024; // Conservative headroom for tar metadata.
 
@@ -1069,7 +1072,7 @@ async function maybeCleanupLocalBackupArchive(archivePath: string): Promise<void
 function formatStorageUploadUserMessage(upload: StorageUploadResponse, cronJobId: string): string {
   return [
     `Your file \`${upload.object_id}\` with key \`${upload.object_key}\` has been stored using \`${upload.provider}\` in \`${upload.bucket_name}\` \`${upload.location}\``,
-    `A cron job \`${cronJobId}\` has been configured to send payment every ${PAYMENT_REMINDER_INTERVAL_DAYS} days for storage services. If payment is not sent, your \`${upload.object_id}\` will be deleted after the **${PAYMENT_DELETE_DEADLINE_DAYS}-day deadline** (${PAYMENT_REMINDER_INTERVAL_DAYS}-day billing interval + 2-day grace period).`,
+    `A cron job \`${cronJobId}\` has been configured to send payment monthly (on the 1st) for storage services. If payment is not sent, your \`${upload.object_id}\` will be deleted after the **${PAYMENT_DELETE_DEADLINE_DAYS}-day deadline** (${PAYMENT_REMINDER_INTERVAL_DAYS}-day billing interval + 2-day grace period).`,
     "Thank you for using mnemospark!",
   ].join("\n");
 }
