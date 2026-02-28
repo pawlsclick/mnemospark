@@ -326,6 +326,9 @@ describe("cloud command", () => {
     expect(payload.mode).toBe("inline");
     expect(typeof payload.content_base64).toBe("string");
     expect(result.isError).not.toBe(true);
+    if (!result.text) {
+      throw new Error("Expected upload response text");
+    }
     const messageLines = result.text.split("\n");
     expect(messageLines).toHaveLength(3);
     expect(messageLines[0]).toBe(
