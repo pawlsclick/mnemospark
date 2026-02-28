@@ -1,5 +1,6 @@
 import { getAddress } from "viem";
 import { privateKeyToAccount, signTypedData } from "viem/accounts";
+import { createNonce } from "./nonce.js";
 
 import { createNonce } from "./nonce.js";
 

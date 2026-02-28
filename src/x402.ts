@@ -15,6 +15,7 @@ import { signTypedData, privateKeyToAccount } from "viem/accounts";
 
 import { createNonce } from "./nonce.js";
 import { PaymentCache } from "./payment-cache.js";
+import { createNonce } from "./nonce.js";
 
 const BASE_CHAIN_ID = 8453;
 const BASE_SEPOLIA_CHAIN_ID = 84532;
