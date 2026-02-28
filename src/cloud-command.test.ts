@@ -48,6 +48,32 @@ describe("cloud command", () => {
     expect(command.requireAuth).toBe(true);
   });
 
+  it("uses object-key terminology in cloud help text", async () => {
+    const command = createCloudCommand();
+
+    const result = await command.handler({
+      channel: "test",
+      isAuthorizedSender: true,
+      args: "",
+      commandBody: "help",
+      config: {},
+    });
+
+    if (!result.text) {
+      throw new Error("Expected cloud help text");
+    }
+
+    expect(result.text).toContain("/cloud ls --wallet-address <addr> --object-key <object-key>");
+    expect(result.text).toContain(
+      "/cloud download --wallet-address <addr> --object-key <object-key>",
+    );
+    expect(result.text).toContain(
+      "/cloud delete --wallet-address <addr> --object-key <object-key>",
+    );
+    expect(result.text).not.toContain("<s3-key>");
+    expect(result.text).not.toContain("s3-key");
+  });
+
   it("builds tar.gz object, computes hash/size, and appends object.log entry", async () => {
     const { homeDir, tmpBackupDir, sourceDir } = await createSandbox();
     await writeFile(join(sourceDir, "notes.txt"), "hello from mnemospark backup");
