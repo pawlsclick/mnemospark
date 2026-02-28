@@ -14,16 +14,24 @@
  */
 
 import { startProxy, getProxyPort } from "./proxy.js";
-import { resolveOrGenerateWalletKey } from "./auth.js";
+import { resolveOrGenerateWalletKey, LEGACY_WALLET_FILE, WALLET_FILE } from "./auth.js";
 import { BalanceMonitor } from "./balance.js";
 import { VERSION } from "./version.js";
+import { dirname } from "node:path";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+
+function isHexPrivateKey(value: string | undefined): value is `0x${string}` {
+  return typeof value === "string" && /^0x[0-9a-fA-F]{64}$/.test(value.trim());
+}
 
 function printHelp(): void {
   console.log(`
-mnemospark v${VERSION} - Smart LLM Router
+mnemospark v${VERSION} - Storage proxy and wallet tools
 
 Usage:
   mnemospark [options]
+  mnemospark install --default
+  mnemospark install --standard
 
 Options:
   --version, -v     Show version number
@@ -37,26 +45,59 @@ Examples:
   # Start on custom port
   npx mnemospark --port 9000
 
+  # Install mnemospark wallet with default behavior (create new wallet)
+  npx mnemospark install --default
+
+  # Install mnemospark wallet with standard behavior (reuse Blockrun wallet if present)
+  npx mnemospark install --standard
+
   # Production deployment with PM2
   pm2 start "npx mnemospark" --name mnemospark
 
 Environment Variables:
-  BLOCKRUN_WALLET_KEY     Private key for x402 payments (auto-generated if not set)
+  BLOCKRUN_WALLET_KEY     Private key for x402 storage payments (auto-generated if not set)
   MNEMOSPARK_PROXY_PORT   Default proxy port (default: 7120)
 
 For more info: https://github.com/pawlsclick/mnemospark
 `);
 }
 
-function parseArgs(args: string[]): { version: boolean; help: boolean; port?: number } {
-  const result = { version: false, help: false, port: undefined as number | undefined };
+type ParsedArgs = {
+  version: boolean;
+  help: boolean;
+  port?: number;
+  command?: "install";
+  installMode?: "default" | "standard";
+};
+
+function parseArgs(args: string[]): ParsedArgs {
+  const result: ParsedArgs = {
+    version: false,
+    help: false,
+    port: undefined,
+    command: undefined,
+    installMode: undefined,
+  };
 
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
+
+    if (!result.command && !arg.startsWith("-")) {
+      if (arg === "install") {
+        result.command = "install";
+      }
+      // Treat first non-flag token as command and continue parsing remaining flags.
+      continue;
+    }
+
     if (arg === "--version" || arg === "-v") {
       result.version = true;
     } else if (arg === "--help" || arg === "-h") {
       result.help = true;
+    } else if (result.command === "install" && arg === "--default") {
+      result.installMode = "default";
+    } else if (result.command === "install" && arg === "--standard") {
+      result.installMode = "standard";
     } else if (arg === "--port" && args[i + 1]) {
       result.port = parseInt(args[i + 1], 10);
       i++; // Skip next arg
@@ -64,6 +105,85 @@ function parseArgs(args: string[]): { version: boolean; help: boolean; port?: nu
   }
 
   return result;
+}
+
+async function ensureDir(path: string): Promise<void> {
+  await mkdir(path, { recursive: true });
+}
+
+async function readLegacyWalletIfPresent(): Promise<`0x${string}` | null> {
+  try {
+    const key = (await readFile(LEGACY_WALLET_FILE, "utf-8")).trim();
+    return isHexPrivateKey(key) ? (key as `0x${string}`) : null;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return null;
+    }
+    throw error;
+  }
+}
+
+async function writeMnemosparkWallet(key: `0x${string}`): Promise<void> {
+  const dir = dirname(WALLET_FILE);
+  await ensureDir(dir);
+  await writeFile(WALLET_FILE, `${key}\n`, { mode: 0o600 });
+}
+
+async function promptReuseLegacyWallet(): Promise<boolean> {
+  process.stdout.write(
+    `Found existing Blockrun wallet at ${LEGACY_WALLET_FILE}.\nReuse this wallet for mnemospark? [Y/n]: `,
+  );
+
+  return new Promise<boolean>((resolve) => {
+    process.stdin.setEncoding("utf-8");
+    process.stdin.once("data", (data) => {
+      const input = typeof data === "string" ? data : data.toString("utf-8");
+      const answer = input.trim().toLowerCase();
+      if (!answer || answer === "y" || answer === "yes") {
+        resolve(true);
+      } else {
+        resolve(false);
+      }
+    });
+  });
+}
+
+async function runInstall(mode: "default" | "standard"): Promise<void> {
+  if (mode === "standard") {
+    const legacyWallet = await readLegacyWalletIfPresent();
+    if (legacyWallet) {
+      const reuse = await promptReuseLegacyWallet();
+      if (reuse) {
+        await writeMnemosparkWallet(legacyWallet);
+        console.log("\n[mnemospark] Reused existing Blockrun wallet for mnemospark.");
+        console.log(
+          "[mnemospark] Wallet file: ~/.openclaw/mnemospark/wallet/wallet.key (chmod 600 expected).",
+        );
+        console.log(
+          "[mnemospark] Your wallet will be used for mnemospark storage payments on Base.",
+        );
+        return;
+      }
+    }
+  }
+
+  const { address, source } = await resolveOrGenerateWalletKey();
+
+  console.log("[mnemospark] Install complete.");
+  console.log(`Your new Base blockchain wallet is: ${address}`);
+  if (source === "env") {
+    console.log(
+      "Wallet is sourced from BLOCKRUN_WALLET_KEY. To persist it, save it under ~/.openclaw/mnemospark/wallet/wallet.key with chmod 600.",
+    );
+  } else {
+    console.log(
+      "Wallet key stored under ~/.openclaw/mnemospark/wallet/wallet.key (permissions should be chmod 600).",
+    );
+  }
+  console.log("Add USDC on the Base network to start using mnemospark today.");
+  console.log(
+    "You can acquire USDC on Base from providers like Coinbase and Moonpay. Fund the wallet before running mnemospark.",
+  );
 }
 
 async function main(): Promise<void> {
@@ -77,6 +197,12 @@ async function main(): Promise<void> {
   if (args.help) {
     printHelp();
     process.exit(0);
+  }
+
+  if (args.command === "install") {
+    const mode = args.installMode ?? "standard";
+    await runInstall(mode);
+    return;
   }
 
   // Resolve wallet key
@@ -100,11 +226,6 @@ async function main(): Promise<void> {
     },
     onError: (error) => {
       console.error(`[mnemospark] Error: ${error.message}`);
-    },
-    onRouted: (decision) => {
-      const cost = decision.costEstimate.toFixed(4);
-      const saved = (decision.savings * 100).toFixed(0);
-      console.log(`[mnemospark] [${decision.tier}] ${decision.model} $${cost} (saved ${saved}%)`);
     },
     onLowBalance: (info) => {
       console.warn(`[mnemospark] Low balance: ${info.balanceUSD}. Fund: ${info.walletAddress}`);

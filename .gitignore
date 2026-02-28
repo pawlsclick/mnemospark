@@ -26,7 +26,7 @@ coverage/
 .idea/
 *.swp
 *.swo
-.cursor/.cache/
+.cursor/
 
 # Test / test artifacts
 test-files/

@@ -5,7 +5,7 @@ import {
   randomBytes as randomBytesNode,
   randomUUID,
 } from "node:crypto";
-import { createReadStream, existsSync, statfsSync } from "node:fs";
+import { createReadStream, statfsSync } from "node:fs";
 import { appendFile, lstat, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
@@ -38,30 +38,53 @@ import type { OpenClawPluginCommandDefinition } from "./types.js";
 import { createPaymentFetch, type PaymentFetchResult } from "./x402.js";
 
 const SUPPORTED_BACKUP_PLATFORMS = new Set<NodeJS.Platform>(["darwin", "linux"]);
-const DEFAULT_TMP_DIR = "/tmp";
+const BACKUP_DIR_SUBPATH = join(".openclaw", "mnemospark", "backup");
+const DEFAULT_BACKUP_DIR = join(homedir(), BACKUP_DIR_SUBPATH);
 const OBJECT_LOG_SUBPATH = join(".openclaw", "mnemospark", "object.log");
+const CRON_TABLE_SUBPATH = join(".openclaw", "mnemospark", "crontab.txt");
 const BLOCKRUN_WALLET_KEY_SUBPATH = join(".openclaw", "blockrun", "wallet.key");
-const MNEMOSPARK_WALLET_KEY_SUBPATH = join(".openclaw", "mnemospark", "key", "wallet.key");
+const MNEMOSPARK_WALLET_KEY_SUBPATH = join(".openclaw", "mnemospark", "wallet", "wallet.key");
 const KEY_STORE_SUBPATH = join(".openclaw", "mnemospark", "keys");
 const INLINE_UPLOAD_MAX_BYTES = 4_500_000;
 const AES_GCM_NONCE_BYTES = 12;
 const PAYMENT_REMINDER_INTERVAL_DAYS = 30;
 const PAYMENT_DELETE_DEADLINE_DAYS = 32;
+// Standard cron cannot express "every 30 days" from an arbitrary date. */30 in day-of-month
+// means days 1 and 31, so in 31-day months it fires twice one day apart (e.g. Jan 31, Feb 1).
+// Use 1st of each month so the job runs once per month.
+const PAYMENT_CRON_SCHEDULE = "0 0 1 * *";
+const CRON_LOG_ROW_PREFIX = "cron";
 const TAR_OVERHEAD_BYTES = 10 * 1024 * 1024; // Conservative headroom for tar metadata.
+
+const REQUIRED_PRICE_STORAGE =
+  "--wallet-address, --object-id, --object-id-hash, --gb, --provider, --region";
+const REQUIRED_UPLOAD = "--quote-id, --wallet-address, --object-id, --object-id-hash";
+const REQUIRED_STORAGE_OBJECT = "--wallet-address, --object-key";
 
 const CLOUD_HELP_TEXT = [
   "☁️ **mnemospark Cloud Commands**",
   "",
-  "• `/cloud` or `/cloud help`",
-  "• `/cloud backup <file>`",
-  "• `/cloud backup <directory>`",
-  "• `/cloud price-storage --wallet-address <addr> --object-id <id> --object-id-hash <hash> --gb <gb> --provider <provider> --region <region>`",
-  "• `/cloud upload --quote-id <quote-id> --wallet-address <addr> --object-id <id> --object-id-hash <hash>`",
-  "• `/cloud ls --wallet-address <addr> --object-key <s3-key>`",
-  "• `/cloud download --wallet-address <addr> --object-key <s3-key>`",
-  "• `/cloud delete --wallet-address <addr> --object-key <s3-key>`",
+  "• `/cloud` or `/cloud help` — show this message",
   "",
-  "Backup creates a tar+gzip object in /tmp and appends object metadata to ~/.openclaw/mnemospark/object.log.",
+  "• `/cloud backup <file>` or `/cloud backup <directory>`",
+  "  Required: <file> or <directory> (path to back up)",
+  "",
+  "• `/cloud price-storage --wallet-address <addr> --object-id <id> --object-id-hash <hash> --gb <gb> --provider <provider> --region <region>`",
+  "  Required: " + REQUIRED_PRICE_STORAGE,
+  "",
+  "• `/cloud upload --quote-id <quote-id> --wallet-address <addr> --object-id <id> --object-id-hash <hash>`",
+  "  Required: " + REQUIRED_UPLOAD,
+  "",
+  "• `/cloud ls --wallet-address <addr> --object-key <object-key>`",
+  "  Required: " + REQUIRED_STORAGE_OBJECT,
+  "",
+  "• `/cloud download --wallet-address <addr> --object-key <object-key>`",
+  "  Required: " + REQUIRED_STORAGE_OBJECT,
+  "",
+  "• `/cloud delete --wallet-address <addr> --object-key <object-key>`",
+  "  Required: " + REQUIRED_STORAGE_OBJECT,
+  "",
+  "Backup creates a tar+gzip object in ~/.openclaw/mnemospark/backup and appends object metadata to ~/.openclaw/mnemospark/object.log. Upload appends storage rows and cron-tracking rows to object.log, and keeps job entries in ~/.openclaw/mnemospark/crontab.txt. All storage commands (price-storage, upload, ls, download, delete) require --wallet-address.",
 ].join("\n");
 
 type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
@@ -322,6 +345,10 @@ function resolveObjectLogPath(homeDir?: string): string {
   return join(homeDir ?? homedir(), OBJECT_LOG_SUBPATH);
 }
 
+function resolveCronTablePath(homeDir?: string): string {
+  return join(homeDir ?? homedir(), CRON_TABLE_SUBPATH);
+}
+
 async function appendObjectLogLine(line: string, homeDir?: string): Promise<string> {
   const objectLogPath = resolveObjectLogPath(homeDir);
   await mkdir(dirname(objectLogPath), { recursive: true });
@@ -411,20 +438,27 @@ export async function buildBackupObject(
     throw new Error("Backup target must be a file or directory");
   }
 
-  const tmpDir = options.tmpDir ?? DEFAULT_TMP_DIR;
-  if (!existsSync(tmpDir)) {
-    throw new Error("Temporary directory does not exist");
+  const tmpDir = options.tmpDir ?? DEFAULT_BACKUP_DIR;
+  let tmpStats;
+  try {
+    tmpStats = await stat(tmpDir);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      await mkdir(tmpDir, { recursive: true });
+      tmpStats = await stat(tmpDir);
+    } else {
+      throw error;
+    }
   }
-  const tmpStats = await stat(tmpDir);
   if (!tmpStats.isDirectory()) {
-    throw new Error("Temporary path is not a directory");
+    throw new Error("Backup path is not a directory");
   }
 
   const inputSizeBytes = await calculateInputSizeBytes(targetPath);
   const availableDiskBytes = getAvailableDiskBytes(tmpDir, options);
   const requiredDiskBytes = inputSizeBytes + TAR_OVERHEAD_BYTES;
   if (availableDiskBytes < requiredDiskBytes) {
-    throw new Error("Insufficient /tmp disk space for backup object");
+    throw new Error("Insufficient disk space for backup object");
   }
 
   const objectId = createObjectId(options);
@@ -484,6 +518,27 @@ type LoggedPriceStorageQuote = {
   location: string;
 };
 
+type StoragePaymentCronJob = {
+  cronId: string;
+  createdAt: string;
+  schedule: string;
+  command: string;
+  quoteId: string;
+  storagePrice: number;
+  walletAddress: string;
+  objectId: string;
+  objectKey: string;
+  provider: string;
+  bucketName: string;
+  location: string;
+};
+
+type LoggedStoragePaymentCron = {
+  cronId: string;
+  objectId: string;
+  objectKey: string;
+};
+
 function formatTimestamp(date: Date): string {
   const pad = (value: number): string => value.toString().padStart(2, "0");
   return [
@@ -534,6 +589,94 @@ function parseLoggedPriceStorageQuote(line: string): LoggedPriceStorageQuote | n
   };
 }
 
+function parseLoggedStoragePaymentCron(line: string): LoggedStoragePaymentCron | null {
+  const parts = line.split(",");
+  if (parts.length < 5) {
+    return null;
+  }
+  if ((parts[0]?.trim() ?? "").toLowerCase() !== CRON_LOG_ROW_PREFIX) {
+    return null;
+  }
+
+  const cronId = parts[2]?.trim() ?? "";
+  const objectId = parts[3]?.trim() ?? "";
+  const objectKey = parts[4]?.trim() ?? "";
+  if (!cronId || !objectId || !objectKey) {
+    return null;
+  }
+
+  return {
+    cronId,
+    objectId,
+    objectKey,
+  };
+}
+
+function parseStoragePaymentCronJobLine(line: string): StoragePaymentCronJob | null {
+  const trimmed = line.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  let payload: unknown;
+  try {
+    payload = JSON.parse(trimmed);
+  } catch {
+    return null;
+  }
+
+  if (!payload || typeof payload !== "object") {
+    return null;
+  }
+  const record = payload as Record<string, unknown>;
+
+  const cronId = typeof record.cronId === "string" ? record.cronId.trim() : "";
+  const createdAt = typeof record.createdAt === "string" ? record.createdAt.trim() : "";
+  const schedule = typeof record.schedule === "string" ? record.schedule.trim() : "";
+  const command = typeof record.command === "string" ? record.command.trim() : "";
+  const quoteId = typeof record.quoteId === "string" ? record.quoteId.trim() : "";
+  const storagePrice = typeof record.storagePrice === "number" ? record.storagePrice : Number.NaN;
+  const walletAddress = typeof record.walletAddress === "string" ? record.walletAddress.trim() : "";
+  const objectId = typeof record.objectId === "string" ? record.objectId.trim() : "";
+  const objectKey = typeof record.objectKey === "string" ? record.objectKey.trim() : "";
+  const provider = typeof record.provider === "string" ? record.provider.trim() : "";
+  const bucketName = typeof record.bucketName === "string" ? record.bucketName.trim() : "";
+  const location = typeof record.location === "string" ? record.location.trim() : "";
+
+  if (
+    !cronId ||
+    !createdAt ||
+    !schedule ||
+    !command ||
+    !quoteId ||
+    !Number.isFinite(storagePrice) ||
+    storagePrice <= 0 ||
+    !walletAddress ||
+    !objectId ||
+    !objectKey ||
+    !provider ||
+    !bucketName ||
+    !location
+  ) {
+    return null;
+  }
+
+  return {
+    cronId,
+    createdAt,
+    schedule,
+    command,
+    quoteId,
+    storagePrice,
+    walletAddress,
+    objectId,
+    objectKey,
+    provider,
+    bucketName,
+    location,
+  };
+}
+
 async function findLoggedPriceStorageQuote(
   quoteId: string,
   homeDir?: string,
@@ -561,6 +704,163 @@ async function findLoggedPriceStorageQuote(
     }
   }
   return null;
+}
+
+async function findLoggedStoragePaymentCronByObjectKey(
+  objectKey: string,
+  homeDir?: string,
+): Promise<LoggedStoragePaymentCron | null> {
+  const objectLogPath = resolveObjectLogPath(homeDir);
+
+  let content: string;
+  try {
+    content = await readFile(objectLogPath, "utf-8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return null;
+    }
+    throw error;
+  }
+
+  const lines = content
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+  for (let idx = lines.length - 1; idx >= 0; idx -= 1) {
+    const parsed = parseLoggedStoragePaymentCron(lines[idx]);
+    if (parsed && parsed.objectKey === objectKey) {
+      return parsed;
+    }
+  }
+  return null;
+}
+
+function quoteCronArgument(value: string | number): string {
+  return JSON.stringify(String(value));
+}
+
+function buildStoragePaymentCronCommand(job: {
+  quoteId: string;
+  walletAddress: string;
+  objectId: string;
+  objectKey: string;
+  storagePrice: number;
+}): string {
+  return [
+    "mnemospark-pay-storage",
+    "--quote-id",
+    quoteCronArgument(job.quoteId),
+    "--wallet-address",
+    quoteCronArgument(job.walletAddress),
+    "--object-id",
+    quoteCronArgument(job.objectId),
+    "--object-key",
+    quoteCronArgument(job.objectKey),
+    "--storage-price",
+    quoteCronArgument(job.storagePrice),
+  ].join(" ");
+}
+
+async function appendStoragePaymentCronLog(
+  cronJob: StoragePaymentCronJob,
+  homeDir?: string,
+): Promise<string> {
+  return appendObjectLogLine(
+    [
+      CRON_LOG_ROW_PREFIX,
+      cronJob.createdAt,
+      cronJob.cronId,
+      cronJob.objectId,
+      cronJob.objectKey,
+      cronJob.quoteId,
+      cronJob.storagePrice.toString(),
+    ].join(","),
+    homeDir,
+  );
+}
+
+async function appendStoragePaymentCronJob(
+  cronJob: StoragePaymentCronJob,
+  homeDir?: string,
+): Promise<string> {
+  const cronTablePath = resolveCronTablePath(homeDir);
+  await mkdir(dirname(cronTablePath), { recursive: true });
+  await appendFile(cronTablePath, `${JSON.stringify(cronJob)}\n`, "utf-8");
+  return cronTablePath;
+}
+
+async function removeStoragePaymentCronJob(cronId: string, homeDir?: string): Promise<boolean> {
+  const cronTablePath = resolveCronTablePath(homeDir);
+
+  let content: string;
+  try {
+    content = await readFile(cronTablePath, "utf-8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return false;
+    }
+    throw error;
+  }
+
+  const lines = content.split(/\r?\n/);
+  let removed = false;
+  const keptLines: string[] = [];
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      continue;
+    }
+    const parsed = parseStoragePaymentCronJobLine(trimmed);
+    if (parsed && parsed.cronId === cronId) {
+      removed = true;
+      continue;
+    }
+    keptLines.push(trimmed);
+  }
+
+  if (!removed) {
+    return false;
+  }
+
+  await mkdir(dirname(cronTablePath), { recursive: true });
+  const nextContent = keptLines.length > 0 ? `${keptLines.join("\n")}\n` : "";
+  await writeFile(cronTablePath, nextContent, "utf-8");
+  return true;
+}
+
+async function createStoragePaymentCronJob(
+  upload: StorageUploadResponse,
+  storagePrice: number,
+  homeDir?: string,
+  nowDateFn: () => Date = () => new Date(),
+): Promise<StoragePaymentCronJob> {
+  const cronId = randomUUID();
+  const createdAt = formatTimestamp(nowDateFn());
+  const cronJob: StoragePaymentCronJob = {
+    cronId,
+    createdAt,
+    schedule: PAYMENT_CRON_SCHEDULE,
+    command: buildStoragePaymentCronCommand({
+      quoteId: upload.quote_id,
+      walletAddress: upload.addr,
+      objectId: upload.object_id,
+      objectKey: upload.object_key,
+      storagePrice,
+    }),
+    quoteId: upload.quote_id,
+    storagePrice,
+    walletAddress: upload.addr,
+    objectId: upload.object_id,
+    objectKey: upload.object_key,
+    provider: upload.provider,
+    bucketName: upload.bucket_name,
+    location: upload.location,
+  };
+
+  await appendStoragePaymentCronJob(cronJob, homeDir);
+  await appendStoragePaymentCronLog(cronJob, homeDir);
+  return cronJob;
 }
 
 function isValidWalletPrivateKey(value: string | undefined): value is `0x${string}` {
@@ -701,14 +1001,13 @@ async function prepareUploadPayload(
 
 async function uploadPresignedObjectIfNeeded(
   uploadResponse: StorageUploadResponse,
+  uploadMode: UploadPayload["mode"],
   encryptedContent: Buffer,
   fetchImpl: FetchLike = fetch,
 ): Promise<void> {
   if (!uploadResponse.upload_url) {
-    if (encryptedContent.length > INLINE_UPLOAD_MAX_BYTES) {
-      throw new Error(
-        "Server did not return a presigned upload URL for large file upload; the file was not stored.",
-      );
+    if (uploadMode === "presigned") {
+      throw new Error("Cannot upload storage object: missing presigned upload URL.");
     }
     return;
   }
@@ -754,12 +1053,42 @@ async function appendStorageUploadLog(
   );
 }
 
-function formatStorageUploadUserMessage(upload: StorageUploadResponse): string {
+async function maybeCleanupLocalBackupArchive(archivePath: string): Promise<void> {
+  const flag = process.env.MNEMOSPARK_DELETE_BACKUP_AFTER_UPLOAD;
+  if (!flag) {
+    return;
+  }
+  const normalized = flag.trim().toLowerCase();
+  if (normalized !== "1" && normalized !== "true" && normalized !== "yes" && normalized !== "y") {
+    return;
+  }
+  try {
+    await rm(archivePath, { force: true });
+  } catch {
+    // Best-effort cleanup; ignore failures.
+  }
+}
+
+function formatStorageUploadUserMessage(upload: StorageUploadResponse, cronJobId: string): string {
   return [
     `Your file \`${upload.object_id}\` with key \`${upload.object_key}\` has been stored using \`${upload.provider}\` in \`${upload.bucket_name}\` \`${upload.location}\``,
-    `Schedule a ${PAYMENT_REMINDER_INTERVAL_DAYS}-day USDC payment reminder (cron or task scheduler) for quote \`${upload.quote_id}\`.`,
-    `If unpaid, backend will delete the object after the ${PAYMENT_DELETE_DEADLINE_DAYS}-day deadline.`,
+    `A cron job \`${cronJobId}\` has been configured to send payment monthly (on the 1st) for storage services. If payment is not sent, your \`${upload.object_id}\` will be deleted after the **${PAYMENT_DELETE_DEADLINE_DAYS}-day deadline** (${PAYMENT_REMINDER_INTERVAL_DAYS}-day billing interval + 2-day grace period).`,
+    "Thank you for using mnemospark!",
   ].join("\n");
+}
+
+function formatStorageDeleteUserMessage(
+  objectKey: string,
+  cronId: string | null,
+  cronDeleted: boolean,
+): string {
+  const statusLine = cronId
+    ? cronDeleted
+      ? `File \`${objectKey}\` has been deleted from the cloud and the cron job \`${cronId}\` has been deleted from your system.`
+      : `File \`${objectKey}\` has been deleted from the cloud and the cron job \`${cronId}\` was not found in your system.`
+    : `File \`${objectKey}\` has been deleted from the cloud and no matching cron job was found in your system.`;
+
+  return [statusLine, "Thank you for using mnemospark!"].join("\n");
 }
 
 function extractUploadErrorMessage(error: unknown): string | null {
@@ -843,35 +1172,35 @@ export function createCloudCommand(
 
       if (parsed.mode === "price-storage-invalid") {
         return {
-          text: "Cannot price storage",
+          text: `Cannot price storage: required arguments are ${REQUIRED_PRICE_STORAGE}.`,
           isError: true,
         };
       }
 
       if (parsed.mode === "upload-invalid") {
         return {
-          text: "Cannot upload storage object",
+          text: `Cannot upload storage object: required arguments are ${REQUIRED_UPLOAD}.`,
           isError: true,
         };
       }
 
       if (parsed.mode === "ls-invalid") {
         return {
-          text: "Cannot list storage object",
+          text: `Cannot list storage object: required arguments are ${REQUIRED_STORAGE_OBJECT}.`,
           isError: true,
         };
       }
 
       if (parsed.mode === "download-invalid") {
         return {
-          text: "Cannot download file",
+          text: `Cannot download file: required arguments are ${REQUIRED_STORAGE_OBJECT}.`,
           isError: true,
         };
       }
 
       if (parsed.mode === "delete-invalid") {
         return {
-          text: "Cannot delete file",
+          text: `Cannot delete file: required arguments are ${REQUIRED_STORAGE_OBJECT}.`,
           isError: true,
         };
       }
@@ -941,7 +1270,7 @@ export function createCloudCommand(
           }
 
           const archivePath = join(
-            options.backupOptions?.tmpDir ?? DEFAULT_TMP_DIR,
+            options.backupOptions?.tmpDir ?? DEFAULT_BACKUP_DIR,
             parsed.uploadRequest.object_id,
           );
           let archiveStats;
@@ -1006,13 +1335,27 @@ export function createCloudCommand(
 
           await uploadPresignedObjectIfNeeded(
             uploadResponse,
+            preparedPayload.payload.mode,
             preparedPayload.encryptedContent,
             fetchImpl,
           );
           await appendStorageUploadLog(uploadResponse, objectLogHomeDir, nowDateFn);
+          const cronStoragePriceCandidate =
+            uploadResponse.storage_price ?? loggedQuote.storagePrice;
+          const cronStoragePrice =
+            Number.isFinite(cronStoragePriceCandidate) && cronStoragePriceCandidate > 0
+              ? cronStoragePriceCandidate
+              : loggedQuote.storagePrice;
+          const cronJob = await createStoragePaymentCronJob(
+            uploadResponse,
+            cronStoragePrice,
+            objectLogHomeDir,
+            nowDateFn,
+          );
+          await maybeCleanupLocalBackupArchive(archivePath);
 
           return {
-            text: formatStorageUploadUserMessage(uploadResponse),
+            text: formatStorageUploadUserMessage(uploadResponse, cronJob.cronId),
           };
         } catch (error) {
           return {
@@ -1071,15 +1414,33 @@ export function createCloudCommand(
           if (!deleteResult.success) {
             throw new Error("delete failed");
           }
-          return {
-            text: `File ${parsed.storageObjectRequest.object_key} deleted`,
-          };
         } catch {
           return {
             text: "Cannot delete file",
             isError: true,
           };
         }
+        let cronEntry: LoggedStoragePaymentCron | null = null;
+        let cronDeleted = false;
+        try {
+          cronEntry = await findLoggedStoragePaymentCronByObjectKey(
+            parsed.storageObjectRequest.object_key,
+            objectLogHomeDir,
+          );
+          cronDeleted = cronEntry
+            ? await removeStoragePaymentCronJob(cronEntry.cronId, objectLogHomeDir)
+            : false;
+        } catch {
+          // Cloud delete already succeeded; cron lookup/removal is best-effort.
+          // Report success without implying the delete failed.
+        }
+        return {
+          text: formatStorageDeleteUserMessage(
+            parsed.storageObjectRequest.object_key,
+            cronEntry?.cronId ?? null,
+            cronDeleted,
+          ),
+        };
       }
 
       return {

@@ -12,7 +12,10 @@
  */
 
 import { signTypedData, privateKeyToAccount } from "viem/accounts";
+
+import { createNonce } from "./nonce.js";
 import { PaymentCache } from "./payment-cache.js";
+import { createNonce } from "./nonce.js";
 
 const BASE_CHAIN_ID = 8453;
 const BASE_SEPOLIA_CHAIN_ID = 84532;
@@ -31,14 +34,6 @@ const TRANSFER_TYPES = {
     { name: "nonce", type: "bytes32" },
   ],
 } as const;
-
-function createNonce(): `0x${string}` {
-  const bytes = new Uint8Array(32);
-  crypto.getRandomValues(bytes);
-  return `0x${Array.from(bytes)
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("")}` as `0x${string}`;
-}
 
 interface PaymentOption {
   scheme: string;

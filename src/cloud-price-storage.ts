@@ -1,4 +1,13 @@
 import { PROXY_PORT } from "./config.js";
+import {
+  asNonEmptyString,
+  asNumber,
+  asRecord,
+  normalizeBaseUrl,
+  normalizePaymentRequired,
+  normalizePaymentResponse,
+} from "./cloud-utils.js";
+import { normalizeWalletSignature } from "./wallet-signature.js";
 
 export const PRICE_STORAGE_PROXY_PATH = "/mnemospark/price-storage";
 export const UPLOAD_PROXY_PATH = "/mnemospark/upload";
@@ -74,13 +83,13 @@ type ProxyUploadOptions = {
 
 type BackendQuoteOptions = {
   backendBaseUrl?: string;
-  backendApiKey?: string;
+  walletSignature?: string;
   fetchImpl?: FetchLike;
 };
 
 type BackendUploadOptions = {
   backendBaseUrl?: string;
-  backendApiKey?: string;
+  walletSignature?: string;
   fetchImpl?: FetchLike;
   paymentSignature?: string;
   legacyPayment?: string;
@@ -102,38 +111,6 @@ type BackendUploadForwardResult = {
   paymentRequired?: string;
   paymentResponse?: string;
 };
-
-function normalizeBaseUrl(baseUrl: string): string {
-  return baseUrl.replace(/\/+$/, "");
-}
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return null;
-  }
-  return value as Record<string, unknown>;
-}
-
-function asNumber(value: unknown): number | null {
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return value;
-  }
-  if (typeof value === "string" && value.trim().length > 0) {
-    const parsed = Number.parseFloat(value);
-    if (Number.isFinite(parsed)) {
-      return parsed;
-    }
-  }
-  return null;
-}
-
-function asNonEmptyString(value: unknown): string | null {
-  if (typeof value !== "string") {
-    return null;
-  }
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : null;
-}
 
 function asStringRecord(value: unknown): Record<string, string> | null {
   const record = asRecord(value);
@@ -335,14 +312,6 @@ export function parseStorageUploadResponse(payload: unknown): StorageUploadRespo
   };
 }
 
-function normalizePaymentRequired(headers: Headers): string | undefined {
-  return headers.get("PAYMENT-REQUIRED") ?? headers.get("x-payment-required") ?? undefined;
-}
-
-function normalizePaymentResponse(headers: Headers): string | undefined {
-  return headers.get("PAYMENT-RESPONSE") ?? headers.get("x-payment-response") ?? undefined;
-}
-
 export async function requestPriceStorageViaProxy(
   request: PriceStorageQuoteRequest,
   options: ProxyQuoteOptions = {},
@@ -415,22 +384,23 @@ export async function forwardPriceStorageToBackend(
 ): Promise<BackendQuoteForwardResult> {
   const fetchImpl = options.fetchImpl ?? fetch;
   const backendBaseUrl = (options.backendBaseUrl ?? "").trim();
-  const backendApiKey = (options.backendApiKey ?? "").trim();
+  const walletSignature = normalizeWalletSignature(options.walletSignature);
 
   if (!backendBaseUrl) {
     throw new Error("MNEMOSPARK_BACKEND_API_BASE_URL is not configured");
   }
-  if (!backendApiKey) {
-    throw new Error("MNEMOSPARK_BACKEND_API_KEY is not configured");
+
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+  };
+  if (walletSignature) {
+    headers["X-Wallet-Signature"] = walletSignature;
   }
 
   const targetUrl = `${normalizeBaseUrl(backendBaseUrl)}/price-storage`;
   const response = await fetchImpl(targetUrl, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-api-key": backendApiKey,
-    },
+    headers,
     body: JSON.stringify(request),
   });
 
@@ -449,18 +419,20 @@ export async function forwardStorageUploadToBackend(
 ): Promise<BackendUploadForwardResult> {
   const fetchImpl = options.fetchImpl ?? fetch;
   const backendBaseUrl = (options.backendBaseUrl ?? "").trim();
-  const backendApiKey = (options.backendApiKey ?? "").trim();
+  const walletSignature = normalizeWalletSignature(options.walletSignature);
 
   if (!backendBaseUrl) {
     throw new Error("MNEMOSPARK_BACKEND_API_BASE_URL is not configured");
   }
-  if (!backendApiKey) {
-    throw new Error("MNEMOSPARK_BACKEND_API_KEY is not configured");
+  if (!walletSignature) {
+    throw new Error(
+      "Wallet required for storage endpoints: wallet key must be present to sign requests.",
+    );
   }
 
   const requestHeaders: Record<string, string> = {
     "Content-Type": "application/json",
-    "x-api-key": backendApiKey,
+    "X-Wallet-Signature": walletSignature,
   };
 
   if (options.idempotencyKey && options.idempotencyKey.trim().length > 0) {

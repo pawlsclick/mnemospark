@@ -75,7 +75,7 @@ describe("x402 payment payload compatibility", () => {
     const paymentRequired = {
       accepts: [option],
       resource: {
-        url: "https://blockrun.ai/api/v1/chat/completions",
+        url: "https://example.invalid/mnemospark/storage/upload",
         description: "canonical endpoint",
       },
     };
@@ -97,7 +97,7 @@ describe("x402 payment payload compatibility", () => {
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
 
     const { fetch: payFetch } = createPaymentFetch(TEST_WALLET_KEY);
-    const response = await payFetch("https://blockrun.ai/api/v1/chat/completions?debug=1", {
+    const response = await payFetch("https://example.invalid/mnemospark/storage/upload?debug=1", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ model: "google/gemini-2.5-flash", messages: [] }),
@@ -162,7 +162,7 @@ describe("x402 payment payload compatibility", () => {
     const paymentRequired = {
       accepts: [option],
       resource: {
-        url: "https://blockrun.ai/api/v1/chat/completions",
+        url: "https://example.invalid/mnemospark/storage/upload",
         description: "canonical resource",
       },
     };
@@ -198,14 +198,14 @@ describe("x402 payment payload compatibility", () => {
     const { fetch: payFetch } = createPaymentFetch(TEST_WALLET_KEY);
 
     // First request: 402 -> signed retry (fills payment cache).
-    await payFetch("https://blockrun.ai/api/v1/chat/completions?first=1", {
+    await payFetch("https://example.invalid/mnemospark/storage/upload?first=1", {
       method: "POST",
       body: JSON.stringify({ model: "moonshot/kimi-k2.5" }),
     });
 
     // Second request: pre-auth path should sign using cached canonical resource.
     await payFetch(
-      "https://blockrun.ai/api/v1/chat/completions?second=1",
+      "https://example.invalid/mnemospark/storage/upload?second=1",
       {
         method: "POST",
         body: JSON.stringify({ model: "moonshot/kimi-k2.5" }),
