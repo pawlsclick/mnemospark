@@ -705,6 +705,11 @@ async function uploadPresignedObjectIfNeeded(
   fetchImpl: FetchLike = fetch,
 ): Promise<void> {
   if (!uploadResponse.upload_url) {
+    if (encryptedContent.length > INLINE_UPLOAD_MAX_BYTES) {
+      throw new Error(
+        "Server did not return a presigned upload URL for large file upload; the file was not stored.",
+      );
+    }
     return;
   }
 
