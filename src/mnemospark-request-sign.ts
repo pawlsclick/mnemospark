@@ -1,5 +1,6 @@
 import { getAddress } from "viem";
 import { privateKeyToAccount, signTypedData } from "viem/accounts";
+import { createNonce } from "./nonce.js";
 
 export const MNEMOSPARK_DOMAIN_NAME = "Mnemospark";
 export const MNEMOSPARK_DOMAIN_VERSION = "1";
@@ -50,14 +51,6 @@ function encodeBase64Json(value: unknown): string {
 function decodeBase64Json<T>(value: string): T {
   const decoded = Buffer.from(value, "base64").toString("utf8");
   return JSON.parse(decoded) as T;
-}
-
-function createNonce(): `0x${string}` {
-  const bytes = new Uint8Array(32);
-  crypto.getRandomValues(bytes);
-  return `0x${Array.from(bytes)
-    .map((byte) => byte.toString(16).padStart(2, "0"))
-    .join("")}` as `0x${string}`;
 }
 
 function normalizeMethod(method: string): string {
