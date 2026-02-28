@@ -326,17 +326,45 @@ describe("cloud command", () => {
     expect(payload.mode).toBe("inline");
     expect(typeof payload.content_base64).toBe("string");
     expect(result.isError).not.toBe(true);
-    expect(result.text).toContain(
-      "Your file `obj-upload-001` with key `obj-upload-001.tar.gz.enc`",
+    if (!result.text) {
+      throw new Error("Expected upload response text");
+    }
+    const messageLines = result.text.split("\n");
+    expect(messageLines).toHaveLength(3);
+    expect(messageLines[0]).toBe(
+      "Your file `obj-upload-001` with key `obj-upload-001.tar.gz.enc` has been stored using `aws` in `mnemospark-1234` `us-east-1`",
     );
-    expect(result.text).toContain("30-day USDC payment reminder");
-    expect(result.text).toContain("32-day deadline");
+    expect(messageLines[1]).toContain("A cron job `");
+    expect(messageLines[1]).toContain("monthly");
+    expect(messageLines[1]).toContain("**32-day deadline**");
+    expect(messageLines[2]).toBe("Thank you for using mnemospark!");
+
+    const cronIdMatch = messageLines[1].match(/A cron job `([^`]+)` has been configured/);
+    const cronId = cronIdMatch?.[1];
+    expect(cronId).toBeTruthy();
 
     const logContent = await readFile(objectLogPath, "utf-8");
-    const lastLine = logContent.trim().split("\n").at(-1);
-    expect(lastLine).toBe(
+    const logLines = logContent.trim().split("\n");
+    const uploadLogLine = logLines.at(-2);
+    const cronLogLine = logLines.at(-1);
+    expect(uploadLogLine).toBe(
       `2026-02-25 20:10:00,quote-abc123,${walletAddress},addr-hash,tx-001,2.75,obj-upload-001,obj-upload-001.tar.gz.enc,aws,mnemospark-1234,us-east-1`,
     );
+    expect(cronLogLine).toBe(
+      `cron,2026-02-25 20:10:00,${cronId},obj-upload-001,obj-upload-001.tar.gz.enc,quote-abc123,2.75`,
+    );
+
+    const cronTablePath = join(homeDir, ".openclaw", "mnemospark", "crontab.txt");
+    const cronTableContent = await readFile(cronTablePath, "utf-8");
+    const cronEntryLine = cronTableContent.trim().split("\n").at(-1);
+    expect(cronEntryLine).toBeTruthy();
+    const cronEntry = JSON.parse(cronEntryLine ?? "{}") as Record<string, unknown>;
+    expect(cronEntry.cronId).toBe(cronId);
+    expect(cronEntry.objectId).toBe(objectId);
+    expect(cronEntry.objectKey).toBe("obj-upload-001.tar.gz.enc");
+    expect(cronEntry.quoteId).toBe("quote-abc123");
+    expect(cronEntry.storagePrice).toBe(2.75);
+    expect(cronEntry.schedule).toBe("0 0 1 * *");
 
     // By default, local backup archive should remain on disk.
     const archiveExists = await stat(archivePath);
@@ -630,10 +658,41 @@ describe("cloud command", () => {
     expect(result.text).toBe("File backup/archive.tar.gz downloaded");
   });
 
-  it("handles /cloud delete and prints success message", async () => {
+  it("handles /cloud delete, removes cron job, and prints two user messages", async () => {
+    const { homeDir } = await createSandbox();
     let capturedRequest: Record<string, unknown> | undefined;
+    const cronId = "cron-delete-001";
+
+    const objectLogPath = join(homeDir, ".openclaw", "mnemospark", "object.log");
+    const cronTablePath = join(homeDir, ".openclaw", "mnemospark", "crontab.txt");
+    await mkdir(join(homeDir, ".openclaw", "mnemospark"), { recursive: true });
+    await writeFile(
+      objectLogPath,
+      `cron,2026-02-25 20:10:00,${cronId},obj-001,backup/archive.tar.gz,quote-abc123,2.75\n`,
+      "utf-8",
+    );
+    await writeFile(
+      cronTablePath,
+      `${JSON.stringify({
+        cronId,
+        createdAt: "2026-02-25 20:10:00",
+        schedule: "0 0 1 * *",
+        command:
+          'mnemospark-pay-storage --quote-id "quote-abc123" --wallet-address "0x1234abcd" --object-id "obj-001" --object-key "backup/archive.tar.gz" --storage-price "2.75"',
+        quoteId: "quote-abc123",
+        storagePrice: 2.75,
+        walletAddress: "0x1234abcd",
+        objectId: "obj-001",
+        objectKey: "backup/archive.tar.gz",
+        provider: "aws",
+        bucketName: "wallet-bucket-001",
+        location: "us-east-1",
+      })}\n`,
+      "utf-8",
+    );
 
     const command = createCloudCommand({
+      objectLogHomeDir: homeDir,
       requestStorageDeleteFn: async (request) => {
         capturedRequest = request as Record<string, unknown>;
         return {
@@ -659,7 +718,54 @@ describe("cloud command", () => {
       location: undefined,
     });
     expect(result.isError).not.toBe(true);
-    expect(result.text).toBe("File backup/archive.tar.gz deleted");
+    expect(result.text).toBe(
+      [
+        `File \`backup/archive.tar.gz\` has been deleted from the cloud and the cron job \`${cronId}\` has been deleted from your system.`,
+        "Thank you for using mnemospark!",
+      ].join("\n"),
+    );
+
+    const cronTableContent = await readFile(cronTablePath, "utf-8");
+    expect(cronTableContent.trim()).toBe("");
+  });
+
+  it("handles /cloud delete when no cron job exists for object key", async () => {
+    const { homeDir } = await createSandbox();
+    let capturedRequest: Record<string, unknown> | undefined;
+
+    const command = createCloudCommand({
+      objectLogHomeDir: homeDir,
+      requestStorageDeleteFn: async (request) => {
+        capturedRequest = request as Record<string, unknown>;
+        return {
+          success: true,
+          key: "legacy/no-cron-object.tar.gz",
+          bucket: "wallet-bucket-001",
+          bucket_deleted: false,
+        };
+      },
+    });
+
+    const result = await command.handler({
+      channel: "test",
+      isAuthorizedSender: true,
+      args: "delete --wallet-address 0x1234abcd --object-key legacy/no-cron-object.tar.gz",
+      commandBody: "delete",
+      config: {},
+    });
+
+    expect(capturedRequest).toEqual({
+      wallet_address: "0x1234abcd",
+      object_key: "legacy/no-cron-object.tar.gz",
+      location: undefined,
+    });
+    expect(result.isError).not.toBe(true);
+    expect(result.text).toBe(
+      [
+        "File `legacy/no-cron-object.tar.gz` has been deleted from the cloud and no matching cron job was found in your system.",
+        "Thank you for using mnemospark!",
+      ].join("\n"),
+    );
   });
 
   it("returns Cannot list storage object on invalid /cloud ls args", async () => {
@@ -715,5 +821,40 @@ describe("cloud command", () => {
 
     expect(result.isError).toBe(true);
     expect(result.text).toBe("Cannot delete file");
+  });
+
+  it("returns success when cloud delete succeeds but cron cleanup throws", async () => {
+    const { homeDir } = await createSandbox();
+    const objectLogPath = join(homeDir, ".openclaw", "mnemospark", "object.log");
+    const cronTablePath = join(homeDir, ".openclaw", "mnemospark", "crontab.txt");
+    await mkdir(join(homeDir, ".openclaw", "mnemospark"), { recursive: true });
+    await writeFile(
+      objectLogPath,
+      "cron,2026-02-25 20:10:00,cron-cleanup-fail,obj-002,backup/other.tar.gz,quote-xyz,1.5\n",
+      "utf-8",
+    );
+    await mkdir(cronTablePath, { recursive: true });
+
+    const command = createCloudCommand({
+      objectLogHomeDir: homeDir,
+      requestStorageDeleteFn: async () => ({
+        success: true,
+        key: "backup/other.tar.gz",
+        bucket: "wallet-bucket-001",
+        bucket_deleted: false,
+      }),
+    });
+
+    const result = await command.handler({
+      channel: "test",
+      isAuthorizedSender: true,
+      args: "delete --wallet-address 0x1234abcd --object-key backup/other.tar.gz",
+      commandBody: "delete",
+      config: {},
+    });
+
+    expect(result.isError).not.toBe(true);
+    expect(result.text).toContain("has been deleted from the cloud");
+    expect(result.text).not.toContain("Cannot delete file");
   });
 });
