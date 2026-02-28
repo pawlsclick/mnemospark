@@ -2,8 +2,8 @@
  * Tests for proxy reuse and port configuration features.
  *
  * Tests:
- *   1. getProxyPort() returns default when env var not set
- *   2. getProxyPort() returns custom port when BLOCKRUN_PROXY_PORT is set
+ *   1. Port config resolves default when env var not set
+ *   2. Port config resolves custom port when MNEMOSPARK_PROXY_PORT is set
  *   3. startProxy() reuses existing proxy instead of failing with EADDRINUSE
  *   4. Reused proxy returns correct wallet address
  *
@@ -11,7 +11,7 @@
  *   npx tsx test/proxy-reuse.ts
  */
 
-import { startProxy, getProxyPort } from "../src/proxy.js";
+import { startProxy } from "../src/proxy.js";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 
 // ─── Helpers ───
@@ -29,45 +29,74 @@ function assert(condition: boolean, msg: string) {
   }
 }
 
-// ─── Part 1: getProxyPort() ───
+async function loadProxyPortFromFreshConfig(
+  envValue: string | undefined,
+): Promise<{ port: number; defaultPort: number }> {
+  const original = process.env.MNEMOSPARK_PROXY_PORT;
+  if (envValue === undefined) {
+    delete process.env.MNEMOSPARK_PROXY_PORT;
+  } else {
+    process.env.MNEMOSPARK_PROXY_PORT = envValue;
+  }
 
-console.log("\n═══ Part 1: getProxyPort() ═══\n");
+  try {
+    const cacheBuster = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const configModule = (await import(
+      `../src/config.ts?proxy-reuse-test=${cacheBuster}`
+    )) as typeof import("../src/config.ts");
+    return {
+      port: configModule.PROXY_PORT,
+      defaultPort: 7120,
+    };
+  } finally {
+    if (original === undefined) {
+      delete process.env.MNEMOSPARK_PROXY_PORT;
+    } else {
+      process.env.MNEMOSPARK_PROXY_PORT = original;
+    }
+  }
+}
+
+// ─── Part 1: Port config resolution ───
+
+console.log("\n═══ Part 1: Port config resolution ═══\n");
 
 {
-  // Save original env value
-  const originalPort = process.env.BLOCKRUN_PROXY_PORT;
-
   // Test 1: Default port when env var not set
-  delete process.env.BLOCKRUN_PROXY_PORT;
-  const defaultPort = getProxyPort();
-  assert(defaultPort === 8402, `Default port is 8402: ${defaultPort}`);
+  const defaultConfig = await loadProxyPortFromFreshConfig(undefined);
+  assert(
+    defaultConfig.port === defaultConfig.defaultPort,
+    `Default port is ${defaultConfig.defaultPort}: ${defaultConfig.port}`,
+  );
 
   // Test 2: Custom port from env var
-  process.env.BLOCKRUN_PROXY_PORT = "9999";
-  const customPort = getProxyPort();
+  const customConfig = await loadProxyPortFromFreshConfig("9999");
+  const customPort = customConfig.port;
   assert(customPort === 9999, `Custom port from env: ${customPort}`);
 
   // Test 3: Invalid port falls back to default
-  process.env.BLOCKRUN_PROXY_PORT = "invalid";
-  const invalidPort = getProxyPort();
-  assert(invalidPort === 8402, `Invalid env falls back to 8402: ${invalidPort}`);
+  const invalidConfig = await loadProxyPortFromFreshConfig("invalid");
+  const invalidPort = invalidConfig.port;
+  assert(
+    invalidPort === invalidConfig.defaultPort,
+    `Invalid env falls back to ${invalidConfig.defaultPort}: ${invalidPort}`,
+  );
 
   // Test 4: Out of range port falls back to default
-  process.env.BLOCKRUN_PROXY_PORT = "99999";
-  const outOfRange = getProxyPort();
-  assert(outOfRange === 8402, `Out of range falls back to 8402: ${outOfRange}`);
+  const outOfRangeConfig = await loadProxyPortFromFreshConfig("99999");
+  const outOfRange = outOfRangeConfig.port;
+  assert(
+    outOfRange === outOfRangeConfig.defaultPort,
+    `Out of range falls back to ${outOfRangeConfig.defaultPort}: ${outOfRange}`,
+  );
 
   // Test 5: Zero port falls back to default
-  process.env.BLOCKRUN_PROXY_PORT = "0";
-  const zeroPort = getProxyPort();
-  assert(zeroPort === 8402, `Zero falls back to 8402: ${zeroPort}`);
-
-  // Restore original env value
-  if (originalPort !== undefined) {
-    process.env.BLOCKRUN_PROXY_PORT = originalPort;
-  } else {
-    delete process.env.BLOCKRUN_PROXY_PORT;
-  }
+  const zeroConfig = await loadProxyPortFromFreshConfig("0");
+  const zeroPort = zeroConfig.port;
+  assert(
+    zeroPort === zeroConfig.defaultPort,
+    `Zero falls back to ${zeroConfig.defaultPort}: ${zeroPort}`,
+  );
 }
 
 // ─── Part 2: Proxy Reuse ───

@@ -1,135 +1,190 @@
 /**
- * Test wallet persistence across gateway restarts
+ * Systemd-free wallet persistence integration checks.
+ *
+ * These tests avoid `openclaw gateway start` so they can run in cloud/CI
+ * environments without user-level systemd. They validate the same core
+ * behavior using runtime modules directly:
+ *   - Wallet persistence across proxy restarts
+ *   - Env var wallet usage without writing wallet files
  */
 
-import { describe, it, before, after } from "node:test";
 import assert from "node:assert";
-import { exec } from "node:child_process";
-import { promisify } from "node:util";
-import { readFile, unlink, mkdir } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, rm, unlink } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { homedir } from "node:os";
+import { after, before, describe, it } from "node:test";
 
-const execAsync = promisify(exec);
+type RuntimeModules = {
+  resolveOrGenerateWalletKey: () => Promise<{
+    key: string;
+    address: string;
+    source: "saved" | "env" | "generated";
+  }>;
+  WALLET_FILE: string;
+  LEGACY_WALLET_FILE: string;
+  startProxy: (options: {
+    walletKey: string;
+    port?: number;
+    onReady?: (port: number) => void;
+    onError?: (error: Error) => void;
+  }) => Promise<{ close: () => Promise<void>; port: number }>;
+};
 
-const WALLET_FILE = join(homedir(), ".openclaw", "blockrun", "wallet.key");
+const TEST_TIMEOUT_MS = 10_000;
+const originalHome = process.env.HOME;
+let testHomeDir = "";
+let runtime: RuntimeModules;
+let activeProxyCloser: (() => Promise<void>) | null = null;
 
-async function waitForGatewayStart(timeoutMs = 15000): Promise<void> {
+function randomPort(): number {
+  return 21000 + Math.floor(Math.random() * 2000);
+}
+
+async function waitForProxyHealth(port: number, timeoutMs = TEST_TIMEOUT_MS): Promise<void> {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
     try {
-      const res = await fetch("http://127.0.0.1:8402/health");
-      if (res.ok) return;
+      const response = await fetch(`http://127.0.0.1:${port}/health`);
+      if (response.ok) {
+        const payload = (await response.json()) as { status?: string };
+        if (payload.status === "ok") {
+          return;
+        }
+      }
     } catch {
-      // Not ready yet
+      // proxy may still be starting
     }
-    await new Promise((r) => setTimeout(r, 500));
+    await new Promise((resolve) => setTimeout(resolve, 200));
   }
-  throw new Error("Gateway failed to start within timeout");
+  throw new Error(`Proxy failed to become healthy on port ${port} within timeout`);
 }
 
-describe("Wallet Persistence", () => {
-  let gatewayProcess: { pid?: number } | null = null;
+async function removeFileIfExists(path: string): Promise<void> {
+  try {
+    await unlink(path);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw error;
+    }
+  }
+}
+
+async function assertFileMissing(path: string): Promise<void> {
+  await assert.rejects(
+    async () => access(path),
+    (error: unknown) => (error as NodeJS.ErrnoException).code === "ENOENT",
+  );
+}
+
+describe("Wallet Persistence (systemd-free)", () => {
+  before(async () => {
+    testHomeDir = await mkdtemp(join(tmpdir(), "mnemospark-wallet-persist-"));
+    process.env.HOME = testHomeDir;
+    await mkdir(join(testHomeDir, ".openclaw"), { recursive: true });
+
+    const cacheBuster = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const authModule = (await import(
+      `../src/auth.ts?wallet-persistence-test=${cacheBuster}`
+    )) as typeof import("../src/auth.ts");
+    const proxyModule = (await import(
+      `../src/proxy.ts?wallet-persistence-test=${cacheBuster}`
+    )) as typeof import("../src/proxy.ts");
+
+    runtime = {
+      resolveOrGenerateWalletKey: authModule.resolveOrGenerateWalletKey,
+      WALLET_FILE: authModule.WALLET_FILE,
+      LEGACY_WALLET_FILE: authModule.LEGACY_WALLET_FILE,
+      startProxy: proxyModule.startProxy,
+    };
+  });
 
   after(async () => {
-    // Cleanup: stop gateway if running
-    if (gatewayProcess?.pid) {
+    if (activeProxyCloser) {
       try {
-        process.kill(gatewayProcess.pid);
+        await activeProxyCloser();
       } catch {
-        // Already stopped
+        // Best-effort cleanup.
+      } finally {
+        activeProxyCloser = null;
       }
+    }
+    delete process.env.BLOCKRUN_WALLET_KEY;
+
+    if (originalHome === undefined) {
+      delete process.env.HOME;
+    } else {
+      process.env.HOME = originalHome;
+    }
+
+    if (testHomeDir) {
+      await rm(testHomeDir, { recursive: true, force: true });
     }
   });
 
-  it("should persist wallet across gateway restarts", async () => {
-    // Clean slate: remove any existing wallet
-    try {
-      await unlink(WALLET_FILE);
-    } catch {
-      // File doesn't exist, that's fine
-    }
+  it("persists wallet across proxy restarts", async () => {
+    delete process.env.BLOCKRUN_WALLET_KEY;
+    await removeFileIfExists(runtime.WALLET_FILE);
+    await removeFileIfExists(runtime.LEGACY_WALLET_FILE);
 
-    // Test 1: First gateway start should generate wallet
-    console.log("\n=== Test 1: First gateway start ===");
-    const proc1 = exec("npx openclaw gateway start");
-    gatewayProcess = proc1;
+    const generated = await runtime.resolveOrGenerateWalletKey();
+    assert.equal(generated.source, "generated");
+    assert.ok(generated.key.startsWith("0x"));
+    assert.equal(generated.key.length, 66);
 
-    await waitForGatewayStart();
+    const walletOnDisk = (await readFile(runtime.WALLET_FILE, "utf-8")).trim();
+    assert.equal(walletOnDisk, generated.key);
 
-    // Wallet file should exist
-    let wallet1: string;
-    try {
-      wallet1 = (await readFile(WALLET_FILE, "utf-8")).trim();
-      assert.ok(wallet1.startsWith("0x"), "Wallet should start with 0x");
-      assert.strictEqual(wallet1.length, 66, "Wallet should be 66 characters");
-      console.log(`✓ Wallet created: ${wallet1.slice(0, 20)}...`);
-    } catch (err) {
-      throw new Error(`Wallet file not created: ${err}`);
-    }
+    const port = randomPort();
+    const firstProxy = await runtime.startProxy({
+      walletKey: generated.key,
+      port,
+    });
+    activeProxyCloser = firstProxy.close;
+    await waitForProxyHealth(port);
+    await firstProxy.close();
+    activeProxyCloser = null;
 
-    // Stop gateway
-    proc1.kill();
-    await new Promise((r) => setTimeout(r, 2000));
+    const loaded = await runtime.resolveOrGenerateWalletKey();
+    assert.equal(loaded.source, "saved");
+    assert.equal(loaded.key, generated.key);
 
-    // Test 2: Wallet should still exist after stop
-    console.log("\n=== Test 2: After gateway stop ===");
-    try {
-      const walletAfterStop = (await readFile(WALLET_FILE, "utf-8")).trim();
-      assert.strictEqual(walletAfterStop, wallet1, "Wallet should persist after stop");
-      console.log(`✓ Wallet still exists after stop`);
-    } catch {
-      throw new Error("Wallet was deleted after gateway stop");
-    }
+    const secondProxy = await runtime.startProxy({
+      walletKey: loaded.key,
+      port,
+    });
+    activeProxyCloser = secondProxy.close;
+    await waitForProxyHealth(port);
+    await secondProxy.close();
+    activeProxyCloser = null;
 
-    // Test 3: Second gateway start should reuse wallet
-    console.log("\n=== Test 3: Second gateway start ===");
-    const proc2 = exec("npx openclaw gateway start");
-    gatewayProcess = proc2;
-
-    await waitForGatewayStart();
-
-    try {
-      const wallet2 = (await readFile(WALLET_FILE, "utf-8")).trim();
-      assert.strictEqual(wallet2, wallet1, "Wallet should NOT regenerate on restart");
-      console.log(`✓✓✓ SUCCESS: Wallet persisted across restarts!`);
-    } catch (err) {
-      throw new Error(`Wallet verification failed: ${err}`);
-    }
-
-    // Cleanup
-    proc2.kill();
+    const walletAfterRestart = (await readFile(runtime.WALLET_FILE, "utf-8")).trim();
+    assert.equal(walletAfterRestart, generated.key);
   });
 
-  it("should use env var wallet when BLOCKRUN_WALLET_KEY is set", async () => {
-    const testKey = "0x" + "a".repeat(64);
-    process.env.BLOCKRUN_WALLET_KEY = testKey;
+  it("uses env var wallet key without writing wallet files", async () => {
+    const envKey = `0x${"a".repeat(64)}`;
+    process.env.BLOCKRUN_WALLET_KEY = envKey;
 
-    // Remove saved wallet file
-    try {
-      await unlink(WALLET_FILE);
-    } catch {
-      // File doesn't exist
-    }
+    await removeFileIfExists(runtime.WALLET_FILE);
+    await removeFileIfExists(runtime.LEGACY_WALLET_FILE);
 
-    const proc = exec("npx openclaw gateway start");
-    gatewayProcess = proc;
+    const resolved = await runtime.resolveOrGenerateWalletKey();
+    assert.equal(resolved.source, "env");
+    assert.equal(resolved.key, envKey);
 
-    await waitForGatewayStart();
+    await assertFileMissing(runtime.WALLET_FILE);
+    await assertFileMissing(runtime.LEGACY_WALLET_FILE);
 
-    // Should NOT create wallet file (using env var)
-    try {
-      await readFile(WALLET_FILE, "utf-8");
-      throw new Error("Wallet file should NOT be created when env var is set");
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
-        console.log(`✓ Correctly using env var instead of file`);
-      } else {
-        throw err;
-      }
-    }
+    const port = randomPort();
+    const proxy = await runtime.startProxy({
+      walletKey: resolved.key,
+      port,
+    });
+    activeProxyCloser = proxy.close;
+    await waitForProxyHealth(port);
+    await proxy.close();
+    activeProxyCloser = null;
 
-    proc.kill();
     delete process.env.BLOCKRUN_WALLET_KEY;
   });
 });
