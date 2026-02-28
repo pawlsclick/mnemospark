@@ -1414,26 +1414,33 @@ export function createCloudCommand(
           if (!deleteResult.success) {
             throw new Error("delete failed");
           }
-          const cronEntry = await findLoggedStoragePaymentCronByObjectKey(
-            parsed.storageObjectRequest.object_key,
-            objectLogHomeDir,
-          );
-          const cronDeleted = cronEntry
-            ? await removeStoragePaymentCronJob(cronEntry.cronId, objectLogHomeDir)
-            : false;
-          return {
-            text: formatStorageDeleteUserMessage(
-              parsed.storageObjectRequest.object_key,
-              cronEntry?.cronId ?? null,
-              cronDeleted,
-            ),
-          };
         } catch {
           return {
             text: "Cannot delete file",
             isError: true,
           };
         }
+        let cronEntry: LoggedStoragePaymentCron | null = null;
+        let cronDeleted = false;
+        try {
+          cronEntry = await findLoggedStoragePaymentCronByObjectKey(
+            parsed.storageObjectRequest.object_key,
+            objectLogHomeDir,
+          );
+          cronDeleted = cronEntry
+            ? await removeStoragePaymentCronJob(cronEntry.cronId, objectLogHomeDir)
+            : false;
+        } catch {
+          // Cloud delete already succeeded; cron lookup/removal is best-effort.
+          // Report success without implying the delete failed.
+        }
+        return {
+          text: formatStorageDeleteUserMessage(
+            parsed.storageObjectRequest.object_key,
+            cronEntry?.cronId ?? null,
+            cronDeleted,
+          ),
+        };
       }
 
       return {

@@ -822,4 +822,39 @@ describe("cloud command", () => {
     expect(result.isError).toBe(true);
     expect(result.text).toBe("Cannot delete file");
   });
+
+  it("returns success when cloud delete succeeds but cron cleanup throws", async () => {
+    const { homeDir } = await createSandbox();
+    const objectLogPath = join(homeDir, ".openclaw", "mnemospark", "object.log");
+    const cronTablePath = join(homeDir, ".openclaw", "mnemospark", "crontab.txt");
+    await mkdir(join(homeDir, ".openclaw", "mnemospark"), { recursive: true });
+    await writeFile(
+      objectLogPath,
+      "cron,2026-02-25 20:10:00,cron-cleanup-fail,obj-002,backup/other.tar.gz,quote-xyz,1.5\n",
+      "utf-8",
+    );
+    await mkdir(cronTablePath, { recursive: true });
+
+    const command = createCloudCommand({
+      objectLogHomeDir: homeDir,
+      requestStorageDeleteFn: async () => ({
+        success: true,
+        key: "backup/other.tar.gz",
+        bucket: "wallet-bucket-001",
+        bucket_deleted: false,
+      }),
+    });
+
+    const result = await command.handler({
+      channel: "test",
+      isAuthorizedSender: true,
+      args: "delete --wallet-address 0x1234abcd --object-key backup/other.tar.gz",
+      commandBody: "delete",
+      config: {},
+    });
+
+    expect(result.isError).not.toBe(true);
+    expect(result.text).toContain("has been deleted from the cloud");
+    expect(result.text).not.toContain("Cannot delete file");
+  });
 });
