@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { randomBytes as randomBytesNode, createHash } from "node:crypto";
 import { createReadStream, existsSync, statfsSync } from "node:fs";
-import { appendFile, lstat, mkdir, readdir, stat } from "node:fs/promises";
+import { appendFile, lstat, mkdir, readdir, rm, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 
@@ -281,24 +281,29 @@ export async function buildBackupObject(
 
   const objectId = createObjectId(options);
   const archivePath = join(tmpDir, objectId);
-  await runTarGzip(archivePath, targetPath);
 
-  const archiveStats = await stat(archivePath);
-  const objectIdHash = await sha256File(archivePath);
-  const objectSizeGb = toGbString(archiveStats.size);
+  try {
+    await runTarGzip(archivePath, targetPath);
+    const archiveStats = await stat(archivePath);
+    const objectIdHash = await sha256File(archivePath);
+    const objectSizeGb = toGbString(archiveStats.size);
 
-  const objectLogPath = await appendObjectLogLine(
-    `${objectId},${objectIdHash},${objectSizeGb}`,
-    options.homeDir,
-  );
+    const objectLogPath = await appendObjectLogLine(
+      `${objectId},${objectIdHash},${objectSizeGb}`,
+      options.homeDir,
+    );
 
-  return {
-    objectId,
-    objectIdHash,
-    objectSizeGb,
-    archivePath,
-    objectLogPath,
-  };
+    return {
+      objectId,
+      objectIdHash,
+      objectSizeGb,
+      archivePath,
+      objectLogPath,
+    };
+  } catch (error) {
+    await rm(archivePath, { force: true }).catch(() => undefined);
+    throw error;
+  }
 }
 
 async function appendPriceStorageQuoteLog(
@@ -340,7 +345,7 @@ export function createCloudCommand(
     name: "cloud",
     description: "Manage mnemospark cloud storage workflow commands",
     acceptsArgs: true,
-    requireAuth: false,
+    requireAuth: true,
     handler: async (ctx) => {
       const parsed = parseCloudArgs(ctx.args);
 

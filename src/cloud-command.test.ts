@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -36,6 +36,11 @@ function randomBytesFixture(size: number): Buffer {
 }
 
 describe("cloud command", () => {
+  it("requires authentication", () => {
+    const command = createCloudCommand();
+    expect(command.requireAuth).toBe(true);
+  });
+
   it("builds tar.gz object, computes hash/size, and appends object.log entry", async () => {
     const { homeDir, tmpBackupDir, sourceDir } = await createSandbox();
     await writeFile(join(sourceDir, "notes.txt"), "hello from mnemospark backup");
@@ -58,6 +63,28 @@ describe("cloud command", () => {
     const logContent = await readFile(result.objectLogPath, "utf-8");
     const lastLine = logContent.trim().split("\n").at(-1);
     expect(lastLine).toBe(`${result.objectId},${result.objectIdHash},${result.objectSizeGb}`);
+  });
+
+  it("removes archive when metadata logging fails after archive creation", async () => {
+    const { root, tmpBackupDir, sourceDir } = await createSandbox();
+    await writeFile(join(sourceDir, "notes.txt"), "hello from mnemospark backup");
+
+    const invalidHomeDir = join(root, "home-file");
+    await writeFile(invalidHomeDir, "not a directory");
+    const filesBefore = await readdir(tmpBackupDir);
+
+    await expect(
+      buildBackupObject(sourceDir, {
+        platform: "linux",
+        homeDir: invalidHomeDir,
+        tmpDir: tmpBackupDir,
+        now: () => 1700000002000,
+        randomBytes: randomBytesFixture,
+      }),
+    ).rejects.toThrow();
+
+    const filesAfter = await readdir(tmpBackupDir);
+    expect(filesAfter).toEqual(filesBefore);
   });
 
   it("returns expected user message for /cloud backup and supports quoted paths", async () => {
