@@ -2,8 +2,6 @@ import { getAddress } from "viem";
 import { privateKeyToAccount, signTypedData } from "viem/accounts";
 import { createNonce } from "./nonce.js";
 
-import { createNonce } from "./nonce.js";
-
 export const MNEMOSPARK_DOMAIN_NAME = "Mnemospark";
 export const MNEMOSPARK_DOMAIN_VERSION = "1";
 export const MNEMOSPARK_VERIFYING_CONTRACT = "0x0000000000000000000000000000000000000001" as const;
