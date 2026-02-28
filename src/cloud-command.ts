@@ -463,9 +463,9 @@ export async function buildBackupObject(
 
   const objectId = createObjectId(options);
   const archivePath = join(tmpDir, objectId);
-  await runTarGzip(archivePath, targetPath);
 
   try {
+    await runTarGzip(archivePath, targetPath);
     const archiveStats = await stat(archivePath);
     const objectIdHash = await sha256File(archivePath);
     const objectSizeGb = toGbString(archiveStats.size);
