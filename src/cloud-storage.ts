@@ -2,6 +2,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join, resolve, sep } from "node:path";
 
 import { PROXY_PORT } from "./config.js";
+import { normalizeWalletSignature } from "./wallet-utils.js";
 
 export const STORAGE_LS_PROXY_PATH = "/mnemospark/storage/ls";
 export const STORAGE_DOWNLOAD_PROXY_PATH = "/mnemospark/storage/download";
@@ -106,11 +107,6 @@ function normalizePaymentRequired(headers: Headers): string | undefined {
 
 function normalizePaymentResponse(headers: Headers): string | undefined {
   return headers.get("PAYMENT-RESPONSE") ?? headers.get("x-payment-response") ?? undefined;
-}
-
-function normalizeWalletSignature(value: string | undefined): string | undefined {
-  const trimmed = value?.trim();
-  return trimmed && trimmed.length > 0 ? trimmed : undefined;
 }
 
 function asBooleanOrDefault(value: unknown, defaultValue: boolean): boolean {
