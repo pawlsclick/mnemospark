@@ -6,3 +6,4 @@ build/
 .serverless/
 out/
 .terraform/
+.company
