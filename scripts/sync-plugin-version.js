@@ -17,5 +17,8 @@ const pluginPath = join(root, "openclaw.plugin.json");
 const pkg = JSON.parse(readFileSync(pkgPath, "utf8"));
 const plugin = JSON.parse(readFileSync(pluginPath, "utf8"));
 
+// Keep plugin metadata in sync with package.json for version and description.
 plugin.version = pkg.version;
+plugin.description = pkg.description;
+
 writeFileSync(pluginPath, JSON.stringify(plugin, null, 2) + "\n", "utf8");
