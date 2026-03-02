@@ -1,6 +1,6 @@
 {
   "name": "mnemospark",
-  "version": "0.9.30",
+  "version": "0.1.0",
   "description": "OpenClaw plugin for mnemospark storage workflow with wallet management and x402 USDC payments via /wallet and /cloud.",
   "type": "module",
   "main": "dist/index.js",
@@ -34,7 +34,7 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "test:install-check": "node test/install-check.mjs",
-    "prepare": "husky"
+    "prepare": "node scripts/sync-plugin-version.js && husky"
   },
   "keywords": [
     "openclaw",

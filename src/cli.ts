@@ -7,6 +7,8 @@
  * Usage:
  *   npx mnemospark              # Start standalone proxy
  *   npx mnemospark --version    # Show version
+ *   npx mnemospark check-update # Check if a new version is available
+ *   npx mnemospark update       # Update to latest version
  *   npx mnemospark --port 7120  # Custom port
  *
  * For production deployments, use with PM2:
@@ -32,6 +34,8 @@ Usage:
   mnemospark [options]
   mnemospark install --default
   mnemospark install --standard
+  mnemospark check-update       Check if a new version is available
+  mnemospark update             Update to latest version
 
 Options:
   --version, -v     Show version number
@@ -66,7 +70,7 @@ type ParsedArgs = {
   version: boolean;
   help: boolean;
   port?: number;
-  command?: "install";
+  command?: "install" | "update" | "check-update";
   installMode?: "default" | "standard";
 };
 
@@ -85,6 +89,10 @@ function parseArgs(args: string[]): ParsedArgs {
     if (!result.command && !arg.startsWith("-")) {
       if (arg === "install") {
         result.command = "install";
+      } else if (arg === "update") {
+        result.command = "update";
+      } else if (arg === "check-update") {
+        result.command = "check-update";
       }
       // Treat first non-flag token as command and continue parsing remaining flags.
       continue;
@@ -148,6 +156,82 @@ async function promptReuseLegacyWallet(): Promise<boolean> {
   });
 }
 
+const NPM_REGISTRY_URL = "https://registry.npmjs.org/mnemospark/latest";
+
+interface NpmLatestResponse {
+  version?: string;
+}
+
+/**
+ * Compare two semver strings (e.g. "1.2.3"). Returns -1 if a < b, 0 if equal, 1 if a > b.
+ * Only compares major.minor.patch; ignores prerelease suffixes.
+ */
+function compareVersion(a: string, b: string): number {
+  const partsA = a.split("-")[0].split(".").map(Number);
+  const partsB = b.split("-")[0].split(".").map(Number);
+  for (let i = 0; i < Math.max(partsA.length, partsB.length); i++) {
+    const na = partsA[i] ?? 0;
+    const nb = partsB[i] ?? 0;
+    if (na < nb) return -1;
+    if (na > nb) return 1;
+  }
+  return 0;
+}
+
+async function fetchLatestVersion(): Promise<string | null> {
+  try {
+    const res = await fetch(NPM_REGISTRY_URL, {
+      headers: { Accept: "application/json" },
+    });
+    if (!res.ok) return null;
+    const data = (await res.json()) as NpmLatestResponse;
+    return data.version ?? null;
+  } catch {
+    return null;
+  }
+}
+
+async function runCheckUpdate(): Promise<void> {
+  const latest = await fetchLatestVersion();
+  if (!latest) {
+    console.log("[mnemospark] Could not fetch latest version from registry.");
+    process.exit(1);
+  }
+  const cmp = compareVersion(VERSION, latest);
+  if (cmp < 0) {
+    console.log(`[mnemospark] A new version is available: ${latest} (current: ${VERSION})`);
+    console.log("Run: npx mnemospark update");
+  } else if (cmp === 0) {
+    console.log("You are on the latest version.");
+  } else {
+    console.log(`You are on the latest version. (current: ${VERSION}, registry: ${latest})`);
+  }
+}
+
+async function runUpdate(): Promise<void> {
+  const latest = await fetchLatestVersion();
+  if (!latest) {
+    console.log("[mnemospark] Could not fetch latest version from registry.");
+    process.exit(1);
+  }
+  const cmp = compareVersion(VERSION, latest);
+  if (cmp < 0) {
+    console.log(`[mnemospark] Updating from ${VERSION} to ${latest}...`);
+    const { execSync } = await import("node:child_process");
+    try {
+      execSync(`npm install mnemospark@${latest}`, { stdio: "inherit" });
+      console.log(`[mnemospark] Updated to ${latest}.`);
+    } catch {
+      console.log(
+        "[mnemospark] npm install failed. You can update manually: npm install mnemospark@latest",
+      );
+      process.exit(1);
+    }
+  } else {
+    console.log("You are on the latest version.");
+  }
+}
+
 async function runInstall(mode: "default" | "standard"): Promise<void> {
   if (mode === "standard") {
     const legacyWallet = await readLegacyWalletIfPresent();
@@ -202,6 +286,16 @@ async function main(): Promise<void> {
   if (args.command === "install") {
     const mode = args.installMode ?? "standard";
     await runInstall(mode);
+    return;
+  }
+
+  if (args.command === "check-update") {
+    await runCheckUpdate();
+    return;
+  }
+
+  if (args.command === "update") {
+    await runUpdate();
     return;
   }
 
