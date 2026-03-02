@@ -5,6 +5,11 @@ on:
     tags:
       - "v*.*.*"
   workflow_dispatch:
+    inputs:
+      ref:
+        description: "Tag to release (e.g. v0.1.1). Required when running manually."
+        required: true
+        default: ""
 
 jobs:
   release:
@@ -14,6 +19,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.ref || github.ref }}
 
       - name: Set up Node.js 20
         uses: actions/setup-node@v4
@@ -26,8 +33,14 @@ jobs:
         run: npm ci
 
       - name: Verify tag matches package.json version
+        env:
+          INPUT_REF: ${{ github.event.inputs.ref }}
         run: |
-          TAG_VERSION="${GITHUB_REF#refs/tags/v}"
+          if [ -n "$INPUT_REF" ]; then
+            TAG_VERSION="${INPUT_REF#v}"
+          else
+            TAG_VERSION="${GITHUB_REF#refs/tags/v}"
+          fi
           PKG_VERSION=$(node -p "require('./package.json').version")
           if [ "$TAG_VERSION" != "$PKG_VERSION" ]; then
             echo "Tag version ($TAG_VERSION) does not match package.json version ($PKG_VERSION)"
@@ -58,6 +71,7 @@ jobs:
       - name: Create GitHub Release and upload tarball
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ github.event.inputs.ref || github.ref_name }}
           files: mnemospark-*.tgz
           generate_release_notes: true
         env:
