@@ -49,8 +49,10 @@ async function startProxyInBackground(api: OpenClawPluginApi): Promise<void> {
 
   if (source === "generated") {
     api.logger.info(`Generated new wallet: ${address}`);
-  } else {
+  } else if (source === "saved") {
     api.logger.info(`Using saved wallet: ${address}`);
+  } else {
+    api.logger.info(`Using wallet from MNEMOSPARK_WALLET_KEY: ${address}`);
   }
 
   const proxy = await startProxy({

@@ -283,15 +283,21 @@ async function runInstall(mode: "default" | "standard"): Promise<void> {
     }
   }
 
-  const { address } = await resolveOrGenerateWalletKey();
+  const { address, source } = await resolveOrGenerateWalletKey();
 
   await deployExtensionFiles();
 
   console.log("[mnemospark] Install complete.");
   console.log(`Your new Base blockchain wallet is: ${address}`);
-  console.log(
-    "Wallet key stored under ~/.openclaw/mnemospark/wallet/wallet.key (permissions should be chmod 600).",
-  );
+  if (source === "env") {
+    console.log(
+      "Wallet key loaded from MNEMOSPARK_WALLET_KEY. Save it to ~/.openclaw/mnemospark/wallet/wallet.key (chmod 600) if you want file-based persistence.",
+    );
+  } else {
+    console.log(
+      "Wallet key stored under ~/.openclaw/mnemospark/wallet/wallet.key (permissions should be chmod 600).",
+    );
+  }
   console.log("Add USDC on the Base network to start using mnemospark today.");
   console.log(
     "You can acquire USDC on Base from providers like Coinbase and Moonpay. Fund the wallet before running mnemospark.",
@@ -332,8 +338,10 @@ async function main(): Promise<void> {
 
   if (source === "generated") {
     console.log(`[mnemospark] Generated new wallet: ${address}`);
-  } else {
+  } else if (source === "saved") {
     console.log(`[mnemospark] Using saved wallet: ${address}`);
+  } else {
+    console.log(`[mnemospark] Using wallet from MNEMOSPARK_WALLET_KEY: ${address}`);
   }
 
   // Start the proxy

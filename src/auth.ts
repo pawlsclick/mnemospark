@@ -27,6 +27,7 @@ import { join } from "node:path";
 import { homedir } from "node:os";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 import type { ProviderAuthMethod, ProviderAuthContext, ProviderAuthResult } from "./types.js";
+import { isValidWalletPrivateKey } from "./wallet-key.js";
 
 const LEGACY_WALLET_DIR = join(homedir(), ".openclaw", "blockrun");
 const LEGACY_WALLET_FILE = join(LEGACY_WALLET_DIR, "wallet.key");
@@ -35,10 +36,6 @@ const WALLET_FILE = join(WALLET_DIR, "wallet.key");
 
 // Export for use by wallet command and CLI
 export { WALLET_FILE, LEGACY_WALLET_FILE };
-
-function isValidWalletPrivateKey(value: string | undefined): value is `0x${string}` {
-  return typeof value === "string" && /^0x[0-9a-fA-F]{64}$/.test(value.trim());
-}
 
 /**
  * Try to load a previously auto-generated wallet key from disk.

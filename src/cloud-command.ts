@@ -36,6 +36,7 @@ import {
 } from "./cloud-storage.js";
 import type { OpenClawPluginCommandDefinition } from "./types.js";
 import { createPaymentFetch, type PaymentFetchResult } from "./x402.js";
+import { isValidWalletPrivateKey } from "./wallet-key.js";
 
 const SUPPORTED_BACKUP_PLATFORMS = new Set<NodeJS.Platform>(["darwin", "linux"]);
 const BACKUP_DIR_SUBPATH = join(".openclaw", "mnemospark", "backup");
@@ -861,10 +862,6 @@ async function createStoragePaymentCronJob(
   await appendStoragePaymentCronJob(cronJob, homeDir);
   await appendStoragePaymentCronLog(cronJob, homeDir);
   return cronJob;
-}
-
-function isValidWalletPrivateKey(value: string | undefined): value is `0x${string}` {
-  return typeof value === "string" && /^0x[0-9a-fA-F]{64}$/.test(value.trim());
 }
 
 async function readWalletKeyIfPresent(walletPath: string): Promise<`0x${string}` | null> {
