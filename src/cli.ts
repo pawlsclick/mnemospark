@@ -133,6 +133,14 @@ async function deployExtensionFiles(): Promise<void> {
   const scriptsSource = join(PACKAGE_ROOT, "scripts");
   if (existsSync(scriptsSource)) {
     await cp(scriptsSource, join(EXTENSIONS_DIR, "scripts"), { recursive: true });
+
+    const mnemoScriptsDir = join(homedir(), ".openclaw", "mnemospark", "scripts");
+    await ensureDir(mnemoScriptsDir);
+    const uninstallSrc = join(scriptsSource, "uninstall.sh");
+    if (existsSync(uninstallSrc)) {
+      const content = await readFile(uninstallSrc);
+      await writeFile(join(mnemoScriptsDir, "uninstall.sh"), content, { mode: 0o755 });
+    }
   }
 
   const pluginJson = join(PACKAGE_ROOT, "openclaw.plugin.json");
