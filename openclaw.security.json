@@ -6,7 +6,7 @@
   "expectedBehaviors": [
     {
       "type": "env-access",
-      "variable": "BLOCKRUN_WALLET_KEY",
+      "variable": "MNEMOSPARK_WALLET_KEY",
       "purpose": "x402 payment signing and storage request wallet proof signing",
       "justification": "mnemospark uses this wallet key to sign USDC payment payloads and wallet-proof signatures for storage operations on Base. The key is used LOCALLY for cryptographic signing and is NEVER transmitted over the network.",
       "dataFlow": "local-only",

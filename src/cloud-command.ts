@@ -36,6 +36,7 @@ import {
 } from "./cloud-storage.js";
 import type { OpenClawPluginCommandDefinition } from "./types.js";
 import { createPaymentFetch, type PaymentFetchResult } from "./x402.js";
+import { isValidWalletPrivateKey } from "./wallet-key.js";
 
 const SUPPORTED_BACKUP_PLATFORMS = new Set<NodeJS.Platform>(["darwin", "linux"]);
 const BACKUP_DIR_SUBPATH = join(".openclaw", "mnemospark", "backup");
@@ -64,24 +65,24 @@ const REQUIRED_STORAGE_OBJECT = "--wallet-address, --object-key";
 const CLOUD_HELP_TEXT = [
   "☁️ **mnemospark Cloud Commands**",
   "",
-  "• `/cloud` or `/cloud help` — show this message",
+  "• `/mnemospark cloud` or `/mnemospark cloud help` — show this message",
   "",
-  "• `/cloud backup <file>` or `/cloud backup <directory>`",
+  "• `/mnemospark cloud backup <file>` or `/mnemospark cloud backup <directory>`",
   "  Required: <file> or <directory> (path to back up)",
   "",
-  "• `/cloud price-storage --wallet-address <addr> --object-id <id> --object-id-hash <hash> --gb <gb> --provider <provider> --region <region>`",
+  "• `/mnemospark cloud price-storage --wallet-address <addr> --object-id <id> --object-id-hash <hash> --gb <gb> --provider <provider> --region <region>`",
   "  Required: " + REQUIRED_PRICE_STORAGE,
   "",
-  "• `/cloud upload --quote-id <quote-id> --wallet-address <addr> --object-id <id> --object-id-hash <hash>`",
+  "• `/mnemospark cloud upload --quote-id <quote-id> --wallet-address <addr> --object-id <id> --object-id-hash <hash>`",
   "  Required: " + REQUIRED_UPLOAD,
   "",
-  "• `/cloud ls --wallet-address <addr> --object-key <object-key>`",
+  "• `/mnemospark cloud ls --wallet-address <addr> --object-key <object-key>`",
   "  Required: " + REQUIRED_STORAGE_OBJECT,
   "",
-  "• `/cloud download --wallet-address <addr> --object-key <object-key>`",
+  "• `/mnemospark cloud download --wallet-address <addr> --object-key <object-key>`",
   "  Required: " + REQUIRED_STORAGE_OBJECT,
   "",
-  "• `/cloud delete --wallet-address <addr> --object-key <object-key>`",
+  "• `/mnemospark cloud delete --wallet-address <addr> --object-key <object-key>`",
   "  Required: " + REQUIRED_STORAGE_OBJECT,
   "",
   "Backup creates a tar+gzip object in ~/.openclaw/mnemospark/backup and appends object metadata to ~/.openclaw/mnemospark/object.log. Upload appends storage rows and cron-tracking rows to object.log, and keeps job entries in ~/.openclaw/mnemospark/crontab.txt. All storage commands (price-storage, upload, ls, download, delete) require --wallet-address.",
@@ -863,10 +864,6 @@ async function createStoragePaymentCronJob(
   return cronJob;
 }
 
-function isValidWalletPrivateKey(value: string | undefined): value is `0x${string}` {
-  return typeof value === "string" && /^0x[0-9a-fA-F]{64}$/.test(value.trim());
-}
-
 async function readWalletKeyIfPresent(walletPath: string): Promise<`0x${string}` | null> {
   try {
     const key = (await readFile(walletPath, "utf-8")).trim();
@@ -880,14 +877,14 @@ async function readWalletKeyIfPresent(walletPath: string): Promise<`0x${string}`
 }
 
 async function resolveWalletPrivateKey(homeDir?: string): Promise<`0x${string}`> {
-  const envKey = process.env.BLOCKRUN_WALLET_KEY?.trim();
+  const envKey = process.env.MNEMOSPARK_WALLET_KEY?.trim();
   if (isValidWalletPrivateKey(envKey)) {
     return envKey;
   }
 
   const baseHome = homeDir ?? homedir();
-  const primaryWalletPath = join(baseHome, BLOCKRUN_WALLET_KEY_SUBPATH);
-  const fallbackWalletPath = join(baseHome, MNEMOSPARK_WALLET_KEY_SUBPATH);
+  const primaryWalletPath = join(baseHome, MNEMOSPARK_WALLET_KEY_SUBPATH);
+  const fallbackWalletPath = join(baseHome, BLOCKRUN_WALLET_KEY_SUBPATH);
 
   const fromPrimary = await readWalletKeyIfPresent(primaryWalletPath);
   if (fromPrimary) {
@@ -899,7 +896,9 @@ async function resolveWalletPrivateKey(homeDir?: string): Promise<`0x${string}`>
     return fromFallback;
   }
 
-  throw new Error("Wallet key not found. Configure BLOCKRUN_WALLET_KEY or run /wallet first.");
+  throw new Error(
+    "No mnemospark wallet found. Run `openclaw plugins install mnemospark` or set MNEMOSPARK_WALLET_KEY.",
+  );
 }
 
 function sha256Buffer(content: Buffer): string {
@@ -1129,7 +1128,7 @@ function extractUploadErrorMessage(error: unknown): string | null {
 function formatPriceStorageUserMessage(quote: PriceStorageQuoteResponse): string {
   return [
     `Your storage quote \`${quote.quote_id}\` is valid for 1 hour, the storage price is \`${quote.storage_price}\` for \`${quote.object_id}\` with file size of \`${quote.object_size_gb}\` in \`${quote.provider}\` \`${quote.location}\``,
-    `If you accept this quote run the command /cloud upload --quote-id \`${quote.quote_id}\` --wallet-address \`${quote.addr}\` --object-id \`${quote.object_id}\` --object-id-hash \`${quote.object_id_hash}\``,
+    `If you accept this quote run the command /mnemospark cloud upload --quote-id \`${quote.quote_id}\` --wallet-address \`${quote.addr}\` --object-id \`${quote.object_id}\` --object-id-hash \`${quote.object_id_hash}\``,
   ].join("\n");
 }
 
@@ -1251,7 +1250,7 @@ export function createCloudCommand(
           );
           if (!loggedQuote) {
             return {
-              text: "Cannot upload storage object: quote-id not found in object.log. Run /cloud price-storage first.",
+              text: "Cannot upload storage object: quote-id not found in object.log. Run /mnemospark cloud price-storage first.",
               isError: true,
             };
           }
@@ -1278,7 +1277,7 @@ export function createCloudCommand(
             archiveStats = await stat(archivePath);
           } catch {
             return {
-              text: `Cannot upload storage object: local archive not found at ${archivePath}. Run /cloud backup first.`,
+              text: `Cannot upload storage object: local archive not found at ${archivePath}. Run /mnemospark cloud backup first.`,
               isError: true,
             };
           }

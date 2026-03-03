@@ -33,6 +33,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Initial release: OpenClaw plugin for mnemospark storage workflow with wallet management and x402 USDC payments via `/wallet` and `/cloud`.
+- Initial release: OpenClaw plugin for mnemospark storage workflow with wallet management and x402 USDC payments via `/mnemospark wallet` and `/mnemospark cloud`.
 - Local proxy for backend storage endpoints.
 - `mnemospark update` and `mnemospark check-update` subcommands for version check and install.

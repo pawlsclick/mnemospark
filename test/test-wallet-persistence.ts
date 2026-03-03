@@ -5,11 +5,11 @@
  * environments without user-level systemd. They validate the same core
  * behavior using runtime modules directly:
  *   - Wallet persistence across proxy restarts
- *   - Env var wallet usage without writing wallet files
+ *   - Auto-generation and wallet file writes when no files exist
  */
 
 import assert from "node:assert";
-import { access, mkdir, mkdtemp, readFile, rm, unlink } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, unlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, it } from "node:test";
@@ -69,13 +69,6 @@ async function removeFileIfExists(path: string): Promise<void> {
   }
 }
 
-async function assertFileMissing(path: string): Promise<void> {
-  await assert.rejects(
-    async () => access(path),
-    (error: unknown) => (error as NodeJS.ErrnoException).code === "ENOENT",
-  );
-}
-
 describe("Wallet Persistence (systemd-free)", () => {
   before(async () => {
     testHomeDir = await mkdtemp(join(tmpdir(), "mnemospark-wallet-persist-"));
@@ -108,7 +101,7 @@ describe("Wallet Persistence (systemd-free)", () => {
         activeProxyCloser = null;
       }
     }
-    delete process.env.BLOCKRUN_WALLET_KEY;
+    delete process.env.MNEMOSPARK_WALLET_KEY;
 
     if (originalHome === undefined) {
       delete process.env.HOME;
@@ -122,7 +115,7 @@ describe("Wallet Persistence (systemd-free)", () => {
   });
 
   it("persists wallet across proxy restarts", async () => {
-    delete process.env.BLOCKRUN_WALLET_KEY;
+    delete process.env.MNEMOSPARK_WALLET_KEY;
     await removeFileIfExists(runtime.WALLET_FILE);
     await removeFileIfExists(runtime.LEGACY_WALLET_FILE);
 
@@ -161,19 +154,19 @@ describe("Wallet Persistence (systemd-free)", () => {
     assert.equal(walletAfterRestart, generated.key);
   });
 
-  it("uses env var wallet key without writing wallet files", async () => {
-    const envKey = `0x${"a".repeat(64)}`;
-    process.env.BLOCKRUN_WALLET_KEY = envKey;
+  it("auto-generates wallet and writes to disk when no files exist", async () => {
+    delete process.env.MNEMOSPARK_WALLET_KEY;
 
     await removeFileIfExists(runtime.WALLET_FILE);
     await removeFileIfExists(runtime.LEGACY_WALLET_FILE);
 
     const resolved = await runtime.resolveOrGenerateWalletKey();
-    assert.equal(resolved.source, "env");
-    assert.equal(resolved.key, envKey);
+    assert.equal(resolved.source, "generated");
+    assert.ok(resolved.key.startsWith("0x"));
+    assert.equal(resolved.key.length, 66);
 
-    await assertFileMissing(runtime.WALLET_FILE);
-    await assertFileMissing(runtime.LEGACY_WALLET_FILE);
+    const walletOnDisk = (await readFile(runtime.WALLET_FILE, "utf-8")).trim();
+    assert.equal(walletOnDisk, resolved.key);
 
     const port = randomPort();
     const proxy = await runtime.startProxy({
@@ -184,7 +177,5 @@ describe("Wallet Persistence (systemd-free)", () => {
     await waitForProxyHealth(port);
     await proxy.close();
     activeProxyCloser = null;
-
-    delete process.env.BLOCKRUN_WALLET_KEY;
   });
 });

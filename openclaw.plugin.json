@@ -8,7 +8,7 @@
     "properties": {
       "walletKey": {
         "type": "string",
-        "description": "EVM wallet private key (0x...). Optional — auto-generated if not set for /wallet and /cloud flows."
+        "description": "EVM wallet private key (0x...). Optional — auto-generated if not set. Set MNEMOSPARK_WALLET_KEY or use /mnemospark wallet and /mnemospark cloud flows."
       }
     }
   },

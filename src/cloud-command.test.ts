@@ -63,12 +63,14 @@ describe("cloud command", () => {
       throw new Error("Expected cloud help text");
     }
 
-    expect(result.text).toContain("/cloud ls --wallet-address <addr> --object-key <object-key>");
     expect(result.text).toContain(
-      "/cloud download --wallet-address <addr> --object-key <object-key>",
+      "/mnemospark cloud ls --wallet-address <addr> --object-key <object-key>",
     );
     expect(result.text).toContain(
-      "/cloud delete --wallet-address <addr> --object-key <object-key>",
+      "/mnemospark cloud download --wallet-address <addr> --object-key <object-key>",
+    );
+    expect(result.text).toContain(
+      "/mnemospark cloud delete --wallet-address <addr> --object-key <object-key>",
     );
     expect(result.text).not.toContain("<s3-key>");
     expect(result.text).not.toContain("s3-key");
@@ -120,7 +122,7 @@ describe("cloud command", () => {
     expect(filesAfter).toEqual(filesBefore);
   });
 
-  it("returns expected user message for /cloud backup and supports quoted paths", async () => {
+  it("returns expected user message for /mnemospark cloud backup and supports quoted paths", async () => {
     const { homeDir, tmpBackupDir, root } = await createSandbox();
     const sourcePathWithSpaces = join(root, "source file.txt");
     await writeFile(sourcePathWithSpaces, "backup me");
@@ -168,7 +170,7 @@ describe("cloud command", () => {
     expect(result.text).toBe("Cloud backup is only supported on macOS and Linux.");
   });
 
-  it("handles /cloud price-storage, logs quote, and prints next-step upload command", async () => {
+  it("handles /mnemospark cloud price-storage, logs quote, and prints next-step upload command", async () => {
     const { homeDir } = await createSandbox();
     let capturedRequest: Record<string, unknown> | undefined;
 
@@ -216,7 +218,9 @@ describe("cloud command", () => {
     });
     expect(result.isError).not.toBe(true);
     expect(result.text).toContain("Your storage quote `quote-abc123` is valid for 1 hour");
-    expect(result.text).toContain("If you accept this quote run the command /cloud upload");
+    expect(result.text).toContain(
+      "If you accept this quote run the command /mnemospark cloud upload",
+    );
     expect(result.text).toContain("--object-id-hash `hash-001`");
 
     const objectLogPath = join(homeDir, ".openclaw", "mnemospark", "object.log");
@@ -227,7 +231,7 @@ describe("cloud command", () => {
     );
   });
 
-  it("returns Cannot price storage on invalid /cloud price-storage args", async () => {
+  it("returns Cannot price storage on invalid /mnemospark cloud price-storage args", async () => {
     const command = createCloudCommand();
 
     const result = await command.handler({
@@ -271,7 +275,7 @@ describe("cloud command", () => {
     expect(result.text).toBe("Cannot price storage");
   });
 
-  it("handles /cloud upload, builds encrypted payload, logs upload response, and keeps archive by default", async () => {
+  it("handles /mnemospark cloud upload, builds encrypted payload, logs upload response, and keeps archive by default", async () => {
     const { homeDir, tmpBackupDir } = await createSandbox();
     const walletKey = `0x${"11".repeat(32)}` as const;
     const walletAddress = privateKeyToAccount(walletKey).address;
@@ -397,7 +401,7 @@ describe("cloud command", () => {
     expect(archiveExists.isFile()).toBe(true);
   });
 
-  it("optionally deletes local backup archive after successful /cloud upload when flag is set", async () => {
+  it("optionally deletes local backup archive after successful /mnemospark cloud upload when flag is set", async () => {
     const { homeDir, tmpBackupDir } = await createSandbox();
     const walletKey = `0x${"44".repeat(32)}` as const;
     const walletAddress = privateKeyToAccount(walletKey).address;
@@ -480,7 +484,7 @@ describe("cloud command", () => {
     }
   });
 
-  it("returns parsed proxy message when /cloud upload balance check fails", async () => {
+  it("returns parsed proxy message when /mnemospark cloud upload balance check fails", async () => {
     const { homeDir, tmpBackupDir } = await createSandbox();
     const walletKey = `0x${"22".repeat(32)}` as const;
     const walletAddress = privateKeyToAccount(walletKey).address;
@@ -603,7 +607,7 @@ describe("cloud command", () => {
     expect(logContent.trim()).toBe(initialLogLine);
   });
 
-  it("returns Cannot upload storage object on invalid /cloud upload args", async () => {
+  it("returns Cannot upload storage object on invalid /mnemospark cloud upload args", async () => {
     const command = createCloudCommand();
 
     const result = await command.handler({
@@ -620,7 +624,7 @@ describe("cloud command", () => {
     );
   });
 
-  it("handles /cloud ls and prints object metadata message", async () => {
+  it("handles /mnemospark cloud ls and prints object metadata message", async () => {
     let capturedRequest: Record<string, unknown> | undefined;
 
     const command = createCloudCommand({
@@ -653,7 +657,7 @@ describe("cloud command", () => {
     expect(result.text).toBe("obj-001 with backup/archive.tar.gz is 1536 in wallet-bucket-001");
   });
 
-  it("handles /cloud download and prints success message", async () => {
+  it("handles /mnemospark cloud download and prints success message", async () => {
     let capturedRequest: Record<string, unknown> | undefined;
 
     const command = createCloudCommand({
@@ -684,7 +688,7 @@ describe("cloud command", () => {
     expect(result.text).toBe("File backup/archive.tar.gz downloaded");
   });
 
-  it("handles /cloud delete, removes cron job, and prints two user messages", async () => {
+  it("handles /mnemospark cloud delete, removes cron job, and prints two user messages", async () => {
     const { homeDir } = await createSandbox();
     let capturedRequest: Record<string, unknown> | undefined;
     const cronId = "cron-delete-001";
@@ -755,7 +759,7 @@ describe("cloud command", () => {
     expect(cronTableContent.trim()).toBe("");
   });
 
-  it("handles /cloud delete when no cron job exists for object key", async () => {
+  it("handles /mnemospark cloud delete when no cron job exists for object key", async () => {
     const { homeDir } = await createSandbox();
     let capturedRequest: Record<string, unknown> | undefined;
 
@@ -794,7 +798,7 @@ describe("cloud command", () => {
     );
   });
 
-  it("returns Cannot list storage object on invalid /cloud ls args", async () => {
+  it("returns Cannot list storage object on invalid /mnemospark cloud ls args", async () => {
     const command = createCloudCommand();
 
     const result = await command.handler({
@@ -811,7 +815,7 @@ describe("cloud command", () => {
     );
   });
 
-  it("returns Cannot download file when /cloud download fails", async () => {
+  it("returns Cannot download file when /mnemospark cloud download fails", async () => {
     const command = createCloudCommand({
       requestStorageDownloadFn: async () => {
         throw new Error("download failed");
@@ -830,7 +834,7 @@ describe("cloud command", () => {
     expect(result.text).toBe("Cannot download file");
   });
 
-  it("returns Cannot delete file when /cloud delete fails", async () => {
+  it("returns Cannot delete file when /mnemospark cloud delete fails", async () => {
     const command = createCloudCommand({
       requestStorageDeleteFn: async () => {
         throw new Error("delete failed");
