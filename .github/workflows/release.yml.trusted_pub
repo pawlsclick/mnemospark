@@ -16,8 +16,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-    env:
-      NODE_AUTH_TOKEN: ${{ secrets.NPM_MNEMOSPARK }}
+      id-token: write
 
     steps:
       - uses: actions/checkout@v4
@@ -80,4 +79,5 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Publish to npm
-        run: npm publish --access public
+        run: npm publish --provenance --access public
+
