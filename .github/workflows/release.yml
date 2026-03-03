@@ -16,6 +16,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    env:
+      NODE_AUTH_TOKEN: ${{ secrets.NPM_MNEMOSPARK }}
 
     steps:
       - uses: actions/checkout@v4
@@ -78,6 +80,9 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Publish to npm
-        run: npm publish --provenance --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ -z "$NODE_AUTH_TOKEN" ]; then
+            echo "::error::NPM_MNEMOSPARK secret is not set. Add it in repo Settings → Secrets and variables → Actions."
+            exit 1
+          fi
+          npm publish --provenance --access public
