@@ -1,17 +1,16 @@
 /**
- * BlockRun Auth Methods for OpenClaw
+ * mnemospark Auth Methods for OpenClaw
  *
- * Provides wallet-based authentication for the BlockRun provider.
+ * Provides wallet-based authentication for the mnemospark provider.
  * Operators configure their wallet private key, which is used to
  * sign x402 micropayments for LLM inference.
  *
- * Three methods:
- *   1. Auto-generate — create a new wallet on first run, save to ~/.openclaw/blockrun/wallet.key
- *   2. Environment variable — read from BLOCKRUN_WALLET_KEY
- *   3. Manual input — operator enters private key via wizard
+ * Two methods:
+ *   1. Auto-generate — create a new wallet on first run, save to ~/.openclaw/mnemospark/wallet/wallet.key
+ *   2. Manual input — operator enters private key via wizard
  *
  * SECURITY NOTE (for OpenClaw scanner):
- * This module reads BLOCKRUN_WALLET_KEY environment variable and uses it
+ * This module reads MNEMOSPARK_WALLET_KEY environment variable and uses it
  * to sign x402 payment requests. This is INTENTIONAL and REQUIRED behavior:
  * - The wallet key signs USDC payments on Base L2 for each LLM API call
  * - Without the key, mnemospark cannot authorize payments to BlockRun
@@ -20,7 +19,7 @@
  *
  * @see https://x402.org - x402 payment protocol specification
  * @see https://blockrun.ai/docs - BlockRun API documentation
- * @openclaw-security env-access=BLOCKRUN_WALLET_KEY purpose=x402-payment-signing
+ * @openclaw-security env-access=MNEMOSPARK_WALLET_KEY purpose=x402-payment-signing
  */
 
 import { writeFile, readFile, mkdir } from "node:fs/promises";
@@ -93,29 +92,26 @@ async function generateAndSaveWallet(): Promise<{ key: string; address: string }
 }
 
 /**
- * Resolve wallet key: load saved → env var → auto-generate.
+ * Resolve wallet key: load saved file → auto-generate.
  * Called by index.ts before the auth wizard runs.
+ *
+ * Resolution order:
+ *   1. Saved file: prefer WALLET_FILE (mnemospark), then LEGACY_WALLET_FILE (blockrun).
+ *   2. Auto-generate a new wallet and write to WALLET_FILE.
  */
 export async function resolveOrGenerateWalletKey(): Promise<{
   key: string;
   address: string;
-  source: "saved" | "env" | "generated";
+  source: "saved" | "generated";
 }> {
-  // 1. Previously saved wallet
+  // 1. Previously saved wallet (mnemospark path first, then legacy blockrun path)
   const saved = await loadSavedWallet();
   if (saved) {
     const account = privateKeyToAccount(saved as `0x${string}`);
     return { key: saved, address: account.address, source: "saved" };
   }
 
-  // 2. Environment variable
-  const envKey = process.env.BLOCKRUN_WALLET_KEY;
-  if (typeof envKey === "string" && envKey.startsWith("0x") && envKey.length === 66) {
-    const account = privateKeyToAccount(envKey as `0x${string}`);
-    return { key: envKey, address: account.address, source: "env" };
-  }
-
-  // 3. Auto-generate
+  // 2. Auto-generate
   const { key, address } = await generateAndSaveWallet();
   return { key, address, source: "generated" };
 }
@@ -161,19 +157,19 @@ export const walletKeyAuth: ProviderAuthMethod = {
 };
 
 /**
- * Auth method: read wallet key from BLOCKRUN_WALLET_KEY environment variable.
+ * Auth method: read wallet key from MNEMOSPARK_WALLET_KEY environment variable.
  */
 export const envKeyAuth: ProviderAuthMethod = {
   id: "env-key",
   label: "Environment Variable",
-  hint: "Use BLOCKRUN_WALLET_KEY environment variable",
+  hint: "Use MNEMOSPARK_WALLET_KEY environment variable",
   kind: "api_key",
   run: async (): Promise<ProviderAuthResult> => {
-    const key = process.env.BLOCKRUN_WALLET_KEY;
+    const key = process.env.MNEMOSPARK_WALLET_KEY;
 
     if (!key) {
       throw new Error(
-        "BLOCKRUN_WALLET_KEY environment variable is not set. " +
+        "MNEMOSPARK_WALLET_KEY environment variable is not set. " +
           "Set it to your EVM wallet private key (0x...).",
       );
     }
@@ -185,7 +181,7 @@ export const envKeyAuth: ProviderAuthMethod = {
           credential: { apiKey: key.trim() },
         },
       ],
-      notes: ["Using wallet key from BLOCKRUN_WALLET_KEY environment variable."],
+      notes: ["Using wallet key from MNEMOSPARK_WALLET_KEY environment variable."],
     };
   },
 };

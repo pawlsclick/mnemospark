@@ -278,7 +278,7 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
       console.error(`[mnemospark] Response stream error: ${err.message}`);
     });
 
-    // Mnemospark backend proxy endpoint for /cloud price-storage command.
+    // Mnemospark backend proxy endpoint for /mnemospark cloud price-storage command.
     if (req.method === "POST" && matchesProxyPath(req.url, PRICE_STORAGE_PROXY_PATH)) {
       try {
         let payload: unknown;
@@ -287,7 +287,7 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
         } catch {
           sendJson(res, 400, {
             error: "Bad request",
-            message: "Invalid JSON body for /cloud price-storage",
+            message: "Invalid JSON body for /mnemospark cloud price-storage",
           });
           return;
         }
@@ -333,13 +333,13 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
       } catch (err) {
         sendJson(res, 502, {
           error: "proxy_error",
-          message: `Failed to forward /cloud price-storage: ${err instanceof Error ? err.message : String(err)}`,
+          message: `Failed to forward /mnemospark cloud price-storage: ${err instanceof Error ? err.message : String(err)}`,
         });
       }
       return;
     }
 
-    // Mnemospark backend proxy endpoint for /cloud upload command.
+    // Mnemospark backend proxy endpoint for /mnemospark cloud upload command.
     if (req.method === "POST" && matchesProxyPath(req.url, UPLOAD_PROXY_PATH)) {
       try {
         let payload: unknown;
@@ -348,7 +348,7 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
         } catch {
           sendJson(res, 400, {
             error: "Bad request",
-            message: "Invalid JSON body for /cloud upload",
+            message: "Invalid JSON body for /mnemospark cloud upload",
           });
           return;
         }
@@ -402,7 +402,7 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
             error: "insufficient_balance",
             message: `Insufficient USDC balance. Current: ${sufficiency.info.balanceUSD}, Required: ${requiredUSD}`,
             wallet: requestPayload.wallet_address,
-            help: `Fund wallet ${requestPayload.wallet_address} on Base before running /cloud upload`,
+            help: `Fund wallet ${requestPayload.wallet_address} on Base before running /mnemospark cloud upload`,
           });
           return;
         }
@@ -443,13 +443,13 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
       } catch (err) {
         sendJson(res, 502, {
           error: "proxy_error",
-          message: `Failed to forward /cloud upload: ${err instanceof Error ? err.message : String(err)}`,
+          message: `Failed to forward /mnemospark cloud upload: ${err instanceof Error ? err.message : String(err)}`,
         });
       }
       return;
     }
 
-    // Mnemospark backend proxy endpoint for /cloud ls command.
+    // Mnemospark backend proxy endpoint for /mnemospark cloud ls command.
     if (req.method === "POST" && matchesProxyPath(req.url, STORAGE_LS_PROXY_PATH)) {
       try {
         let payload: unknown;
@@ -458,7 +458,7 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
         } catch {
           sendJson(res, 400, {
             error: "Bad request",
-            message: "Invalid JSON body for /cloud ls",
+            message: "Invalid JSON body for /mnemospark cloud ls",
           });
           return;
         }
@@ -517,13 +517,13 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
       } catch (err) {
         sendJson(res, 502, {
           error: "proxy_error",
-          message: `Failed to forward /cloud ls: ${err instanceof Error ? err.message : String(err)}`,
+          message: `Failed to forward /mnemospark cloud ls: ${err instanceof Error ? err.message : String(err)}`,
         });
       }
       return;
     }
 
-    // Mnemospark backend proxy endpoint for /cloud download command.
+    // Mnemospark backend proxy endpoint for /mnemospark cloud download command.
     if (req.method === "POST" && matchesProxyPath(req.url, STORAGE_DOWNLOAD_PROXY_PATH)) {
       try {
         let payload: unknown;
@@ -532,7 +532,7 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
         } catch {
           sendJson(res, 400, {
             error: "Bad request",
-            message: "Invalid JSON body for /cloud download",
+            message: "Invalid JSON body for /mnemospark cloud download",
           });
           return;
         }
@@ -603,13 +603,13 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
       } catch (err) {
         sendJson(res, 502, {
           error: "proxy_error",
-          message: `Failed to forward /cloud download: ${err instanceof Error ? err.message : String(err)}`,
+          message: `Failed to forward /mnemospark cloud download: ${err instanceof Error ? err.message : String(err)}`,
         });
       }
       return;
     }
 
-    // Mnemospark backend proxy endpoint for /cloud delete command.
+    // Mnemospark backend proxy endpoint for /mnemospark cloud delete command.
     if (req.method === "POST" && matchesProxyPath(req.url, STORAGE_DELETE_PROXY_PATH)) {
       try {
         let payload: unknown;
@@ -618,7 +618,7 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
         } catch {
           sendJson(res, 400, {
             error: "Bad request",
-            message: "Invalid JSON body for /cloud delete",
+            message: "Invalid JSON body for /mnemospark cloud delete",
           });
           return;
         }
@@ -677,7 +677,7 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
       } catch (err) {
         sendJson(res, 502, {
           error: "proxy_error",
-          message: `Failed to forward /cloud delete: ${err instanceof Error ? err.message : String(err)}`,
+          message: `Failed to forward /mnemospark cloud delete: ${err instanceof Error ? err.message : String(err)}`,
         });
       }
       return;

@@ -62,7 +62,7 @@ Examples:
   pm2 start "npx mnemospark" --name mnemospark
 
 Environment Variables:
-  BLOCKRUN_WALLET_KEY     Private key for x402 storage payments (auto-generated if not set)
+  MNEMOSPARK_WALLET_KEY   Private key for x402 storage payments (auto-generated if not set)
   MNEMOSPARK_PROXY_PORT   Default proxy port (default: 7120)
 
 For more info: https://github.com/pawlsclick/mnemospark
@@ -283,21 +283,15 @@ async function runInstall(mode: "default" | "standard"): Promise<void> {
     }
   }
 
-  const { address, source } = await resolveOrGenerateWalletKey();
+  const { address } = await resolveOrGenerateWalletKey();
 
   await deployExtensionFiles();
 
   console.log("[mnemospark] Install complete.");
   console.log(`Your new Base blockchain wallet is: ${address}`);
-  if (source === "env") {
-    console.log(
-      "Wallet is sourced from BLOCKRUN_WALLET_KEY. To persist it, save it under ~/.openclaw/mnemospark/wallet/wallet.key with chmod 600.",
-    );
-  } else {
-    console.log(
-      "Wallet key stored under ~/.openclaw/mnemospark/wallet/wallet.key (permissions should be chmod 600).",
-    );
-  }
+  console.log(
+    "Wallet key stored under ~/.openclaw/mnemospark/wallet/wallet.key (permissions should be chmod 600).",
+  );
   console.log("Add USDC on the Base network to start using mnemospark today.");
   console.log(
     "You can acquire USDC on Base from providers like Coinbase and Moonpay. Fund the wallet before running mnemospark.",
@@ -338,10 +332,8 @@ async function main(): Promise<void> {
 
   if (source === "generated") {
     console.log(`[mnemospark] Generated new wallet: ${address}`);
-  } else if (source === "saved") {
-    console.log(`[mnemospark] Using saved wallet: ${address}`);
   } else {
-    console.log(`[mnemospark] Using wallet from BLOCKRUN_WALLET_KEY: ${address}`);
+    console.log(`[mnemospark] Using saved wallet: ${address}`);
   }
 
   // Start the proxy

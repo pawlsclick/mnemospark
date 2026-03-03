@@ -108,7 +108,7 @@ describe("Wallet Persistence (systemd-free)", () => {
         activeProxyCloser = null;
       }
     }
-    delete process.env.BLOCKRUN_WALLET_KEY;
+    delete process.env.MNEMOSPARK_WALLET_KEY;
 
     if (originalHome === undefined) {
       delete process.env.HOME;
@@ -122,7 +122,7 @@ describe("Wallet Persistence (systemd-free)", () => {
   });
 
   it("persists wallet across proxy restarts", async () => {
-    delete process.env.BLOCKRUN_WALLET_KEY;
+    delete process.env.MNEMOSPARK_WALLET_KEY;
     await removeFileIfExists(runtime.WALLET_FILE);
     await removeFileIfExists(runtime.LEGACY_WALLET_FILE);
 
@@ -161,19 +161,19 @@ describe("Wallet Persistence (systemd-free)", () => {
     assert.equal(walletAfterRestart, generated.key);
   });
 
-  it("uses env var wallet key without writing wallet files", async () => {
-    const envKey = `0x${"a".repeat(64)}`;
-    process.env.BLOCKRUN_WALLET_KEY = envKey;
+  it("auto-generates wallet and writes to disk when no files exist", async () => {
+    delete process.env.MNEMOSPARK_WALLET_KEY;
 
     await removeFileIfExists(runtime.WALLET_FILE);
     await removeFileIfExists(runtime.LEGACY_WALLET_FILE);
 
     const resolved = await runtime.resolveOrGenerateWalletKey();
-    assert.equal(resolved.source, "env");
-    assert.equal(resolved.key, envKey);
+    assert.equal(resolved.source, "generated");
+    assert.ok(resolved.key.startsWith("0x"));
+    assert.equal(resolved.key.length, 66);
 
-    await assertFileMissing(runtime.WALLET_FILE);
-    await assertFileMissing(runtime.LEGACY_WALLET_FILE);
+    const walletOnDisk = (await readFile(runtime.WALLET_FILE, "utf-8")).trim();
+    assert.equal(walletOnDisk, resolved.key);
 
     const port = randomPort();
     const proxy = await runtime.startProxy({
@@ -184,7 +184,5 @@ describe("Wallet Persistence (systemd-free)", () => {
     await waitForProxyHealth(port);
     await proxy.close();
     activeProxyCloser = null;
-
-    delete process.env.BLOCKRUN_WALLET_KEY;
   });
 });

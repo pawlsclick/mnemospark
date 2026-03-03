@@ -49,10 +49,8 @@ async function startProxyInBackground(api: OpenClawPluginApi): Promise<void> {
 
   if (source === "generated") {
     api.logger.info(`Generated new wallet: ${address}`);
-  } else if (source === "saved") {
-    api.logger.info(`Using saved wallet: ${address}`);
   } else {
-    api.logger.info(`Using wallet from BLOCKRUN_WALLET_KEY: ${address}`);
+    api.logger.info(`Using saved wallet: ${address}`);
   }
 
   const proxy = await startProxy({
@@ -95,9 +93,9 @@ async function startProxyInBackground(api: OpenClawPluginApi): Promise<void> {
 }
 
 /**
- * /wallet command handler for mnemospark.
- * - /wallet or /wallet status: Show wallet address, balance, and key file location
- * - /wallet export: Show private key for backup
+ * /mnemospark wallet command handler.
+ * - /mnemospark wallet or /mnemospark wallet status: Show wallet address, balance, and key file location
+ * - /mnemospark wallet export: Show private key for backup
  */
 async function createWalletCommand(): Promise<OpenClawPluginCommandDefinition> {
   return {
@@ -125,7 +123,7 @@ async function createWalletCommand(): Promise<OpenClawPluginCommandDefinition> {
 
       if (!walletKey || !address) {
         return {
-          text: "No mnemospark wallet found.\n\nRun `openclaw plugins install mnemospark` to generate a wallet.",
+          text: "No mnemospark wallet found. Run `openclaw plugins install mnemospark` or set MNEMOSPARK_WALLET_KEY.",
           isError: true,
         };
       }
@@ -145,9 +143,9 @@ async function createWalletCommand(): Promise<OpenClawPluginCommandDefinition> {
             "",
             "**To restore on a new machine:**",
             "1. Set the environment variable before running OpenClaw:",
-            `   \`export BLOCKRUN_WALLET_KEY=${walletKey}\``,
+            `   \`export MNEMOSPARK_WALLET_KEY=${walletKey}\``,
             "2. Or save to file:",
-            `   \`mkdir -p ~/.openclaw/blockrun && echo "${walletKey}" > ~/.openclaw/blockrun/wallet.key && chmod 600 ~/.openclaw/blockrun/wallet.key\``,
+            `   \`mkdir -p ~/.openclaw/mnemospark/wallet && echo "${walletKey}" > ~/.openclaw/mnemospark/wallet/wallet.key && chmod 600 ~/.openclaw/mnemospark/wallet/wallet.key\``,
           ].join("\n"),
         };
       }
@@ -170,8 +168,8 @@ async function createWalletCommand(): Promise<OpenClawPluginCommandDefinition> {
           `**Key File:** \`${WALLET_FILE}\``,
           "",
           "**Commands:**",
-          "• `/wallet` - Show this status",
-          "• `/wallet export` - Export private key for backup",
+          "• `/mnemospark wallet` - Show this status",
+          "• `/mnemospark wallet export` - Export private key for backup",
           "",
           `**Fund with USDC on Base:** https://basescan.org/address/${address}`,
         ].join("\n"),
@@ -204,7 +202,7 @@ const plugin: OpenClawPluginDefinition = {
       })
       .catch((err) => {
         api.logger.warn(
-          `Failed to register /wallet command: ${err instanceof Error ? err.message : String(err)}`,
+          `Failed to register /mnemospark wallet command: ${err instanceof Error ? err.message : String(err)}`,
         );
       });
 
@@ -212,7 +210,7 @@ const plugin: OpenClawPluginDefinition = {
       api.registerCommand(createCloudCommand());
     } catch (err) {
       api.logger.warn(
-        `Failed to register /cloud command: ${err instanceof Error ? err.message : String(err)}`,
+        `Failed to register /mnemospark cloud command: ${err instanceof Error ? err.message : String(err)}`,
       );
     }
 
