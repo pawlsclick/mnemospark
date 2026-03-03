@@ -123,7 +123,7 @@ async function createWalletCommand(): Promise<OpenClawPluginCommandDefinition> {
 
       if (!walletKey || !address) {
         return {
-          text: "No mnemospark wallet found. Run `openclaw plugins install mnemospark` or set MNEMOSPARK_WALLET_KEY.",
+          text: "No mnemospark wallet found. Run `openclaw plugins install mnemospark`.",
           isError: true,
         };
       }

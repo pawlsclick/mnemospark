@@ -36,6 +36,10 @@ const WALLET_FILE = join(WALLET_DIR, "wallet.key");
 // Export for use by wallet command and CLI
 export { WALLET_FILE, LEGACY_WALLET_FILE };
 
+function isValidWalletPrivateKey(value: string | undefined): value is `0x${string}` {
+  return typeof value === "string" && /^0x[0-9a-fA-F]{64}$/.test(value.trim());
+}
+
 /**
  * Try to load a previously auto-generated wallet key from disk.
  */
@@ -96,22 +100,30 @@ async function generateAndSaveWallet(): Promise<{ key: string; address: string }
  * Called by index.ts before the auth wizard runs.
  *
  * Resolution order:
- *   1. Saved file: prefer WALLET_FILE (mnemospark), then LEGACY_WALLET_FILE (blockrun).
- *   2. Auto-generate a new wallet and write to WALLET_FILE.
+ *   1. MNEMOSPARK_WALLET_KEY environment variable.
+ *   2. Saved file: prefer WALLET_FILE (mnemospark), then LEGACY_WALLET_FILE (blockrun).
+ *   3. Auto-generate a new wallet and write to WALLET_FILE.
  */
 export async function resolveOrGenerateWalletKey(): Promise<{
   key: string;
   address: string;
-  source: "saved" | "generated";
+  source: "saved" | "env" | "generated";
 }> {
-  // 1. Previously saved wallet (mnemospark path first, then legacy blockrun path)
+  // 1. Environment variable
+  const envKey = process.env.MNEMOSPARK_WALLET_KEY?.trim();
+  if (isValidWalletPrivateKey(envKey)) {
+    const account = privateKeyToAccount(envKey);
+    return { key: envKey, address: account.address, source: "env" };
+  }
+
+  // 2. Previously saved wallet (mnemospark path first, then legacy blockrun path)
   const saved = await loadSavedWallet();
   if (saved) {
     const account = privateKeyToAccount(saved as `0x${string}`);
     return { key: saved, address: account.address, source: "saved" };
   }
 
-  // 2. Auto-generate
+  // 3. Auto-generate
   const { key, address } = await generateAndSaveWallet();
   return { key, address, source: "generated" };
 }
