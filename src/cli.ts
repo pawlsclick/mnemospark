@@ -19,8 +19,11 @@ import { startProxy, getProxyPort } from "./proxy.js";
 import { resolveOrGenerateWalletKey, LEGACY_WALLET_FILE, WALLET_FILE } from "./auth.js";
 import { BalanceMonitor } from "./balance.js";
 import { VERSION } from "./version.js";
-import { dirname } from "node:path";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { mkdir, readFile, writeFile, cp } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { homedir } from "node:os";
 
 function isHexPrivateKey(value: string | undefined): value is `0x${string}` {
   return typeof value === "string" && /^0x[0-9a-fA-F]{64}$/.test(value.trim());
@@ -115,8 +118,28 @@ function parseArgs(args: string[]): ParsedArgs {
   return result;
 }
 
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+const PACKAGE_ROOT = dirname(__dirname);
+const EXTENSIONS_DIR = join(homedir(), ".openclaw", "extensions", "mnemospark");
+
 async function ensureDir(path: string): Promise<void> {
   await mkdir(path, { recursive: true });
+}
+
+async function deployExtensionFiles(): Promise<void> {
+  await ensureDir(EXTENSIONS_DIR);
+
+  const scriptsSource = join(PACKAGE_ROOT, "scripts");
+  if (existsSync(scriptsSource)) {
+    await cp(scriptsSource, join(EXTENSIONS_DIR, "scripts"), { recursive: true });
+  }
+
+  const pluginJson = join(PACKAGE_ROOT, "openclaw.plugin.json");
+  if (existsSync(pluginJson)) {
+    const content = await readFile(pluginJson);
+    await writeFile(join(EXTENSIONS_DIR, "openclaw.plugin.json"), content);
+  }
 }
 
 async function readLegacyWalletIfPresent(): Promise<`0x${string}` | null> {
@@ -239,6 +262,7 @@ async function runInstall(mode: "default" | "standard"): Promise<void> {
       const reuse = await promptReuseLegacyWallet();
       if (reuse) {
         await writeMnemosparkWallet(legacyWallet);
+        await deployExtensionFiles();
         console.log("\n[mnemospark] Reused existing Blockrun wallet for mnemospark.");
         console.log(
           "[mnemospark] Wallet file: ~/.openclaw/mnemospark/wallet/wallet.key (chmod 600 expected).",
@@ -252,6 +276,8 @@ async function runInstall(mode: "default" | "standard"): Promise<void> {
   }
 
   const { address, source } = await resolveOrGenerateWalletKey();
+
+  await deployExtensionFiles();
 
   console.log("[mnemospark] Install complete.");
   console.log(`Your new Base blockchain wallet is: ${address}`);
