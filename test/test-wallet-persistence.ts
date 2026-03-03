@@ -5,11 +5,11 @@
  * environments without user-level systemd. They validate the same core
  * behavior using runtime modules directly:
  *   - Wallet persistence across proxy restarts
- *   - Env var wallet usage without writing wallet files
+ *   - Auto-generation and wallet file writes when no files exist
  */
 
 import assert from "node:assert";
-import { access, mkdir, mkdtemp, readFile, rm, unlink } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, unlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, it } from "node:test";
@@ -67,13 +67,6 @@ async function removeFileIfExists(path: string): Promise<void> {
       throw error;
     }
   }
-}
-
-async function assertFileMissing(path: string): Promise<void> {
-  await assert.rejects(
-    async () => access(path),
-    (error: unknown) => (error as NodeJS.ErrnoException).code === "ENOENT",
-  );
 }
 
 describe("Wallet Persistence (systemd-free)", () => {
