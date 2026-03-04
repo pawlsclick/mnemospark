@@ -34,6 +34,7 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "test:install-check": "node test/install-check.mjs",
+    "test:slash-commands": "node test/test-mnemospark-slash-commands.mjs",
     "prepare": "node scripts/sync-plugin-version.js && husky"
   },
   "keywords": [
