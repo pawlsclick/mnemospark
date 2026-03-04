@@ -120,8 +120,12 @@ function parseArgs(args: string[]): ParsedArgs {
         return result;
       } else if (arg === "proxy") {
         result.command = "proxy";
-        result.proxySubcommand = args[i + 1];
-        return result;
+        const maybeSubcommand = args[i + 1];
+        if (maybeSubcommand && !maybeSubcommand.startsWith("-")) {
+          result.proxySubcommand = maybeSubcommand;
+          i++;
+        }
+        continue;
       }
       continue;
     }
@@ -330,14 +334,7 @@ async function runInstall(mode: "default" | "standard"): Promise<void> {
 }
 
 async function runWallet(): Promise<void> {
-  const { key, address, source } = await resolveOrGenerateWalletKey();
-
-  const envWalletKey = process.env.MNEMOSPARK_WALLET_KEY?.trim();
-  if (envWalletKey && !isHexPrivateKey(envWalletKey)) {
-    const walletDir = dirname(envWalletKey);
-    await ensureDir(walletDir);
-    await writeFile(envWalletKey, `${key}\n`, { mode: 0o600 });
-  }
+  const { address, source } = await resolveOrGenerateWalletKey();
 
   console.log(`[mnemospark] Wallet address: ${address}`);
   console.log(`[mnemospark] Key file: ${WALLET_FILE}`);
@@ -409,7 +406,11 @@ async function main(): Promise<void> {
   }
 
   if (args.command === "proxy") {
-    // "proxy start" is the same as the default proxy behavior
+    if (args.proxySubcommand !== "start") {
+      console.error("[mnemospark] Invalid proxy command. Use: mnemospark proxy start");
+      printHelp();
+      process.exit(1);
+    }
   }
 
   // Resolve wallet key
