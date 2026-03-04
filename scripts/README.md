@@ -41,19 +41,23 @@ sudo apt install -y jq
 
 Or run `./scripts/install-jq.sh` if present.
 
-## Documentation (`.company`)
+## Documentation
 
-Documentation lives in the **mnemospark-docs** Git submodule at `.company`. After cloning this repo, run `git submodule update --init` to populate `.company` (or clone with `git clone --recurse-submodules`). Do not edit `.company` here; edit in the [mnemospark-docs](https://github.com/pawlsclick/mnemospark-docs) repo, then update the submodule pointer in this repo.
+Documentation lives in the separate **mnemospark-docs** repository. Clone or open that repo directly when editing product and API docs:
+
+- Repo: `git@github.com:pawlsclick/mnemospark-docs.git`
+
+Do not expect a `.company` subdirectory in this repo; that Git submodule has been removed in favor of working directly in `mnemospark-docs`.
 
 ## Seed mnemospark-backend (examples and legacy)
 
-Before running Cursor Cloud Agent on backend features (01–10, 15–18), you may seed **mnemospark-backend** with examples from this repo (docs are now provided via the mnemospark-docs submodule in both repos):
+Before running Cursor Cloud Agent on backend features (01–10, 15–18), you may seed **mnemospark-backend** with examples from this repo (docs are provided via the mnemospark-docs repo):
 
 ```bash
 ./scripts/seed-mnemospark-backend.sh /path/to/mnemospark-backend
 ```
 
-Then open mnemospark-backend in Cursor and start the Cloud Agent there. See [.company/features_cursor_dev/README.md](../.company/features_cursor_dev/README.md) for where to run each feature.
+Then open mnemospark-backend in Cursor and start the Cloud Agent there. See `[features_cursor_dev/README.md]` in the `mnemospark-docs` repo for where to run each feature.
 
 ## Other scripts
 
