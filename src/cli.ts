@@ -19,6 +19,8 @@ import { startProxy, getProxyPort } from "./proxy.js";
 import { resolveOrGenerateWalletKey, LEGACY_WALLET_FILE, WALLET_FILE } from "./auth.js";
 import { BalanceMonitor } from "./balance.js";
 import { VERSION } from "./version.js";
+import { createCloudCommand } from "./cloud-command.js";
+import type { PluginCommandContext } from "./types.js";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { mkdir, readFile, writeFile, cp } from "node:fs/promises";
@@ -37,6 +39,9 @@ Usage:
   mnemospark [options]
   mnemospark install --default
   mnemospark install --standard
+  mnemospark wallet             Show wallet info
+  mnemospark cloud <subcommand> Cloud storage commands
+  mnemospark proxy start        Start the mnemospark proxy
   mnemospark check-update       Check if a new version is available
   mnemospark update             Update to latest version
 
@@ -47,7 +52,7 @@ Options:
 
 Examples:
   # Start standalone proxy (survives gateway restarts)
-  npx mnemospark
+  npx mnemospark proxy start
 
   # Start on custom port
   npx mnemospark --port 9000
@@ -58,8 +63,15 @@ Examples:
   # Install mnemospark wallet with standard behavior (reuse Blockrun wallet if present)
   npx mnemospark install --standard
 
+  # Show wallet address and info
+  npx mnemospark wallet
+
+  # Cloud storage commands
+  npx mnemospark cloud help
+  npx mnemospark cloud backup <file>
+
   # Production deployment with PM2
-  pm2 start "npx mnemospark" --name mnemospark
+  pm2 start "npx mnemospark proxy start" --name mnemospark
 
 Environment Variables:
   MNEMOSPARK_WALLET_KEY   Private key for x402 storage payments (auto-generated if not set)
@@ -73,8 +85,10 @@ type ParsedArgs = {
   version: boolean;
   help: boolean;
   port?: number;
-  command?: "install" | "update" | "check-update";
+  command?: "install" | "update" | "check-update" | "wallet" | "cloud" | "proxy";
   installMode?: "default" | "standard";
+  cloudArgs?: string;
+  proxySubcommand?: string;
 };
 
 function parseArgs(args: string[]): ParsedArgs {
@@ -84,6 +98,8 @@ function parseArgs(args: string[]): ParsedArgs {
     port: undefined,
     command: undefined,
     installMode: undefined,
+    cloudArgs: undefined,
+    proxySubcommand: undefined,
   };
 
   for (let i = 0; i < args.length; i++) {
@@ -96,8 +112,17 @@ function parseArgs(args: string[]): ParsedArgs {
         result.command = "update";
       } else if (arg === "check-update") {
         result.command = "check-update";
+      } else if (arg === "wallet") {
+        result.command = "wallet";
+      } else if (arg === "cloud") {
+        result.command = "cloud";
+        result.cloudArgs = args.slice(i + 1).join(" ");
+        return result;
+      } else if (arg === "proxy") {
+        result.command = "proxy";
+        result.proxySubcommand = args[i + 1];
+        return result;
       }
-      // Treat first non-flag token as command and continue parsing remaining flags.
       continue;
     }
 
@@ -111,7 +136,7 @@ function parseArgs(args: string[]): ParsedArgs {
       result.installMode = "standard";
     } else if (arg === "--port" && args[i + 1]) {
       result.port = parseInt(args[i + 1], 10);
-      i++; // Skip next arg
+      i++;
     }
   }
 
@@ -304,6 +329,46 @@ async function runInstall(mode: "default" | "standard"): Promise<void> {
   );
 }
 
+async function runWallet(): Promise<void> {
+  const { key, address, source } = await resolveOrGenerateWalletKey();
+
+  const envWalletKey = process.env.MNEMOSPARK_WALLET_KEY?.trim();
+  if (envWalletKey && !isHexPrivateKey(envWalletKey)) {
+    const walletDir = dirname(envWalletKey);
+    await ensureDir(walletDir);
+    await writeFile(envWalletKey, `${key}\n`, { mode: 0o600 });
+  }
+
+  console.log(`[mnemospark] Wallet address: ${address}`);
+  console.log(`[mnemospark] Key file: ${WALLET_FILE}`);
+  if (source === "generated") {
+    console.log("[mnemospark] New wallet generated and saved.");
+  } else if (source === "saved") {
+    console.log("[mnemospark] Loaded saved wallet.");
+  } else {
+    console.log("[mnemospark] Using wallet from MNEMOSPARK_WALLET_KEY.");
+  }
+}
+
+async function runCloud(cloudArgs: string): Promise<void> {
+  const cloudCmd = createCloudCommand();
+  const ctx: PluginCommandContext = {
+    channel: "cli",
+    isAuthorizedSender: true,
+    args: cloudArgs,
+    commandBody: `cloud ${cloudArgs}`,
+    config: {},
+  };
+
+  const result = await cloudCmd.handler(ctx);
+  if (result.text) {
+    console.log(result.text);
+  }
+  if (result.isError) {
+    process.exit(1);
+  }
+}
+
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
 
@@ -331,6 +396,20 @@ async function main(): Promise<void> {
   if (args.command === "update") {
     await runUpdate();
     return;
+  }
+
+  if (args.command === "wallet") {
+    await runWallet();
+    return;
+  }
+
+  if (args.command === "cloud") {
+    await runCloud(args.cloudArgs ?? "");
+    return;
+  }
+
+  if (args.command === "proxy") {
+    // "proxy start" is the same as the default proxy behavior
   }
 
   // Resolve wallet key
