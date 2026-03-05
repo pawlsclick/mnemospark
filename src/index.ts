@@ -95,13 +95,13 @@ async function startProxyInBackground(api: OpenClawPluginApi): Promise<void> {
 }
 
 /**
- * /mnemospark wallet command handler.
- * - /mnemospark wallet or /mnemospark wallet status: Show wallet address, balance, and key file location
- * - /mnemospark wallet export: Show private key for backup
+ * /mnemospark-wallet command handler.
+ * - /mnemospark-wallet or /mnemospark-wallet status: Show wallet address, balance, and key file location
+ * - /mnemospark-wallet export: Show private key for backup
  */
 async function createWalletCommand(): Promise<OpenClawPluginCommandDefinition> {
   return {
-    name: "wallet",
+    name: "mnemospark-wallet",
     description: "Show mnemospark wallet info or export private key for backup",
     acceptsArgs: true,
     requireAuth: true,
@@ -170,8 +170,8 @@ async function createWalletCommand(): Promise<OpenClawPluginCommandDefinition> {
           `**Key File:** \`${WALLET_FILE}\``,
           "",
           "**Commands:**",
-          "• `/mnemospark wallet` - Show this status",
-          "• `/mnemospark wallet export` - Export private key for backup",
+          "• `/mnemospark-wallet` - Show this status",
+          "• `/mnemospark-wallet export` - Export private key for backup",
           "",
           `**Fund with USDC on Base:** https://basescan.org/address/${address}`,
         ].join("\n"),
@@ -204,7 +204,7 @@ const plugin: OpenClawPluginDefinition = {
       })
       .catch((err) => {
         api.logger.warn(
-          `Failed to register /mnemospark wallet command: ${err instanceof Error ? err.message : String(err)}`,
+          `Failed to register /mnemospark-wallet command: ${err instanceof Error ? err.message : String(err)}`,
         );
       });
 
@@ -212,7 +212,7 @@ const plugin: OpenClawPluginDefinition = {
       api.registerCommand(createCloudCommand());
     } catch (err) {
       api.logger.warn(
-        `Failed to register /mnemospark cloud command: ${err instanceof Error ? err.message : String(err)}`,
+        `Failed to register /mnemospark-cloud command: ${err instanceof Error ? err.message : String(err)}`,
       );
     }
 

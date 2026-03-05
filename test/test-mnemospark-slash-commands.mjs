@@ -120,34 +120,34 @@ info("=== Command Registration ===");
 
 const commandsByName = Object.fromEntries(registeredCommands.map((c) => [c.name, c]));
 const expectedCommands = [
-  { name: "wallet", descIncludes: "wallet" },
-  { name: "cloud", descIncludes: "cloud" },
+  { name: "mnemospark-wallet", descIncludes: "wallet" },
+  { name: "mnemospark-cloud", descIncludes: "cloud" },
 ];
 
 for (const { name, descIncludes } of expectedCommands) {
   const cmd = commandsByName[name];
   if (!cmd) {
-    fail(`/mnemospark ${name} — not registered`);
+    fail(`/${name} — not registered`);
     continue;
   }
-  pass(`/mnemospark ${name} — registered`);
+  pass(`/${name} — registered`);
 
   if (typeof cmd.handler !== "function") {
-    fail(`/mnemospark ${name} — handler is not a function`);
+    fail(`/${name} — handler is not a function`);
   } else {
-    pass(`/mnemospark ${name} — handler is a function`);
+    pass(`/${name} — handler is a function`);
   }
 
   if (cmd.acceptsArgs !== true) {
-    fail(`/mnemospark ${name} — acceptsArgs should be true`);
+    fail(`/${name} — acceptsArgs should be true`);
   } else {
-    pass(`/mnemospark ${name} — acceptsArgs is true`);
+    pass(`/${name} — acceptsArgs is true`);
   }
 
   if (!cmd.description.toLowerCase().includes(descIncludes)) {
-    fail(`/mnemospark ${name} — description missing "${descIncludes}"`);
+    fail(`/${name} — description missing "${descIncludes}"`);
   } else {
-    pass(`/mnemospark ${name} — description contains "${descIncludes}"`);
+    pass(`/${name} — description contains "${descIncludes}"`);
   }
 }
 
@@ -173,7 +173,7 @@ if (!proxyService) {
 // ---------------------------------------------------------------------------
 info("=== /mnemospark cloud handler tests ===");
 
-const cloudCmd = commandsByName["cloud"];
+const cloudCmd = commandsByName["mnemospark-cloud"];
 if (cloudCmd) {
   // 5a. cloud help (empty args)
   {
@@ -301,7 +301,7 @@ if (cloudCmd) {
 // ---------------------------------------------------------------------------
 info("=== /mnemospark wallet handler tests ===");
 
-const walletCmd = commandsByName["wallet"];
+const walletCmd = commandsByName["mnemospark-wallet"];
 if (walletCmd) {
   // 6a. wallet status (default)
   {
