@@ -21,9 +21,10 @@ import { BalanceMonitor } from "./balance.js";
 import { VERSION } from "./version.js";
 import { createCloudCommand } from "./cloud-command.js";
 import type { PluginCommandContext } from "./types.js";
+import { spawn } from "node:child_process";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { mkdir, readFile, writeFile, cp } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 
@@ -150,32 +151,64 @@ function parseArgs(args: string[]): ParsedArgs {
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const PACKAGE_ROOT = dirname(__dirname);
-const EXTENSIONS_DIR = join(homedir(), ".openclaw", "extensions", "mnemospark");
 
 async function ensureDir(path: string): Promise<void> {
   await mkdir(path, { recursive: true });
 }
 
+/**
+ * Deploy support files only (e.g. uninstall script) to ~/.openclaw/mnemospark.
+ * Does NOT write to ~/.openclaw/extensions/mnemospark; plugin registration
+ * is handled exclusively by `openclaw plugins install mnemospark`.
+ */
 async function deployExtensionFiles(): Promise<void> {
-  await ensureDir(EXTENSIONS_DIR);
-
   const scriptsSource = join(PACKAGE_ROOT, "scripts");
-  if (existsSync(scriptsSource)) {
-    await cp(scriptsSource, join(EXTENSIONS_DIR, "scripts"), { recursive: true });
+  if (!existsSync(scriptsSource)) return;
 
-    const mnemoScriptsDir = join(homedir(), ".openclaw", "mnemospark", "scripts");
-    await ensureDir(mnemoScriptsDir);
-    const uninstallSrc = join(scriptsSource, "uninstall.sh");
-    if (existsSync(uninstallSrc)) {
-      const content = await readFile(uninstallSrc);
-      await writeFile(join(mnemoScriptsDir, "uninstall.sh"), content, { mode: 0o755 });
-    }
+  const mnemoScriptsDir = join(homedir(), ".openclaw", "mnemospark", "scripts");
+  await ensureDir(mnemoScriptsDir);
+  const uninstallSrc = join(scriptsSource, "uninstall.sh");
+  if (existsSync(uninstallSrc)) {
+    const content = await readFile(uninstallSrc);
+    await writeFile(join(mnemoScriptsDir, "uninstall.sh"), content, { mode: 0o755 });
   }
+}
 
-  const pluginJson = join(PACKAGE_ROOT, "openclaw.plugin.json");
-  if (existsSync(pluginJson)) {
-    const content = await readFile(pluginJson);
-    await writeFile(join(EXTENSIONS_DIR, "openclaw.plugin.json"), content);
+function isOpenClawAvailable(): Promise<boolean> {
+  return new Promise((resolve) => {
+    const child = spawn("openclaw", ["--version"], {
+      stdio: "ignore",
+      shell: true,
+    });
+    child.on("error", () => resolve(false));
+    child.on("close", (code) => resolve(code === 0));
+  });
+}
+
+/**
+ * If OpenClaw is on PATH, run `openclaw plugins install mnemospark`.
+ * Otherwise print instructions. Does not modify openclaw.json directly.
+ */
+async function promptOrRunOpenClawPluginInstall(): Promise<void> {
+  const available = await isOpenClawAvailable();
+  if (available) {
+    console.log("\n[mnemospark] Registering plugin with OpenClaw...");
+    const child = spawn("openclaw", ["plugins", "install", "mnemospark"], {
+      stdio: "inherit",
+      shell: true,
+    });
+    const exitCode = await new Promise<number>((resolve) => {
+      child.on("close", resolve);
+    });
+    if (exitCode !== 0) {
+      console.log(
+        "\n[mnemospark] OpenClaw plugin install did not succeed. Run manually: openclaw plugins install mnemospark",
+      );
+    }
+  } else {
+    console.log(
+      "\n[mnemospark] To use mnemospark inside OpenClaw, install the plugin: openclaw plugins install mnemospark",
+    );
   }
 }
 
@@ -307,6 +340,7 @@ async function runInstall(mode: "default" | "standard"): Promise<void> {
         console.log(
           "[mnemospark] Your wallet will be used for mnemospark storage payments on Base.",
         );
+        await promptOrRunOpenClawPluginInstall();
         return;
       }
     }
@@ -331,6 +365,7 @@ async function runInstall(mode: "default" | "standard"): Promise<void> {
   console.log(
     "You can acquire USDC on Base from providers like Coinbase and Moonpay. Fund the wallet before running mnemospark.",
   );
+  await promptOrRunOpenClawPluginInstall();
 }
 
 async function runWallet(): Promise<void> {
