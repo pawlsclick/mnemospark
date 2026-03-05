@@ -1128,7 +1128,7 @@ function extractUploadErrorMessage(error: unknown): string | null {
 function formatPriceStorageUserMessage(quote: PriceStorageQuoteResponse): string {
   return [
     `Your storage quote \`${quote.quote_id}\` is valid for 1 hour, the storage price is \`${quote.storage_price}\` for \`${quote.object_id}\` with file size of \`${quote.object_size_gb}\` in \`${quote.provider}\` \`${quote.location}\``,
-    `If you accept this quote run the command /mnemospark cloud upload --quote-id \`${quote.quote_id}\` --wallet-address \`${quote.addr}\` --object-id \`${quote.object_id}\` --object-id-hash \`${quote.object_id_hash}\``,
+    `If you accept this quote run the command /mnemospark-cloud upload --quote-id \`${quote.quote_id}\` --wallet-address \`${quote.addr}\` --object-id \`${quote.object_id}\` --object-id-hash \`${quote.object_id_hash}\``,
   ].join("\n");
 }
 

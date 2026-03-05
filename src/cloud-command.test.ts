@@ -64,13 +64,13 @@ describe("cloud command", () => {
     }
 
     expect(result.text).toContain(
-      "/mnemospark cloud ls --wallet-address <addr> --object-key <object-key>",
+      "/mnemospark-cloud ls --wallet-address <addr> --object-key <object-key>",
     );
     expect(result.text).toContain(
-      "/mnemospark cloud download --wallet-address <addr> --object-key <object-key>",
+      "/mnemospark-cloud download --wallet-address <addr> --object-key <object-key>",
     );
     expect(result.text).toContain(
-      "/mnemospark cloud delete --wallet-address <addr> --object-key <object-key>",
+      "/mnemospark-cloud delete --wallet-address <addr> --object-key <object-key>",
     );
     expect(result.text).not.toContain("<s3-key>");
     expect(result.text).not.toContain("s3-key");
@@ -219,7 +219,7 @@ describe("cloud command", () => {
     expect(result.isError).not.toBe(true);
     expect(result.text).toContain("Your storage quote `quote-abc123` is valid for 1 hour");
     expect(result.text).toContain(
-      "If you accept this quote run the command /mnemospark cloud upload",
+      "If you accept this quote run the command /mnemospark-cloud upload",
     );
     expect(result.text).toContain("--object-id-hash `hash-001`");
 
