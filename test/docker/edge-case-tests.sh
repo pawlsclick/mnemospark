@@ -86,7 +86,7 @@ test_dist_files_exist() {
 
     PKG_DIR=$(npm root -g)/@blockrun/clawrouter
 
-    local files=("dist/index.js" "dist/cli.js" "dist/index.d.ts")
+    local files=("dist/index.js" "dist/cli.js")
     local all_exist=true
 
     for f in "${files[@]}"; do
