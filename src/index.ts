@@ -614,7 +614,7 @@ async function createWalletCommand(): Promise<OpenClawPluginCommandDefinition> {
 }
 
 const plugin: OpenClawPluginDefinition = {
-  id: "clawrouter",
+  id: "mnemospark",
   name: "ClawRouter",
   description: "Smart LLM router — 30+ models, x402 micropayments, 78% cost savings",
   version: VERSION,

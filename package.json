@@ -4,7 +4,6 @@
   "description": "Smart LLM router and inference toolkit — based on ClawRouter. 30+ models, one wallet, x402 micropayments.",
   "type": "module",
   "main": "dist/index.js",
-  "types": "dist/index.d.ts",
   "bin": {
     "mnemospark": "./dist/cli.js"
   },
@@ -15,8 +14,7 @@
   },
   "exports": {
     ".": {
-      "import": "./dist/index.js",
-      "types": "./dist/index.d.ts"
+      "import": "./dist/index.js"
     }
   },
   "files": [
@@ -42,7 +40,8 @@
     "test:e2e:tool-ids": "npx tsx test/e2e-tool-id-sanitization.ts",
     "test:docker:install": "bash test/run-docker-test.sh",
     "test:docker:edge-cases": "bash test/docker/run-edge-cases.sh",
-    "prepare": "husky"
+    "prepare": "husky",
+    "prepack": "npm run build"
   },
   "keywords": [
     "llm",
