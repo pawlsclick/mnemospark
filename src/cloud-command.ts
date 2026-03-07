@@ -62,6 +62,21 @@ const REQUIRED_PRICE_STORAGE =
 const REQUIRED_UPLOAD = "--quote-id, --wallet-address, --object-id, --object-id-hash";
 const REQUIRED_STORAGE_OBJECT = "--wallet-address, --object-key";
 
+/**
+ * Expands a leading ~ to the current user's home directory.
+ * Does not expand ~user (other users' homes).
+ */
+export function expandTilde(path: string): string {
+  const trimmed = path.trim();
+  if (trimmed === "~") {
+    return homedir();
+  }
+  if (trimmed.startsWith("~/") || trimmed.startsWith("~\\")) {
+    return join(homedir(), trimmed.slice(2));
+  }
+  return path;
+}
+
 const CLOUD_HELP_TEXT = [
   "☁️ **mnemospark Cloud Commands**",
   "",
@@ -433,7 +448,7 @@ export async function buildBackupObject(
     throw new UnsupportedBackupPlatformError(platform);
   }
 
-  const targetPath = resolve(targetPathArg);
+  const targetPath = resolve(expandTilde(targetPathArg));
   const targetStats = await lstat(targetPath);
   if (!targetStats.isFile() && !targetStats.isDirectory()) {
     throw new Error("Backup target must be a file or directory");
@@ -1208,7 +1223,11 @@ export function createCloudCommand(
         try {
           const result = await backupBuilder(parsed.backupTarget, options.backupOptions);
           return {
-            text: `Your object-id is ${result.objectId} your object-id-hash is ${result.objectIdHash} and your object-size is ${result.objectSizeGb}`,
+            text: [
+              `object-id: ${result.objectId}`,
+              `object-id-hash: ${result.objectIdHash.replace(/\s/g, "")}`,
+              `object-size: ${result.objectSizeGb}`,
+            ].join("\n"),
           };
         } catch (err) {
           if (err instanceof UnsupportedBackupPlatformError) {
@@ -1234,9 +1253,11 @@ export function createCloudCommand(
           return {
             text: formatPriceStorageUserMessage(quote),
           };
-        } catch {
+        } catch (err) {
+          const message =
+            err instanceof Error ? err.message : typeof err === "string" ? err : String(err);
           return {
-            text: "Cannot price storage",
+            text: message ? `Cannot price storage: ${message}` : "Cannot price storage",
             isError: true,
           };
         }

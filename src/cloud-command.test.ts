@@ -1,12 +1,12 @@
 import { mkdtemp, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { privateKeyToAccount } from "viem/accounts";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { buildBackupObject, createCloudCommand } from "./cloud-command.js";
+import { buildBackupObject, createCloudCommand, expandTilde } from "./cloud-command.js";
 import { PaymentCache } from "./payment-cache.js";
 
 const sandboxDirs: string[] = [];
@@ -41,6 +41,27 @@ function randomBytesFixture(size: number): Buffer {
 function sha256Hex(content: string): string {
   return createHash("sha256").update(content, "utf-8").digest("hex");
 }
+
+describe("expandTilde", () => {
+  it("expands ~/foo to homedir + /foo", () => {
+    expect(expandTilde("~/x")).toBe(join(homedir(), "x"));
+    expect(expandTilde("~/foo/bar")).toBe(join(homedir(), "foo", "bar"));
+  });
+
+  it("expands ~ to homedir", () => {
+    expect(expandTilde("~")).toBe(homedir());
+  });
+
+  it("leaves absolute path unchanged", () => {
+    expect(expandTilde("/abs")).toBe("/abs");
+    expect(expandTilde("/abs/path")).toBe("/abs/path");
+  });
+
+  it("leaves relative path unchanged", () => {
+    expect(expandTilde("rel")).toBe("rel");
+    expect(expandTilde("relative/path")).toBe("relative/path");
+  });
+});
 
 describe("cloud command", () => {
   it("requires authentication", () => {
@@ -100,6 +121,35 @@ describe("cloud command", () => {
     expect(lastLine).toBe(`${result.objectId},${result.objectIdHash},${result.objectSizeGb}`);
   });
 
+  it("backup succeeds when path uses leading tilde and file exists under HOME", async () => {
+    const { homeDir, tmpBackupDir } = await createSandbox();
+    const downloadsDir = join(homeDir, "Downloads");
+    await mkdir(downloadsDir, { recursive: true });
+    const filePath = join(downloadsDir, "constitution.pdf");
+    await writeFile(filePath, "pdf content");
+
+    const originalHome = process.env.HOME;
+    try {
+      process.env.HOME = homeDir;
+      const result = await buildBackupObject("~/Downloads/constitution.pdf", {
+        platform: "linux",
+        homeDir,
+        tmpDir: tmpBackupDir,
+        now: () => 1700000000000,
+        randomBytes: randomBytesFixture,
+      });
+      expect(result.objectId).toBe("1700000000000-0011223344556677");
+      expect(result.objectIdHash).toMatch(/^[a-f0-9]{64}$/);
+      expect(Number.parseFloat(result.objectSizeGb)).toBeGreaterThan(0);
+    } finally {
+      if (originalHome !== undefined) {
+        process.env.HOME = originalHome;
+      } else {
+        delete process.env.HOME;
+      }
+    }
+  });
+
   it("removes archive when metadata logging fails after archive creation", async () => {
     const { root, tmpBackupDir, sourceDir } = await createSandbox();
     await writeFile(join(sourceDir, "notes.txt"), "hello from mnemospark backup");
@@ -146,9 +196,9 @@ describe("cloud command", () => {
     });
 
     expect(result.isError).not.toBe(true);
-    expect(result.text).toContain("Your object-id is");
-    expect(result.text).toContain("your object-id-hash is");
-    expect(result.text).toContain("and your object-size is");
+    expect(result.text).toContain("object-id:");
+    expect(result.text).toContain("object-id-hash:");
+    expect(result.text).toContain("object-size:");
   });
 
   it("returns graceful unsupported-platform message", async () => {
@@ -272,7 +322,7 @@ describe("cloud command", () => {
     });
 
     expect(result.isError).toBe(true);
-    expect(result.text).toBe("Cannot price storage");
+    expect(result.text).toBe("Cannot price storage: network down");
   });
 
   it("handles /mnemospark cloud upload, builds encrypted payload, logs upload response, and keeps archive by default", async () => {

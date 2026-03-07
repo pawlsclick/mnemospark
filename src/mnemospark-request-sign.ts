@@ -29,7 +29,7 @@ export const MNEMOSPARK_REQUEST_TYPES = {
   MnemosparkRequest: [
     { name: "method", type: "string" },
     { name: "path", type: "string" },
-    { name: "walletAddress", type: "string" },
+    { name: "walletAddress", type: "address" },
     { name: "nonce", type: "string" },
     { name: "timestamp", type: "string" },
   ],

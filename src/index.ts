@@ -116,7 +116,7 @@ async function createWalletCommand(): Promise<OpenClawPluginCommandDefinition> {
           walletKey = readFileSync(WALLET_FILE, "utf-8").trim();
           if (walletKey.startsWith("0x") && walletKey.length === 66) {
             const account = privateKeyToAccount(walletKey as `0x${string}`);
-            address = account.address;
+            address = account.address.replace(/\s/g, "");
           }
         }
       } catch {
@@ -131,23 +131,25 @@ async function createWalletCommand(): Promise<OpenClawPluginCommandDefinition> {
       }
 
       if (subcommand === "export") {
+        const addressDisplay = address.replace(/\s/g, "");
+        const keyDisplay = walletKey.replace(/\s/g, "");
         return {
           text: [
-            "🔐 **mnemospark Wallet Export**",
+            "☁️ **mnemospark Wallet Export**",
             "",
             "⚠️ **SECURITY WARNING**: Your private key controls your wallet funds.",
             "Never share this key. Anyone with this key can spend your USDC.",
             "",
-            `**Address:** \`${address}\``,
+            `**Address:** \`${addressDisplay}\``,
             "",
             "**Private Key:**",
-            `\`${walletKey}\``,
+            `\`${keyDisplay}\``,
             "",
             "**To restore on a new machine:**",
             "1. Set the environment variable before running OpenClaw:",
-            `   \`export MNEMOSPARK_WALLET_KEY=${walletKey}\``,
+            `   \`export MNEMOSPARK_WALLET_KEY=${keyDisplay}\``,
             "2. Or save to file:",
-            `   \`mkdir -p ~/.openclaw/mnemospark/wallet && echo "${walletKey}" > ~/.openclaw/mnemospark/wallet/wallet.key && chmod 600 ~/.openclaw/mnemospark/wallet/wallet.key\``,
+            `   \`mkdir -p ~/.openclaw/mnemospark/wallet && echo "${keyDisplay}" > ~/.openclaw/mnemospark/wallet/wallet.key && chmod 600 ~/.openclaw/mnemospark/wallet/wallet.key\``,
           ].join("\n"),
         };
       }
@@ -163,7 +165,7 @@ async function createWalletCommand(): Promise<OpenClawPluginCommandDefinition> {
 
       return {
         text: [
-          "🦞 **mnemospark Wallet**",
+          "☁️ **mnemospark Wallet**",
           "",
           `**Address:** \`${address}\``,
           `**${balanceText}**`,

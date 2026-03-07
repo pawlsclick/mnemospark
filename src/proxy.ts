@@ -691,6 +691,7 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
       const response: Record<string, unknown> = {
         status: "ok",
         wallet: account.address,
+        backendConfigured: MNEMOSPARK_BACKEND_API_BASE_URL.trim().length > 0,
       };
 
       if (full) {
