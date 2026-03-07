@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.11] - 2026-03-05
+
+### Fixed
+
+- **OpenClaw plugin install**: Extension entry path now works when OpenClaw installs via `openclaw plugins install mnemospark` (npm layout: `node_modules/mnemospark/dist/index.js`); fallback `./dist/index.js` kept for full-package layout.
+
 ## [0.1.10] - 2026-03-05
 
 ### Changed
