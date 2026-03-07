@@ -185,9 +185,42 @@ function isOpenClawAvailable(): Promise<boolean> {
   });
 }
 
+function getOpenClawConfigPath(): string {
+  const stateDir = process.env.OPENCLAW_STATE_DIR ?? join(homedir(), ".openclaw");
+  return join(stateDir, "openclaw.json");
+}
+
 /**
- * If OpenClaw is on PATH, run `openclaw plugins install mnemospark`.
- * Otherwise print instructions. Does not modify openclaw.json directly.
+ * Ensure plugins.allow in openclaw.json includes "mnemospark". Idempotent; safe if file missing or invalid.
+ */
+async function ensureMnemosparkInPluginsAllow(): Promise<void> {
+  const configPath = getOpenClawConfigPath();
+  try {
+    const raw = await readFile(configPath, "utf-8");
+    const config = JSON.parse(raw) as Record<string, unknown>;
+    if (!config.plugins || typeof config.plugins !== "object") {
+      config.plugins = {};
+    }
+    const plugins = config.plugins as Record<string, unknown>;
+    if (!Array.isArray(plugins.allow)) {
+      plugins.allow = [];
+    }
+    const allow = plugins.allow as string[];
+    if (!allow.includes("mnemospark")) {
+      allow.push("mnemospark");
+      await writeFile(configPath, JSON.stringify(config, null, 2), "utf-8");
+      console.log("[mnemospark] Added mnemospark to plugins.allow in openclaw.json.");
+    }
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "ENOENT") return;
+    console.warn("[mnemospark] Could not update plugins.allow:", (err as Error).message);
+  }
+}
+
+/**
+ * If OpenClaw is on PATH, run `openclaw plugins install mnemospark` and ensure plugins.allow includes mnemospark.
+ * Otherwise print instructions.
  */
 async function promptOrRunOpenClawPluginInstall(): Promise<void> {
   const available = await isOpenClawAvailable();
@@ -200,7 +233,9 @@ async function promptOrRunOpenClawPluginInstall(): Promise<void> {
     const exitCode = await new Promise<number>((resolve) => {
       child.on("close", resolve);
     });
-    if (exitCode !== 0) {
+    if (exitCode === 0) {
+      await ensureMnemosparkInPluginsAllow();
+    } else {
       console.log(
         "\n[mnemospark] OpenClaw plugin install did not succeed. Run manually: openclaw plugins install mnemospark",
       );

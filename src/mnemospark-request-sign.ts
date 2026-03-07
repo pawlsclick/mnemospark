@@ -25,13 +25,14 @@ export type WalletSignatureHeaderEnvelope = {
   address: `0x${string}`;
 };
 
+/** EIP-712 struct types: bytes32/uint256 align with Solidity and Permit-style (OpenZeppelin EIP712). */
 export const MNEMOSPARK_REQUEST_TYPES = {
   MnemosparkRequest: [
     { name: "method", type: "string" },
     { name: "path", type: "string" },
     { name: "walletAddress", type: "address" },
-    { name: "nonce", type: "string" },
-    { name: "timestamp", type: "string" },
+    { name: "nonce", type: "bytes32" },
+    { name: "timestamp", type: "uint256" },
   ],
 } as const;
 
@@ -167,7 +168,13 @@ export async function createWalletSignatureHeaderValue(
     domain: createMnemosparkRequestDomain(options?.chainId),
     types: MNEMOSPARK_REQUEST_TYPES,
     primaryType: "MnemosparkRequest",
-    message: payload,
+    message: {
+      method: payload.method,
+      path: payload.path,
+      walletAddress: payload.walletAddress,
+      nonce: payload.nonce as `0x${string}`,
+      timestamp: BigInt(payload.timestamp),
+    },
   });
 
   const headerEnvelope: WalletSignatureHeaderEnvelope = {
