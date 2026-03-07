@@ -10,7 +10,6 @@
   },
   "openclaw": {
     "extensions": [
-      "node_modules/mnemospark/dist/index.js",
       "./dist/index.js"
     ]
   },
