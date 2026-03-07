@@ -68,7 +68,13 @@ describe("mnemospark request signing", () => {
       domain: createMnemosparkRequestDomain(BASE_SEPOLIA_CHAIN_ID),
       types: MNEMOSPARK_REQUEST_TYPES,
       primaryType: "MnemosparkRequest",
-      message: payload,
+      message: {
+        method: payload.method,
+        path: payload.path,
+        walletAddress: payload.walletAddress,
+        nonce: payload.nonce,
+        timestamp: BigInt(payload.timestamp),
+      },
       signature: headerEnvelope.signature as `0x${string}`,
     });
 
