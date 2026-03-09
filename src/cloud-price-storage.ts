@@ -79,6 +79,7 @@ type ProxyUploadOptions = {
   proxyBaseUrl?: string;
   fetchImpl?: FetchLike;
   idempotencyKey?: string;
+  maxRetries?: number;
 };
 
 type BackendQuoteOptions = {
@@ -347,9 +348,16 @@ export async function requestStorageUploadViaProxy(
   options: ProxyUploadOptions = {},
 ): Promise<StorageUploadResponse> {
   const fetchImpl = options.fetchImpl ?? fetch;
+  const maxRetries =
+    typeof options.maxRetries === "number" &&
+    Number.isFinite(options.maxRetries) &&
+    options.maxRetries >= 0
+      ? Math.floor(options.maxRetries)
+      : 2;
   const baseUrl = normalizeBaseUrl(
     options.proxyBaseUrl ?? `http://127.0.0.1:${PROXY_PORT.toString()}`,
   );
+  const targetUrl = `${baseUrl}${UPLOAD_PROXY_PATH}`;
   const requestHeaders: Record<string, string> = {
     "Content-Type": "application/json",
   };
@@ -358,13 +366,73 @@ export async function requestStorageUploadViaProxy(
     requestHeaders["Idempotency-Key"] = options.idempotencyKey.trim();
   }
 
-  const response = await fetchImpl(`${baseUrl}${UPLOAD_PROXY_PATH}`, {
-    method: "POST",
-    headers: requestHeaders,
-    body: JSON.stringify(request),
-  });
+  const requestBody = JSON.stringify(request);
+  const sendUploadRequest = async (): Promise<{ response: Response; bodyText: string }> => {
+    const response = await fetchImpl(targetUrl, {
+      method: "POST",
+      headers: requestHeaders,
+      body: requestBody,
+    });
+    return { response, bodyText: await response.text() };
+  };
 
-  const responseBody = await response.text();
+  let { response, bodyText: responseBody } = await sendUploadRequest();
+  if (response.status === 207) {
+    let parsed207: unknown;
+    try {
+      parsed207 = JSON.parse(responseBody);
+    } catch {
+      parsed207 = null;
+    }
+    const retryablePayload = asRecord(parsed207);
+    if (retryablePayload?.upload_failed === true) {
+      let transId = asNonEmptyString(retryablePayload.trans_id) ?? "unknown";
+      let exhaustedRetryableFailures = true;
+
+      for (let attempt = 0; attempt < maxRetries; attempt += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+
+        try {
+          ({ response, bodyText: responseBody } = await sendUploadRequest());
+        } catch {
+          continue;
+        }
+
+        if (response.ok && response.status !== 207) {
+          let retryPayload: unknown;
+          try {
+            retryPayload = JSON.parse(responseBody);
+          } catch {
+            throw new Error("Upload proxy returned invalid JSON");
+          }
+          return parseStorageUploadResponse(retryPayload);
+        }
+
+        if (response.status === 207) {
+          let retryParsed207: unknown;
+          try {
+            retryParsed207 = JSON.parse(responseBody);
+          } catch {
+            retryParsed207 = null;
+          }
+          const retryableRetryPayload = asRecord(retryParsed207);
+          if (retryableRetryPayload?.upload_failed === true) {
+            transId = asNonEmptyString(retryableRetryPayload.trans_id) ?? transId;
+            continue;
+          }
+          exhaustedRetryableFailures = false;
+          break;
+        }
+      }
+
+      if (exhaustedRetryableFailures) {
+        throw new Error(
+          `Payment confirmed (trans_id: ${transId}) but file storage failed after ${maxRetries} ${maxRetries === 1 ? "retry" : "retries"}. Contact support with your trans_id.`,
+        );
+      }
+    }
+  }
+
   if (!response.ok) {
     throw new Error(responseBody || `Upload proxy failed with status ${response.status}`);
   }

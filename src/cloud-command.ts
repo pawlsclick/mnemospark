@@ -1378,8 +1378,9 @@ export function createCloudCommand(
             text: formatStorageUploadUserMessage(uploadResponse, cronJob.cronId),
           };
         } catch (error) {
+          const uploadErrorMessage = extractUploadErrorMessage(error);
           return {
-            text: extractUploadErrorMessage(error) ?? "Cannot upload storage object",
+            text: uploadErrorMessage ?? "Cannot upload storage object",
             isError: true,
           };
         }
