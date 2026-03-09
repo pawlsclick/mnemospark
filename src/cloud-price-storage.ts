@@ -427,7 +427,7 @@ export async function requestStorageUploadViaProxy(
 
       if (exhaustedRetryableFailures) {
         throw new Error(
-          `Payment confirmed (trans_id: ${transId}) but file storage failed after ${maxRetries} retries. Contact support with your trans_id.`,
+          `Payment confirmed (trans_id: ${transId}) but file storage failed after ${maxRetries} ${maxRetries === 1 ? "retry" : "retries"}. Contact support with your trans_id.`,
         );
       }
     }

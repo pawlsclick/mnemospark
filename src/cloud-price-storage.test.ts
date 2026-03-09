@@ -245,7 +245,7 @@ describe("cloud price-storage transport", () => {
         },
       });
       const rejectionExpectation = expect(uploadPromise).rejects.toThrow(
-        "Payment confirmed (trans_id: tx-exhausted) but file storage failed after 1 retries. Contact support with your trans_id.",
+        "Payment confirmed (trans_id: tx-exhausted) but file storage failed after 1 retry. Contact support with your trans_id.",
       );
 
       await vi.advanceTimersByTimeAsync(1000);
