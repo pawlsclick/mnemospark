@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   forwardPriceStorageToBackend,
@@ -149,6 +149,142 @@ describe("cloud price-storage transport", () => {
     expect(capturedInit?.method).toBe("POST");
     const headers = capturedInit?.headers as Record<string, string>;
     expect(headers["Idempotency-Key"]).toBe("idemp-123");
+    expect(upload.object_key).toBe("obj-001.tar.gz.enc");
+  });
+
+  it("retries upload on 207 upload_failed and succeeds on retry", async () => {
+    const capturedInits: Array<RequestInit | undefined> = [];
+    let requestCount = 0;
+
+    vi.useFakeTimers();
+    try {
+      const uploadPromise = requestStorageUploadViaProxy(SAMPLE_UPLOAD_REQUEST, {
+        proxyBaseUrl: "http://127.0.0.1:7120/",
+        idempotencyKey: "idemp-207",
+        maxRetries: 2,
+        fetchImpl: async (_input, init) => {
+          requestCount += 1;
+          capturedInits.push(init);
+
+          if (requestCount === 1) {
+            return new Response(
+              JSON.stringify({
+                quote_id: "quote-123",
+                addr: "0x1234abcd",
+                trans_id: "tx-207",
+                upload_failed: true,
+                error: "S3 upload failed after payment settlement. Retry the upload.",
+              }),
+              {
+                status: 207,
+                headers: { "Content-Type": "application/json" },
+              },
+            );
+          }
+
+          return new Response(
+            JSON.stringify({
+              quote_id: "quote-123",
+              addr: "0x1234abcd",
+              addr_hash: "addr-hash",
+              trans_id: "tx-207",
+              storage_price: 2.75,
+              object_id: "obj-001",
+              object_key: "obj-001.tar.gz.enc",
+              provider: "aws",
+              bucket_name: "mnemospark-1234",
+              location: "us-east-1",
+            }),
+            {
+              status: 200,
+              headers: { "Content-Type": "application/json" },
+            },
+          );
+        },
+      });
+
+      await vi.advanceTimersByTimeAsync(1000);
+      const upload = await uploadPromise;
+
+      expect(upload.object_key).toBe("obj-001.tar.gz.enc");
+      expect(requestCount).toBe(2);
+      expect(capturedInits).toHaveLength(2);
+      for (const init of capturedInits) {
+        const headers = new Headers(init?.headers);
+        expect(headers.get("Idempotency-Key")).toBe("idemp-207");
+        expect(init?.body).toBe(JSON.stringify(SAMPLE_UPLOAD_REQUEST));
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("throws clear trans_id error after retryable 207 responses exhaust retries", async () => {
+    let requestCount = 0;
+
+    vi.useFakeTimers();
+    try {
+      const uploadPromise = requestStorageUploadViaProxy(SAMPLE_UPLOAD_REQUEST, {
+        proxyBaseUrl: "http://127.0.0.1:7120/",
+        maxRetries: 1,
+        fetchImpl: async () => {
+          requestCount += 1;
+          return new Response(
+            JSON.stringify({
+              quote_id: "quote-123",
+              addr: "0x1234abcd",
+              trans_id: "tx-exhausted",
+              upload_failed: true,
+              error: "S3 upload failed after payment settlement. Retry the upload.",
+            }),
+            {
+              status: 207,
+              headers: { "Content-Type": "application/json" },
+            },
+          );
+        },
+      });
+      const rejectionExpectation = expect(uploadPromise).rejects.toThrow(
+        "Payment confirmed (trans_id: tx-exhausted) but file storage failed after 1 retries. Contact support with your trans_id.",
+      );
+
+      await vi.advanceTimersByTimeAsync(1000);
+      await rejectionExpectation;
+      expect(requestCount).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("treats 207 without upload_failed as normal 2xx payload", async () => {
+    let requestCount = 0;
+
+    const upload = await requestStorageUploadViaProxy(SAMPLE_UPLOAD_REQUEST, {
+      proxyBaseUrl: "http://127.0.0.1:7120/",
+      fetchImpl: async () => {
+        requestCount += 1;
+        return new Response(
+          JSON.stringify({
+            quote_id: "quote-123",
+            addr: "0x1234abcd",
+            addr_hash: "addr-hash",
+            trans_id: "tx-207-no-flag",
+            storage_price: 2.75,
+            object_id: "obj-001",
+            object_key: "obj-001.tar.gz.enc",
+            provider: "aws",
+            bucket_name: "mnemospark-1234",
+            location: "us-east-1",
+          }),
+          {
+            status: 207,
+            headers: { "Content-Type": "application/json" },
+          },
+        );
+      },
+    });
+
+    expect(requestCount).toBe(1);
     expect(upload.object_key).toBe("obj-001.tar.gz.enc");
   });
 
