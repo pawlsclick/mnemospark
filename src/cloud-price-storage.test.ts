@@ -36,6 +36,15 @@ const SAMPLE_UPLOAD_REQUEST: StorageUploadRequest = {
   },
 };
 
+const SAMPLE_UPLOAD_REQUEST_PRESIGNED: StorageUploadRequest = {
+  ...SAMPLE_UPLOAD_REQUEST,
+  payload: {
+    ...SAMPLE_UPLOAD_REQUEST.payload,
+    mode: "presigned",
+    content_base64: undefined,
+  },
+};
+
 describe("cloud price-storage transport", () => {
   it("sends price-storage request to local proxy and parses quote response", async () => {
     let capturedUrl = "";
@@ -173,8 +182,43 @@ describe("cloud price-storage transport", () => {
     expect(headers["Idempotency-Key"]).toBe("idemp-456");
     expect(headers["PAYMENT-SIGNATURE"]).toBe("signed-payment-payload");
     expect(headers["x-payment"]).toBe("signed-payment-payload");
+    const forwardedBody = JSON.parse(String(capturedInit?.body)) as Record<string, unknown>;
+    expect(forwardedBody.quote_id).toBe(SAMPLE_UPLOAD_REQUEST.quote_id);
+    expect(forwardedBody.wallet_address).toBe(SAMPLE_UPLOAD_REQUEST.wallet_address);
+    expect(forwardedBody.object_id).toBe(SAMPLE_UPLOAD_REQUEST.object_id);
+    expect(forwardedBody.object_id_hash).toBe(SAMPLE_UPLOAD_REQUEST.object_id_hash);
+    expect(forwardedBody.ciphertext).toBe(SAMPLE_UPLOAD_REQUEST.payload.content_base64);
+    expect(forwardedBody.wrapped_dek).toBe(SAMPLE_UPLOAD_REQUEST.payload.wrapped_dek);
+    expect(forwardedBody.mode).toBe("inline");
+    expect(forwardedBody.payload).toBeUndefined();
+    expect(forwardedBody.quoted_storage_price).toBeUndefined();
     expect(forwarded.status).toBe(200);
     expect(forwarded.paymentResponse).toBe("response-header");
+  });
+
+  it("forwards presigned upload request with flat body and no ciphertext", async () => {
+    let capturedInit: RequestInit | undefined;
+
+    await forwardStorageUploadToBackend(SAMPLE_UPLOAD_REQUEST_PRESIGNED, {
+      backendBaseUrl: "https://api.example.com/prod/",
+      walletSignature: "wallet-proof-header",
+      fetchImpl: async (_input, init) => {
+        capturedInit = init;
+        return new Response(JSON.stringify({ ok: true }), {
+          status: 200,
+          headers: {
+            "Content-Type": "application/json",
+          },
+        });
+      },
+    });
+
+    const forwardedBody = JSON.parse(String(capturedInit?.body)) as Record<string, unknown>;
+    expect(forwardedBody.mode).toBe("presigned");
+    expect(forwardedBody.ciphertext).toBeUndefined();
+    expect(forwardedBody.wrapped_dek).toBe(SAMPLE_UPLOAD_REQUEST_PRESIGNED.payload.wrapped_dek);
+    expect(forwardedBody.payload).toBeUndefined();
+    expect(forwardedBody.object_key).toBe(SAMPLE_UPLOAD_REQUEST_PRESIGNED.object_id);
   });
 
   it("requires wallet proof for upload forwarding", async () => {

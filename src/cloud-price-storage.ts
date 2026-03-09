@@ -450,11 +450,60 @@ export async function forwardStorageUploadToBackend(
     requestHeaders["PAYMENT-SIGNATURE"] = requestHeaders["PAYMENT-SIGNATURE"] ?? legacyPayment;
   }
 
+  const payloadHints = request.payload as UploadPayload & {
+    object_key?: unknown;
+    object_key_hint?: unknown;
+    provider?: unknown;
+    provider_hint?: unknown;
+    location?: unknown;
+    location_hint?: unknown;
+  };
+  const requestHints = request as StorageUploadRequest & {
+    object_key?: unknown;
+    provider?: unknown;
+    location?: unknown;
+  };
+  const objectKey =
+    asNonEmptyString(requestHints.object_key) ??
+    asNonEmptyString(payloadHints.object_key) ??
+    asNonEmptyString(payloadHints.object_key_hint) ??
+    request.object_id;
+  const provider =
+    asNonEmptyString(requestHints.provider) ??
+    asNonEmptyString(payloadHints.provider) ??
+    asNonEmptyString(payloadHints.provider_hint);
+  const location =
+    asNonEmptyString(requestHints.location) ??
+    asNonEmptyString(payloadHints.location) ??
+    asNonEmptyString(payloadHints.location_hint);
+
+  const backendRequestBody: Record<string, unknown> = {
+    quote_id: request.quote_id,
+    wallet_address: request.wallet_address,
+    object_id: request.object_id,
+    object_id_hash: request.object_id_hash,
+    wrapped_dek: request.payload.wrapped_dek,
+    mode: request.payload.mode,
+    content_sha256: request.payload.content_sha256,
+    content_length_bytes: request.payload.content_length_bytes,
+    encryption_algorithm: request.payload.encryption_algorithm,
+    object_key: objectKey,
+  };
+  if (request.payload.content_base64) {
+    backendRequestBody.ciphertext = request.payload.content_base64;
+  }
+  if (provider) {
+    backendRequestBody.provider = provider;
+  }
+  if (location) {
+    backendRequestBody.location = location;
+  }
+
   const targetUrl = `${normalizeBaseUrl(backendBaseUrl)}/storage/upload`;
   const response = await fetchImpl(targetUrl, {
     method: "POST",
     headers: requestHeaders,
-    body: JSON.stringify(request),
+    body: JSON.stringify(backendRequestBody),
   });
 
   return {
