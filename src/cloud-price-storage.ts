@@ -398,16 +398,6 @@ export async function requestStorageUploadViaProxy(
           continue;
         }
 
-        if (response.status === 200) {
-          let retryPayload: unknown;
-          try {
-            retryPayload = JSON.parse(responseBody);
-          } catch {
-            throw new Error("Upload proxy returned invalid JSON");
-          }
-          return parseStorageUploadResponse(retryPayload);
-        }
-
         if (response.ok && response.status !== 207) {
           let retryPayload: unknown;
           try {
