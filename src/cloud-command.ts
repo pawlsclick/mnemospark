@@ -1379,12 +1379,6 @@ export function createCloudCommand(
           };
         } catch (error) {
           const uploadErrorMessage = extractUploadErrorMessage(error);
-          if (uploadErrorMessage?.includes("Payment confirmed (trans_id:")) {
-            return {
-              text: uploadErrorMessage,
-              isError: true,
-            };
-          }
           return {
             text: uploadErrorMessage ?? "Cannot upload storage object",
             isError: true,
