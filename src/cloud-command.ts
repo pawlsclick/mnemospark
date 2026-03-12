@@ -1207,18 +1207,20 @@ export function createCloudCommand(
 }
 
 type RunCloudCommandHandlerOptions = {
-  buildBackupObjectFn: CreateCloudCommandOptions["buildBackupObjectFn"];
-  requestPriceStorageQuoteFn: CreateCloudCommandOptions["requestPriceStorageQuoteFn"];
-  requestStorageUploadFn: CreateCloudCommandOptions["requestStorageUploadFn"];
-  requestStorageUploadConfirmFn: CreateCloudCommandOptions["requestStorageUploadConfirmFn"];
-  resolveWalletKeyFn: CreateCloudCommandOptions["resolveWalletPrivateKeyFn"];
-  createPaymentFetchFn: CreateCloudCommandOptions["createPaymentFetchFn"];
-  fetchImpl: CreateCloudCommandOptions["fetchImpl"];
-  nowDateFn: CreateCloudCommandOptions["nowDateFn"];
-  idempotencyKeyFn: CreateCloudCommandOptions["idempotencyKeyFn"];
-  requestStorageLsFn: CreateCloudCommandOptions["requestStorageLsFn"];
-  requestStorageDownloadFn: CreateCloudCommandOptions["requestStorageDownloadFn"];
-  requestStorageDeleteFn: CreateCloudCommandOptions["requestStorageDeleteFn"];
+  buildBackupObjectFn: NonNullable<CreateCloudCommandOptions["buildBackupObjectFn"]>;
+  requestPriceStorageQuoteFn: NonNullable<CreateCloudCommandOptions["requestPriceStorageQuoteFn"]>;
+  requestStorageUploadFn: NonNullable<CreateCloudCommandOptions["requestStorageUploadFn"]>;
+  requestStorageUploadConfirmFn: NonNullable<
+    CreateCloudCommandOptions["requestStorageUploadConfirmFn"]
+  >;
+  resolveWalletKeyFn: NonNullable<CreateCloudCommandOptions["resolveWalletPrivateKeyFn"]>;
+  createPaymentFetchFn: NonNullable<CreateCloudCommandOptions["createPaymentFetchFn"]>;
+  fetchImpl: NonNullable<CreateCloudCommandOptions["fetchImpl"]>;
+  nowDateFn: NonNullable<CreateCloudCommandOptions["nowDateFn"]>;
+  idempotencyKeyFn: NonNullable<CreateCloudCommandOptions["idempotencyKeyFn"]>;
+  requestStorageLsFn: NonNullable<CreateCloudCommandOptions["requestStorageLsFn"]>;
+  requestStorageDownloadFn: NonNullable<CreateCloudCommandOptions["requestStorageDownloadFn"]>;
+  requestStorageDeleteFn: NonNullable<CreateCloudCommandOptions["requestStorageDeleteFn"]>;
   objectLogHomeDir: string | undefined;
   backupOptions: CreateCloudCommandOptions["backupOptions"];
   proxyQuoteOptions: CreateCloudCommandOptions["proxyQuoteOptions"];
@@ -1233,20 +1235,18 @@ async function runCloudCommandHandler(
 ): Promise<{ text: string; isError?: boolean }> {
   const parsed = parseCloudArgs(ctx.args);
   const objectLogHomeDir = options.objectLogHomeDir;
-  const backupBuilder = options.buildBackupObjectFn ?? buildBackupObject;
-  const requestPriceStorageQuote =
-    options.requestPriceStorageQuoteFn ?? requestPriceStorageViaProxy;
-  const requestStorageUpload = options.requestStorageUploadFn ?? requestStorageUploadViaProxy;
-  const requestStorageUploadConfirm =
-    options.requestStorageUploadConfirmFn ?? requestStorageUploadConfirmViaProxy;
-  const resolveWalletKey = options.resolveWalletKeyFn ?? resolveWalletPrivateKey;
-  const createPayment = options.createPaymentFetchFn ?? createPaymentFetch;
-  const fetchImpl = options.fetchImpl ?? fetch;
-  const nowDateFn = options.nowDateFn ?? (() => new Date());
-  const idempotencyKeyFn = options.idempotencyKeyFn ?? randomUUID;
-  const requestStorageLs = options.requestStorageLsFn ?? requestStorageLsViaProxy;
-  const requestStorageDownload = options.requestStorageDownloadFn ?? requestStorageDownloadViaProxy;
-  const requestStorageDelete = options.requestStorageDeleteFn ?? requestStorageDeleteViaProxy;
+  const backupBuilder = options.buildBackupObjectFn;
+  const requestPriceStorageQuote = options.requestPriceStorageQuoteFn;
+  const requestStorageUpload = options.requestStorageUploadFn;
+  const requestStorageUploadConfirm = options.requestStorageUploadConfirmFn;
+  const resolveWalletKey = options.resolveWalletKeyFn;
+  const createPayment = options.createPaymentFetchFn;
+  const fetchImpl = options.fetchImpl;
+  const nowDateFn = options.nowDateFn;
+  const idempotencyKeyFn = options.idempotencyKeyFn;
+  const requestStorageLs = options.requestStorageLsFn;
+  const requestStorageDownload = options.requestStorageDownloadFn;
+  const requestStorageDelete = options.requestStorageDeleteFn;
 
   if (parsed.mode === "help" || parsed.mode === "unknown") {
     return {
