@@ -1163,347 +1163,404 @@ function formatStorageLsUserMessage(result: StorageLsResponse, requestedObjectKe
 export function createCloudCommand(
   options: CreateCloudCommandOptions = {},
 ): OpenClawPluginCommandDefinition {
-  const backupBuilder = options.buildBackupObjectFn ?? buildBackupObject;
-  const requestPriceStorageQuote =
-    options.requestPriceStorageQuoteFn ?? requestPriceStorageViaProxy;
-  const requestStorageUpload = options.requestStorageUploadFn ?? requestStorageUploadViaProxy;
-  const requestStorageUploadConfirm =
-    options.requestStorageUploadConfirmFn ?? requestStorageUploadConfirmViaProxy;
-  const resolveWalletKey = options.resolveWalletPrivateKeyFn ?? resolveWalletPrivateKey;
-  const createPayment = options.createPaymentFetchFn ?? createPaymentFetch;
-  const fetchImpl = options.fetchImpl ?? fetch;
-  const nowDateFn = options.nowDateFn ?? (() => new Date());
-  const idempotencyKeyFn = options.idempotencyKeyFn ?? randomUUID;
-  const requestStorageLs = options.requestStorageLsFn ?? requestStorageLsViaProxy;
-  const requestStorageDownload = options.requestStorageDownloadFn ?? requestStorageDownloadViaProxy;
-  const requestStorageDelete = options.requestStorageDeleteFn ?? requestStorageDeleteViaProxy;
-  const objectLogHomeDir = options.objectLogHomeDir ?? options.backupOptions?.homeDir;
-
   return {
     name: "mnemospark-cloud",
     description: "Manage mnemospark cloud storage workflow commands",
     acceptsArgs: true,
     requireAuth: true,
     handler: async (ctx) => {
-      const parsed = parseCloudArgs(ctx.args);
-
-      if (parsed.mode === "help" || parsed.mode === "unknown") {
-        return {
-          text: CLOUD_HELP_TEXT,
-          isError: parsed.mode === "unknown",
-        };
+      try {
+        return await runCloudCommandHandler(ctx, {
+          buildBackupObjectFn: options.buildBackupObjectFn ?? buildBackupObject,
+          requestPriceStorageQuoteFn:
+            options.requestPriceStorageQuoteFn ?? requestPriceStorageViaProxy,
+          requestStorageUploadFn: options.requestStorageUploadFn ?? requestStorageUploadViaProxy,
+          requestStorageUploadConfirmFn:
+            options.requestStorageUploadConfirmFn ?? requestStorageUploadConfirmViaProxy,
+          resolveWalletKeyFn: options.resolveWalletPrivateKeyFn ?? resolveWalletPrivateKey,
+          createPaymentFetchFn: options.createPaymentFetchFn ?? createPaymentFetch,
+          fetchImpl: options.fetchImpl ?? fetch,
+          nowDateFn: options.nowDateFn ?? (() => new Date()),
+          idempotencyKeyFn: options.idempotencyKeyFn ?? randomUUID,
+          requestStorageLsFn: options.requestStorageLsFn ?? requestStorageLsViaProxy,
+          requestStorageDownloadFn:
+            options.requestStorageDownloadFn ?? requestStorageDownloadViaProxy,
+          requestStorageDeleteFn: options.requestStorageDeleteFn ?? requestStorageDeleteViaProxy,
+          objectLogHomeDir: options.objectLogHomeDir ?? options.backupOptions?.homeDir,
+          backupOptions: options.backupOptions,
+          proxyQuoteOptions: options.proxyQuoteOptions,
+          proxyUploadOptions: options.proxyUploadOptions,
+          proxyUploadConfirmOptions: options.proxyUploadConfirmOptions,
+          proxyStorageOptions: options.proxyStorageOptions,
+        });
+      } catch (outerError) {
+        const message =
+          outerError instanceof Error
+            ? outerError.message
+            : typeof outerError === "string"
+              ? outerError
+              : "An unexpected error occurred";
+        return { text: message.trim() || "An unexpected error occurred", isError: true };
       }
+    },
+  };
+}
 
-      if (parsed.mode === "price-storage-invalid") {
-        return {
-          text: `Cannot price storage: required arguments are ${REQUIRED_PRICE_STORAGE}.`,
-          isError: true,
-        };
-      }
+type RunCloudCommandHandlerOptions = {
+  buildBackupObjectFn: NonNullable<CreateCloudCommandOptions["buildBackupObjectFn"]>;
+  requestPriceStorageQuoteFn: NonNullable<CreateCloudCommandOptions["requestPriceStorageQuoteFn"]>;
+  requestStorageUploadFn: NonNullable<CreateCloudCommandOptions["requestStorageUploadFn"]>;
+  requestStorageUploadConfirmFn: NonNullable<
+    CreateCloudCommandOptions["requestStorageUploadConfirmFn"]
+  >;
+  resolveWalletKeyFn: NonNullable<CreateCloudCommandOptions["resolveWalletPrivateKeyFn"]>;
+  createPaymentFetchFn: NonNullable<CreateCloudCommandOptions["createPaymentFetchFn"]>;
+  fetchImpl: NonNullable<CreateCloudCommandOptions["fetchImpl"]>;
+  nowDateFn: NonNullable<CreateCloudCommandOptions["nowDateFn"]>;
+  idempotencyKeyFn: NonNullable<CreateCloudCommandOptions["idempotencyKeyFn"]>;
+  requestStorageLsFn: NonNullable<CreateCloudCommandOptions["requestStorageLsFn"]>;
+  requestStorageDownloadFn: NonNullable<CreateCloudCommandOptions["requestStorageDownloadFn"]>;
+  requestStorageDeleteFn: NonNullable<CreateCloudCommandOptions["requestStorageDeleteFn"]>;
+  objectLogHomeDir: string | undefined;
+  backupOptions: CreateCloudCommandOptions["backupOptions"];
+  proxyQuoteOptions: CreateCloudCommandOptions["proxyQuoteOptions"];
+  proxyUploadOptions: CreateCloudCommandOptions["proxyUploadOptions"];
+  proxyUploadConfirmOptions: CreateCloudCommandOptions["proxyUploadConfirmOptions"];
+  proxyStorageOptions: CreateCloudCommandOptions["proxyStorageOptions"];
+};
 
-      if (parsed.mode === "upload-invalid") {
-        return {
-          text: `Cannot upload storage object: required arguments are ${REQUIRED_UPLOAD}.`,
-          isError: true,
-        };
-      }
+async function runCloudCommandHandler(
+  ctx: { args?: string },
+  options: RunCloudCommandHandlerOptions,
+): Promise<{ text: string; isError?: boolean }> {
+  const parsed = parseCloudArgs(ctx.args);
+  const objectLogHomeDir = options.objectLogHomeDir;
+  const backupBuilder = options.buildBackupObjectFn;
+  const requestPriceStorageQuote = options.requestPriceStorageQuoteFn;
+  const requestStorageUpload = options.requestStorageUploadFn;
+  const requestStorageUploadConfirm = options.requestStorageUploadConfirmFn;
+  const resolveWalletKey = options.resolveWalletKeyFn;
+  const createPayment = options.createPaymentFetchFn;
+  const fetchImpl = options.fetchImpl;
+  const nowDateFn = options.nowDateFn;
+  const idempotencyKeyFn = options.idempotencyKeyFn;
+  const requestStorageLs = options.requestStorageLsFn;
+  const requestStorageDownload = options.requestStorageDownloadFn;
+  const requestStorageDelete = options.requestStorageDeleteFn;
 
-      if (parsed.mode === "ls-invalid") {
-        return {
-          text: `Cannot list storage object: required arguments are ${REQUIRED_STORAGE_OBJECT}.`,
-          isError: true,
-        };
-      }
+  if (parsed.mode === "help" || parsed.mode === "unknown") {
+    return {
+      text: CLOUD_HELP_TEXT,
+      isError: parsed.mode === "unknown",
+    };
+  }
 
-      if (parsed.mode === "download-invalid") {
-        return {
-          text: `Cannot download file: required arguments are ${REQUIRED_STORAGE_OBJECT}.`,
-          isError: true,
-        };
-      }
+  if (parsed.mode === "price-storage-invalid") {
+    return {
+      text: `Cannot price storage: required arguments are ${REQUIRED_PRICE_STORAGE}.`,
+      isError: true,
+    };
+  }
 
-      if (parsed.mode === "delete-invalid") {
-        return {
-          text: `Cannot delete file: required arguments are ${REQUIRED_STORAGE_OBJECT}.`,
-          isError: true,
-        };
-      }
+  if (parsed.mode === "upload-invalid") {
+    return {
+      text: `Cannot upload storage object: required arguments are ${REQUIRED_UPLOAD}.`,
+      isError: true,
+    };
+  }
 
-      if (parsed.mode === "backup") {
-        try {
-          const result = await backupBuilder(parsed.backupTarget, options.backupOptions);
-          return {
-            text: [
-              `object-id: ${result.objectId}`,
-              `object-id-hash: ${result.objectIdHash.replace(/\s/g, "")}`,
-              `object-size: ${result.objectSizeGb}`,
-            ].join("\n"),
-          };
-        } catch (err) {
-          if (err instanceof UnsupportedBackupPlatformError) {
-            return {
-              text: "Cloud backup is only supported on macOS and Linux.",
-              isError: true,
-            };
-          }
-          return {
-            text: "Cannot build storage object",
-            isError: true,
-          };
-        }
-      }
+  if (parsed.mode === "ls-invalid") {
+    return {
+      text: `Cannot list storage object: required arguments are ${REQUIRED_STORAGE_OBJECT}.`,
+      isError: true,
+    };
+  }
 
-      if (parsed.mode === "price-storage") {
-        try {
-          const quote = await requestPriceStorageQuote(
-            parsed.priceStorageRequest,
-            options.proxyQuoteOptions,
-          );
-          await appendPriceStorageQuoteLog(quote, objectLogHomeDir);
-          return {
-            text: formatPriceStorageUserMessage(quote),
-          };
-        } catch (err) {
-          const message =
-            err instanceof Error ? err.message : typeof err === "string" ? err : String(err);
-          return {
-            text: message ? `Cannot price storage: ${message}` : "Cannot price storage",
-            isError: true,
-          };
-        }
-      }
+  if (parsed.mode === "download-invalid") {
+    return {
+      text: `Cannot download file: required arguments are ${REQUIRED_STORAGE_OBJECT}.`,
+      isError: true,
+    };
+  }
 
-      if (parsed.mode === "upload") {
-        try {
-          const loggedQuote = await findLoggedPriceStorageQuote(
-            parsed.uploadRequest.quote_id,
-            objectLogHomeDir,
-          );
-          if (!loggedQuote) {
-            return {
-              text: "Cannot upload storage object: quote-id not found in object.log. Run /mnemospark-cloud price-storage first.",
-              isError: true,
-            };
-          }
+  if (parsed.mode === "delete-invalid") {
+    return {
+      text: `Cannot delete file: required arguments are ${REQUIRED_STORAGE_OBJECT}.`,
+      isError: true,
+    };
+  }
 
-          if (
-            loggedQuote.walletAddress.toLowerCase() !==
-              parsed.uploadRequest.wallet_address.toLowerCase() ||
-            loggedQuote.objectId !== parsed.uploadRequest.object_id ||
-            loggedQuote.objectIdHash.toLowerCase() !==
-              parsed.uploadRequest.object_id_hash.toLowerCase()
-          ) {
-            return {
-              text: "Cannot upload storage object: quote details do not match wallet/object arguments.",
-              isError: true,
-            };
-          }
-
-          const archivePath = join(
-            options.backupOptions?.tmpDir ?? DEFAULT_BACKUP_DIR,
-            parsed.uploadRequest.object_id,
-          );
-          let archiveStats;
-          try {
-            archiveStats = await stat(archivePath);
-          } catch {
-            return {
-              text: `Cannot upload storage object: local archive not found at ${archivePath}. Run /mnemospark-cloud backup first.`,
-              isError: true,
-            };
-          }
-          if (!archiveStats.isFile()) {
-            return {
-              text: `Cannot upload storage object: local archive path is not a file (${archivePath}).`,
-              isError: true,
-            };
-          }
-
-          const archiveHash = await sha256File(archivePath);
-          if (archiveHash.toLowerCase() !== parsed.uploadRequest.object_id_hash.toLowerCase()) {
-            return {
-              text: "Cannot upload storage object: object-id-hash does not match local archive.",
-              isError: true,
-            };
-          }
-
-          const walletKey = await resolveWalletKey(objectLogHomeDir);
-          const walletAccount = privateKeyToAccount(walletKey);
-          if (
-            walletAccount.address.toLowerCase() !==
-            parsed.uploadRequest.wallet_address.toLowerCase()
-          ) {
-            return {
-              text: `Cannot upload storage object: wallet key address ${walletAccount.address} does not match --wallet-address ${parsed.uploadRequest.wallet_address}.`,
-              isError: true,
-            };
-          }
-
-          const preparedPayload = await prepareUploadPayload(
-            archivePath,
-            parsed.uploadRequest.wallet_address,
-            objectLogHomeDir,
-          );
-          const paymentFetch = createPayment(walletKey).fetch;
-          const idempotencyKey = idempotencyKeyFn();
-
-          const uploadResponse = await requestStorageUpload(
-            {
-              quote_id: parsed.uploadRequest.quote_id,
-              wallet_address: parsed.uploadRequest.wallet_address,
-              object_id: parsed.uploadRequest.object_id,
-              object_id_hash: parsed.uploadRequest.object_id_hash,
-              quoted_storage_price: loggedQuote.storagePrice,
-              payload: preparedPayload.payload,
-            },
-            {
-              ...options.proxyUploadOptions,
-              idempotencyKey,
-              fetchImpl: (input, init) => paymentFetch(input, init),
-            },
-          );
-
-          await uploadPresignedObjectIfNeeded(
-            uploadResponse,
-            preparedPayload.payload.mode,
-            preparedPayload.encryptedContent,
-            fetchImpl,
-          );
-          let finalizedUploadResponse = uploadResponse;
-          if (
-            preparedPayload.payload.mode === "presigned" &&
-            uploadResponse.confirmation_required === true
-          ) {
-            try {
-              finalizedUploadResponse = await requestStorageUploadConfirm(
-                {
-                  quote_id: uploadResponse.quote_id,
-                  wallet_address: parsed.uploadRequest.wallet_address,
-                  object_key: uploadResponse.object_key,
-                  idempotency_key: idempotencyKey,
-                },
-                options.proxyUploadConfirmOptions,
-              );
-            } catch (confirmError) {
-              const transId = uploadResponse.trans_id ?? "unknown";
-              const confirmMessage =
-                extractUploadErrorMessage(confirmError) ?? "Upload confirmation request failed";
-              throw new Error(
-                `Upload to S3 succeeded, but backend confirmation failed (trans_id: ${transId}, idempotency_key: ${idempotencyKey}). ${confirmMessage}`,
-              );
-            }
-          }
-
-          await appendStorageUploadLog(finalizedUploadResponse, objectLogHomeDir, nowDateFn);
-          const cronStoragePriceCandidate =
-            finalizedUploadResponse.storage_price ?? loggedQuote.storagePrice;
-          const cronStoragePrice =
-            Number.isFinite(cronStoragePriceCandidate) && cronStoragePriceCandidate > 0
-              ? cronStoragePriceCandidate
-              : loggedQuote.storagePrice;
-          const cronJob = await createStoragePaymentCronJob(
-            finalizedUploadResponse,
-            cronStoragePrice,
-            objectLogHomeDir,
-            nowDateFn,
-          );
-          await maybeCleanupLocalBackupArchive(archivePath);
-
-          return {
-            text: formatStorageUploadUserMessage(finalizedUploadResponse, cronJob.cronId),
-          };
-        } catch (error) {
-          const uploadErrorMessage = extractUploadErrorMessage(error);
-          return {
-            text: uploadErrorMessage ?? "Cannot upload storage object",
-            isError: true,
-          };
-        }
-      }
-
-      if (parsed.mode === "ls") {
-        try {
-          const lsResult = await requestStorageLs(
-            parsed.storageObjectRequest,
-            options.proxyStorageOptions,
-          );
-          if (!lsResult.success) {
-            throw new Error("ls failed");
-          }
-          return {
-            text: formatStorageLsUserMessage(lsResult, parsed.storageObjectRequest.object_key),
-          };
-        } catch {
-          return {
-            text: "Cannot list storage object",
-            isError: true,
-          };
-        }
-      }
-
-      if (parsed.mode === "download") {
-        try {
-          const downloadResult = await requestStorageDownload(
-            parsed.storageObjectRequest,
-            options.proxyStorageOptions,
-          );
-          if (!downloadResult.success) {
-            throw new Error("download failed");
-          }
-          return {
-            text: `File ${parsed.storageObjectRequest.object_key} downloaded to ${downloadResult.file_path}`,
-          };
-        } catch {
-          return {
-            text: "Cannot download file",
-            isError: true,
-          };
-        }
-      }
-
-      if (parsed.mode === "delete") {
-        try {
-          const deleteResult = await requestStorageDelete(
-            parsed.storageObjectRequest,
-            options.proxyStorageOptions,
-          );
-          if (!deleteResult.success) {
-            throw new Error("delete failed");
-          }
-        } catch {
-          return {
-            text: "Cannot delete file",
-            isError: true,
-          };
-        }
-        let cronEntry: LoggedStoragePaymentCron | null = null;
-        let cronDeleted = false;
-        try {
-          cronEntry = await findLoggedStoragePaymentCronByObjectKey(
-            parsed.storageObjectRequest.object_key,
-            objectLogHomeDir,
-          );
-          cronDeleted = cronEntry
-            ? await removeStoragePaymentCronJob(cronEntry.cronId, objectLogHomeDir)
-            : false;
-        } catch {
-          // Cloud delete already succeeded; cron lookup/removal is best-effort.
-          // Report success without implying the delete failed.
-        }
-        return {
-          text: formatStorageDeleteUserMessage(
-            parsed.storageObjectRequest.object_key,
-            cronEntry?.cronId ?? null,
-            cronDeleted,
-          ),
-        };
-      }
-
+  if (parsed.mode === "backup") {
+    try {
+      const result = await backupBuilder(parsed.backupTarget, options.backupOptions);
       return {
-        text: CLOUD_HELP_TEXT,
+        text: [
+          `object-id: ${result.objectId}`,
+          `object-id-hash: ${result.objectIdHash.replace(/\s/g, "")}`,
+          `object-size: ${result.objectSizeGb}`,
+        ].join("\n"),
+      };
+    } catch (err) {
+      if (err instanceof UnsupportedBackupPlatformError) {
+        return {
+          text: "Cloud backup is only supported on macOS and Linux.",
+          isError: true,
+        };
+      }
+      return {
+        text: "Cannot build storage object",
         isError: true,
       };
-    },
+    }
+  }
+
+  if (parsed.mode === "price-storage") {
+    try {
+      const quote = await requestPriceStorageQuote(
+        parsed.priceStorageRequest,
+        options.proxyQuoteOptions,
+      );
+      await appendPriceStorageQuoteLog(quote, objectLogHomeDir);
+      return {
+        text: formatPriceStorageUserMessage(quote),
+      };
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : typeof err === "string" ? err : String(err);
+      return {
+        text: message ? `Cannot price storage: ${message}` : "Cannot price storage",
+        isError: true,
+      };
+    }
+  }
+
+  if (parsed.mode === "upload") {
+    try {
+      const loggedQuote = await findLoggedPriceStorageQuote(
+        parsed.uploadRequest.quote_id,
+        objectLogHomeDir,
+      );
+      if (!loggedQuote) {
+        return {
+          text: "Cannot upload storage object: quote-id not found in object.log. Run /mnemospark-cloud price-storage first.",
+          isError: true,
+        };
+      }
+
+      if (
+        loggedQuote.walletAddress.toLowerCase() !==
+          parsed.uploadRequest.wallet_address.toLowerCase() ||
+        loggedQuote.objectId !== parsed.uploadRequest.object_id ||
+        loggedQuote.objectIdHash.toLowerCase() !== parsed.uploadRequest.object_id_hash.toLowerCase()
+      ) {
+        return {
+          text: "Cannot upload storage object: quote details do not match wallet/object arguments.",
+          isError: true,
+        };
+      }
+
+      const archivePath = join(
+        options.backupOptions?.tmpDir ?? DEFAULT_BACKUP_DIR,
+        parsed.uploadRequest.object_id,
+      );
+      let archiveStats;
+      try {
+        archiveStats = await stat(archivePath);
+      } catch {
+        return {
+          text: `Cannot upload storage object: local archive not found at ${archivePath}. Run /mnemospark-cloud backup first.`,
+          isError: true,
+        };
+      }
+      if (!archiveStats.isFile()) {
+        return {
+          text: `Cannot upload storage object: local archive path is not a file (${archivePath}).`,
+          isError: true,
+        };
+      }
+
+      const archiveHash = await sha256File(archivePath);
+      if (archiveHash.toLowerCase() !== parsed.uploadRequest.object_id_hash.toLowerCase()) {
+        return {
+          text: "Cannot upload storage object: object-id-hash does not match local archive.",
+          isError: true,
+        };
+      }
+
+      const walletKey = await resolveWalletKey(objectLogHomeDir);
+      const walletAccount = privateKeyToAccount(walletKey);
+      if (
+        walletAccount.address.toLowerCase() !== parsed.uploadRequest.wallet_address.toLowerCase()
+      ) {
+        return {
+          text: `Cannot upload storage object: wallet key address ${walletAccount.address} does not match --wallet-address ${parsed.uploadRequest.wallet_address}.`,
+          isError: true,
+        };
+      }
+
+      const preparedPayload = await prepareUploadPayload(
+        archivePath,
+        parsed.uploadRequest.wallet_address,
+        objectLogHomeDir,
+      );
+      const paymentFetch = createPayment(walletKey).fetch;
+      const idempotencyKey = idempotencyKeyFn();
+
+      const uploadResponse = await requestStorageUpload(
+        {
+          quote_id: parsed.uploadRequest.quote_id,
+          wallet_address: parsed.uploadRequest.wallet_address,
+          object_id: parsed.uploadRequest.object_id,
+          object_id_hash: parsed.uploadRequest.object_id_hash,
+          quoted_storage_price: loggedQuote.storagePrice,
+          payload: preparedPayload.payload,
+        },
+        {
+          ...options.proxyUploadOptions,
+          idempotencyKey,
+          fetchImpl: (input, init) => paymentFetch(input, init),
+        },
+      );
+
+      await uploadPresignedObjectIfNeeded(
+        uploadResponse,
+        preparedPayload.payload.mode,
+        preparedPayload.encryptedContent,
+        fetchImpl,
+      );
+      let finalizedUploadResponse = uploadResponse;
+      if (
+        preparedPayload.payload.mode === "presigned" &&
+        uploadResponse.confirmation_required === true
+      ) {
+        try {
+          finalizedUploadResponse = await requestStorageUploadConfirm(
+            {
+              quote_id: uploadResponse.quote_id,
+              wallet_address: parsed.uploadRequest.wallet_address,
+              object_key: uploadResponse.object_key,
+              idempotency_key: idempotencyKey,
+            },
+            options.proxyUploadConfirmOptions,
+          );
+        } catch (confirmError) {
+          const transId = uploadResponse.trans_id ?? "unknown";
+          const confirmMessage =
+            extractUploadErrorMessage(confirmError) ?? "Upload confirmation request failed";
+          throw new Error(
+            `Upload to S3 succeeded, but backend confirmation failed (trans_id: ${transId}, idempotency_key: ${idempotencyKey}). ${confirmMessage}`,
+          );
+        }
+      }
+
+      await appendStorageUploadLog(finalizedUploadResponse, objectLogHomeDir, nowDateFn);
+      const cronStoragePriceCandidate =
+        finalizedUploadResponse.storage_price ?? loggedQuote.storagePrice;
+      const cronStoragePrice =
+        Number.isFinite(cronStoragePriceCandidate) && cronStoragePriceCandidate > 0
+          ? cronStoragePriceCandidate
+          : loggedQuote.storagePrice;
+      const cronJob = await createStoragePaymentCronJob(
+        finalizedUploadResponse,
+        cronStoragePrice,
+        objectLogHomeDir,
+        nowDateFn,
+      );
+      await maybeCleanupLocalBackupArchive(archivePath);
+
+      return {
+        text: formatStorageUploadUserMessage(finalizedUploadResponse, cronJob.cronId),
+      };
+    } catch (error) {
+      const uploadErrorMessage = extractUploadErrorMessage(error);
+      return {
+        text: uploadErrorMessage ?? "Cannot upload storage object",
+        isError: true,
+      };
+    }
+  }
+
+  if (parsed.mode === "ls") {
+    try {
+      const lsResult = await requestStorageLs(
+        parsed.storageObjectRequest,
+        options.proxyStorageOptions,
+      );
+      if (!lsResult.success) {
+        throw new Error("ls failed");
+      }
+      return {
+        text: formatStorageLsUserMessage(lsResult, parsed.storageObjectRequest.object_key),
+      };
+    } catch {
+      return {
+        text: "Cannot list storage object",
+        isError: true,
+      };
+    }
+  }
+
+  if (parsed.mode === "download") {
+    try {
+      const downloadResult = await requestStorageDownload(
+        parsed.storageObjectRequest,
+        options.proxyStorageOptions,
+      );
+      if (!downloadResult.success) {
+        throw new Error("download failed");
+      }
+      return {
+        text: `File ${parsed.storageObjectRequest.object_key} downloaded to ${downloadResult.file_path}`,
+      };
+    } catch {
+      return {
+        text: "Cannot download file",
+        isError: true,
+      };
+    }
+  }
+
+  if (parsed.mode === "delete") {
+    try {
+      const deleteResult = await requestStorageDelete(
+        parsed.storageObjectRequest,
+        options.proxyStorageOptions,
+      );
+      if (!deleteResult.success) {
+        throw new Error("delete failed");
+      }
+    } catch {
+      return {
+        text: "Cannot delete file",
+        isError: true,
+      };
+    }
+    let cronEntry: LoggedStoragePaymentCron | null = null;
+    let cronDeleted = false;
+    try {
+      cronEntry = await findLoggedStoragePaymentCronByObjectKey(
+        parsed.storageObjectRequest.object_key,
+        objectLogHomeDir,
+      );
+      cronDeleted = cronEntry
+        ? await removeStoragePaymentCronJob(cronEntry.cronId, objectLogHomeDir)
+        : false;
+    } catch {
+      // Cloud delete already succeeded; cron lookup/removal is best-effort.
+      // Report success without implying the delete failed.
+    }
+    return {
+      text: formatStorageDeleteUserMessage(
+        parsed.storageObjectRequest.object_key,
+        cronEntry?.cronId ?? null,
+        cronDeleted,
+      ),
+    };
+  }
+
+  return {
+    text: CLOUD_HELP_TEXT,
+    isError: true,
   };
 }
 
