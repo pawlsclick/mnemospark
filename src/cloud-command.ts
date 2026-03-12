@@ -12,14 +12,17 @@ import { basename, dirname, join, resolve } from "node:path";
 import { privateKeyToAccount } from "viem/accounts";
 
 import {
+  requestStorageUploadConfirmViaProxy,
   requestStorageUploadViaProxy,
   parsePriceStorageQuoteRequest,
   requestPriceStorageViaProxy,
+  type StorageUploadConfirmRequest,
   type StorageUploadRequest,
   type StorageUploadResponse,
   type UploadPayload,
   type PriceStorageQuoteRequest,
   type PriceStorageQuoteResponse,
+  type ProxyUploadConfirmOptions,
   type ProxyQuoteOptions,
   type ProxyUploadOptions,
 } from "./cloud-price-storage.js";
@@ -158,6 +161,10 @@ type CreateCloudCommandOptions = {
     request: StorageUploadRequest,
     options?: ProxyUploadOptions,
   ) => Promise<StorageUploadResponse>;
+  requestStorageUploadConfirmFn?: (
+    request: StorageUploadConfirmRequest,
+    options?: ProxyUploadConfirmOptions,
+  ) => Promise<StorageUploadResponse>;
   resolveWalletPrivateKeyFn?: (homeDir?: string) => Promise<`0x${string}`>;
   createPaymentFetchFn?: (privateKey: `0x${string}`) => PaymentFetchResult;
   fetchImpl?: FetchLike;
@@ -165,6 +172,7 @@ type CreateCloudCommandOptions = {
   idempotencyKeyFn?: () => string;
   proxyQuoteOptions?: ProxyQuoteOptions;
   proxyUploadOptions?: ProxyUploadOptions;
+  proxyUploadConfirmOptions?: ProxyUploadConfirmOptions;
   requestStorageLsFn?: (
     request: StorageObjectRequest,
     options?: ProxyStorageOptions,
@@ -1098,9 +1106,9 @@ function formatStorageDeleteUserMessage(
 ): string {
   const statusLine = cronId
     ? cronDeleted
-      ? `File \`${objectKey}\` has been deleted from the cloud and the cron job \`${cronId}\` has been deleted from your system.`
-      : `File \`${objectKey}\` has been deleted from the cloud and the cron job \`${cronId}\` was not found in your system.`
-    : `File \`${objectKey}\` has been deleted from the cloud and no matching cron job was found in your system.`;
+      ? `File \`${objectKey}\` has been deleted from the cloud and the cron job \`${cronId}\` has been removed from local mnemospark cron tracking.`
+      : `File \`${objectKey}\` has been deleted from the cloud and the cron job \`${cronId}\` was not found in local mnemospark cron tracking.`
+    : `File \`${objectKey}\` has been deleted from the cloud and no matching cron job was found in local mnemospark cron tracking.`;
 
   return [statusLine, "Thank you for using mnemospark!"].join("\n");
 }
@@ -1159,6 +1167,8 @@ export function createCloudCommand(
   const requestPriceStorageQuote =
     options.requestPriceStorageQuoteFn ?? requestPriceStorageViaProxy;
   const requestStorageUpload = options.requestStorageUploadFn ?? requestStorageUploadViaProxy;
+  const requestStorageUploadConfirm =
+    options.requestStorageUploadConfirmFn ?? requestStorageUploadConfirmViaProxy;
   const resolveWalletKey = options.resolveWalletPrivateKeyFn ?? resolveWalletPrivateKey;
   const createPayment = options.createPaymentFetchFn ?? createPaymentFetch;
   const fetchImpl = options.fetchImpl ?? fetch;
@@ -1271,7 +1281,7 @@ export function createCloudCommand(
           );
           if (!loggedQuote) {
             return {
-              text: "Cannot upload storage object: quote-id not found in object.log. Run /mnemospark cloud price-storage first.",
+              text: "Cannot upload storage object: quote-id not found in object.log. Run /mnemospark-cloud price-storage first.",
               isError: true,
             };
           }
@@ -1298,7 +1308,7 @@ export function createCloudCommand(
             archiveStats = await stat(archivePath);
           } catch {
             return {
-              text: `Cannot upload storage object: local archive not found at ${archivePath}. Run /mnemospark cloud backup first.`,
+              text: `Cannot upload storage object: local archive not found at ${archivePath}. Run /mnemospark-cloud backup first.`,
               isError: true,
             };
           }
@@ -1359,15 +1369,40 @@ export function createCloudCommand(
             preparedPayload.encryptedContent,
             fetchImpl,
           );
-          await appendStorageUploadLog(uploadResponse, objectLogHomeDir, nowDateFn);
+          let finalizedUploadResponse = uploadResponse;
+          if (
+            preparedPayload.payload.mode === "presigned" &&
+            uploadResponse.confirmation_required === true
+          ) {
+            try {
+              finalizedUploadResponse = await requestStorageUploadConfirm(
+                {
+                  quote_id: uploadResponse.quote_id,
+                  wallet_address: parsed.uploadRequest.wallet_address,
+                  object_key: uploadResponse.object_key,
+                  idempotency_key: idempotencyKey,
+                },
+                options.proxyUploadConfirmOptions,
+              );
+            } catch (confirmError) {
+              const transId = uploadResponse.trans_id ?? "unknown";
+              const confirmMessage =
+                extractUploadErrorMessage(confirmError) ?? "Upload confirmation request failed";
+              throw new Error(
+                `Upload to S3 succeeded, but backend confirmation failed (trans_id: ${transId}, idempotency_key: ${idempotencyKey}). ${confirmMessage}`,
+              );
+            }
+          }
+
+          await appendStorageUploadLog(finalizedUploadResponse, objectLogHomeDir, nowDateFn);
           const cronStoragePriceCandidate =
-            uploadResponse.storage_price ?? loggedQuote.storagePrice;
+            finalizedUploadResponse.storage_price ?? loggedQuote.storagePrice;
           const cronStoragePrice =
             Number.isFinite(cronStoragePriceCandidate) && cronStoragePriceCandidate > 0
               ? cronStoragePriceCandidate
               : loggedQuote.storagePrice;
           const cronJob = await createStoragePaymentCronJob(
-            uploadResponse,
+            finalizedUploadResponse,
             cronStoragePrice,
             objectLogHomeDir,
             nowDateFn,
@@ -1375,7 +1410,7 @@ export function createCloudCommand(
           await maybeCleanupLocalBackupArchive(archivePath);
 
           return {
-            text: formatStorageUploadUserMessage(uploadResponse, cronJob.cronId),
+            text: formatStorageUploadUserMessage(finalizedUploadResponse, cronJob.cronId),
           };
         } catch (error) {
           const uploadErrorMessage = extractUploadErrorMessage(error);
@@ -1416,7 +1451,7 @@ export function createCloudCommand(
             throw new Error("download failed");
           }
           return {
-            text: `File ${parsed.storageObjectRequest.object_key} downloaded`,
+            text: `File ${parsed.storageObjectRequest.object_key} downloaded to ${downloadResult.file_path}`,
           };
         } catch {
           return {

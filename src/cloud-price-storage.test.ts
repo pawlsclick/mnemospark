@@ -2,10 +2,13 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   forwardPriceStorageToBackend,
+  forwardStorageUploadConfirmToBackend,
   forwardStorageUploadToBackend,
   requestPriceStorageViaProxy,
+  requestStorageUploadConfirmViaProxy,
   requestStorageUploadViaProxy,
   type PriceStorageQuoteRequest,
+  type StorageUploadConfirmRequest,
   type StorageUploadRequest,
 } from "./cloud-price-storage.js";
 
@@ -43,6 +46,13 @@ const SAMPLE_UPLOAD_REQUEST_PRESIGNED: StorageUploadRequest = {
     mode: "presigned",
     content_base64: undefined,
   },
+};
+
+const SAMPLE_UPLOAD_CONFIRM_REQUEST: StorageUploadConfirmRequest = {
+  quote_id: "quote-123",
+  wallet_address: "0x1234abcd",
+  object_key: "obj-001.tar.gz.enc",
+  idempotency_key: "idemp-123",
 };
 
 describe("cloud price-storage transport", () => {
@@ -135,6 +145,7 @@ describe("cloud price-storage transport", () => {
             object_key: "obj-001.tar.gz.enc",
             provider: "aws",
             bucket_name: "mnemospark-1234",
+            confirmation_required: true,
             location: "us-east-1",
           }),
           {
@@ -150,6 +161,43 @@ describe("cloud price-storage transport", () => {
     const headers = capturedInit?.headers as Record<string, string>;
     expect(headers["Idempotency-Key"]).toBe("idemp-123");
     expect(upload.object_key).toBe("obj-001.tar.gz.enc");
+    expect(upload.confirmation_required).toBe(true);
+  });
+
+  it("sends upload confirm request to local proxy and parses response", async () => {
+    let capturedUrl = "";
+    let capturedInit: RequestInit | undefined;
+
+    const upload = await requestStorageUploadConfirmViaProxy(SAMPLE_UPLOAD_CONFIRM_REQUEST, {
+      proxyBaseUrl: "http://127.0.0.1:7120/",
+      fetchImpl: async (input, init) => {
+        capturedUrl = String(input);
+        capturedInit = init;
+        return new Response(
+          JSON.stringify({
+            quote_id: "quote-123",
+            addr: "0x1234abcd",
+            addr_hash: "addr-hash",
+            trans_id: "tx-confirm-001",
+            storage_price: 2.75,
+            object_id: "obj-001",
+            object_key: "obj-001.tar.gz.enc",
+            provider: "aws",
+            bucket_name: "mnemospark-1234",
+            location: "[REDACTED]",
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        );
+      },
+    });
+
+    expect(capturedUrl).toBe("http://127.0.0.1:7120/mnemospark/upload/confirm");
+    expect(capturedInit?.method).toBe("POST");
+    expect(capturedInit?.body).toBe(JSON.stringify(SAMPLE_UPLOAD_CONFIRM_REQUEST));
+    expect(upload.trans_id).toBe("tx-confirm-001");
   });
 
   it("retries upload on 207 upload_failed and succeeds on retry", async () => {
@@ -355,6 +403,37 @@ describe("cloud price-storage transport", () => {
     expect(forwardedBody.wrapped_dek).toBe(SAMPLE_UPLOAD_REQUEST_PRESIGNED.payload.wrapped_dek);
     expect(forwardedBody.payload).toBeUndefined();
     expect(forwardedBody.object_key).toBe(SAMPLE_UPLOAD_REQUEST_PRESIGNED.object_id);
+  });
+
+  it("forwards upload confirm request to backend with wallet signature", async () => {
+    let capturedUrl = "";
+    let capturedInit: RequestInit | undefined;
+
+    const forwarded = await forwardStorageUploadConfirmToBackend(SAMPLE_UPLOAD_CONFIRM_REQUEST, {
+      backendBaseUrl: "https://api.example.com/prod/",
+      walletSignature: "wallet-proof-header",
+      fetchImpl: async (input, init) => {
+        capturedUrl = String(input);
+        capturedInit = init;
+        return new Response(JSON.stringify({ ok: true }), {
+          status: 200,
+          headers: {
+            "Content-Type": "application/json",
+            "PAYMENT-RESPONSE": "response-header",
+          },
+        });
+      },
+    });
+
+    expect(capturedUrl).toBe("https://api.example.com/prod/storage/upload/confirm");
+    expect(capturedInit?.method).toBe("POST");
+    const headers = capturedInit?.headers as Record<string, string>;
+    expect(headers["X-Wallet-Signature"]).toBe("wallet-proof-header");
+    expect(headers["x-api-key"]).toBeUndefined();
+    const forwardedBody = JSON.parse(String(capturedInit?.body)) as Record<string, unknown>;
+    expect(forwardedBody).toEqual(SAMPLE_UPLOAD_CONFIRM_REQUEST);
+    expect(forwarded.status).toBe(200);
+    expect(forwarded.paymentResponse).toBe("response-header");
   });
 
   it("requires wallet proof for upload forwarding", async () => {

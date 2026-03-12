@@ -11,6 +11,7 @@ import { normalizeWalletSignature } from "./wallet-signature.js";
 
 export const PRICE_STORAGE_PROXY_PATH = "/mnemospark/price-storage";
 export const UPLOAD_PROXY_PATH = "/mnemospark/upload";
+export const UPLOAD_CONFIRM_PROXY_PATH = "/mnemospark/upload/confirm";
 
 export type PriceStorageQuoteRequest = {
   wallet_address: string;
@@ -53,6 +54,13 @@ export type StorageUploadRequest = {
   payload: UploadPayload;
 };
 
+export type StorageUploadConfirmRequest = {
+  quote_id: string;
+  wallet_address: string;
+  object_key: string;
+  idempotency_key: string;
+};
+
 export type StorageUploadResponse = {
   quote_id: string;
   addr: string;
@@ -66,6 +74,7 @@ export type StorageUploadResponse = {
   location: string;
   upload_url?: string;
   upload_headers?: Record<string, string>;
+  confirmation_required?: boolean;
 };
 
 type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
@@ -82,6 +91,11 @@ type ProxyUploadOptions = {
   maxRetries?: number;
 };
 
+type ProxyUploadConfirmOptions = {
+  proxyBaseUrl?: string;
+  fetchImpl?: FetchLike;
+};
+
 type BackendQuoteOptions = {
   backendBaseUrl?: string;
   walletSignature?: string;
@@ -95,6 +109,12 @@ type BackendUploadOptions = {
   paymentSignature?: string;
   legacyPayment?: string;
   idempotencyKey?: string;
+};
+
+type BackendUploadConfirmOptions = {
+  backendBaseUrl?: string;
+  walletSignature?: string;
+  fetchImpl?: FetchLike;
 };
 
 type BackendQuoteForwardResult = {
@@ -269,6 +289,31 @@ export function parseStorageUploadRequest(payload: unknown): StorageUploadReques
   };
 }
 
+export function parseStorageUploadConfirmRequest(
+  payload: unknown,
+): StorageUploadConfirmRequest | null {
+  const record = asRecord(payload);
+  if (!record) {
+    return null;
+  }
+
+  const quoteId = asNonEmptyString(record.quote_id);
+  const walletAddress = asNonEmptyString(record.wallet_address);
+  const objectKey = asNonEmptyString(record.object_key);
+  const idempotencyKey = asNonEmptyString(record.idempotency_key);
+
+  if (!quoteId || !walletAddress || !objectKey || !idempotencyKey) {
+    return null;
+  }
+
+  return {
+    quote_id: quoteId,
+    wallet_address: walletAddress,
+    object_key: objectKey,
+    idempotency_key: idempotencyKey,
+  };
+}
+
 export function parseStorageUploadResponse(payload: unknown): StorageUploadResponse {
   const record = asRecord(payload);
   if (!record) {
@@ -288,6 +333,8 @@ export function parseStorageUploadResponse(payload: unknown): StorageUploadRespo
   const uploadUrl = asNonEmptyString(record.upload_url);
   const uploadHeaders =
     record.upload_headers === undefined ? undefined : asStringRecord(record.upload_headers);
+  const confirmationRequired =
+    typeof record.confirmation_required === "boolean" ? record.confirmation_required : undefined;
 
   if (!quoteId || !addr || !objectId || !objectKey || !provider || !bucketName || !location) {
     throw new Error("Upload response is missing required fields");
@@ -295,6 +342,9 @@ export function parseStorageUploadResponse(payload: unknown): StorageUploadRespo
 
   if (record.upload_headers !== undefined && !uploadHeaders) {
     throw new Error("Upload response has invalid upload_headers");
+  }
+  if (record.confirmation_required !== undefined && confirmationRequired === undefined) {
+    throw new Error("Upload response has invalid confirmation_required");
   }
 
   return {
@@ -310,6 +360,7 @@ export function parseStorageUploadResponse(payload: unknown): StorageUploadRespo
     location,
     upload_url: uploadUrl ?? undefined,
     upload_headers: uploadHeaders ?? undefined,
+    confirmation_required: confirmationRequired,
   };
 }
 
@@ -442,6 +493,36 @@ export async function requestStorageUploadViaProxy(
     payload = JSON.parse(responseBody);
   } catch {
     throw new Error("Upload proxy returned invalid JSON");
+  }
+  return parseStorageUploadResponse(payload);
+}
+
+export async function requestStorageUploadConfirmViaProxy(
+  request: StorageUploadConfirmRequest,
+  options: ProxyUploadConfirmOptions = {},
+): Promise<StorageUploadResponse> {
+  const fetchImpl = options.fetchImpl ?? fetch;
+  const baseUrl = normalizeBaseUrl(
+    options.proxyBaseUrl ?? `http://127.0.0.1:${PROXY_PORT.toString()}`,
+  );
+  const response = await fetchImpl(`${baseUrl}${UPLOAD_CONFIRM_PROXY_PATH}`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(request),
+  });
+
+  const responseBody = await response.text();
+  if (!response.ok) {
+    throw new Error(responseBody || `Upload confirm proxy failed with status ${response.status}`);
+  }
+
+  let payload: unknown;
+  try {
+    payload = JSON.parse(responseBody);
+  } catch {
+    throw new Error("Upload confirm proxy returned invalid JSON");
   }
   return parseStorageUploadResponse(payload);
 }
@@ -583,11 +664,49 @@ export async function forwardStorageUploadToBackend(
   };
 }
 
+export async function forwardStorageUploadConfirmToBackend(
+  request: StorageUploadConfirmRequest,
+  options: BackendUploadConfirmOptions = {},
+): Promise<BackendUploadForwardResult> {
+  const fetchImpl = options.fetchImpl ?? fetch;
+  const backendBaseUrl = (options.backendBaseUrl ?? "").trim();
+  const walletSignature = normalizeWalletSignature(options.walletSignature);
+
+  if (!backendBaseUrl) {
+    throw new Error("MNEMOSPARK_BACKEND_API_BASE_URL is not configured");
+  }
+  if (!walletSignature) {
+    throw new Error(
+      "Wallet required for storage endpoints: wallet key must be present to sign requests.",
+    );
+  }
+
+  const targetUrl = `${normalizeBaseUrl(backendBaseUrl)}/storage/upload/confirm`;
+  const response = await fetchImpl(targetUrl, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Wallet-Signature": walletSignature,
+    },
+    body: JSON.stringify(request),
+  });
+
+  return {
+    status: response.status,
+    bodyText: await response.text(),
+    contentType: response.headers.get("content-type") ?? "application/json",
+    paymentRequired: normalizePaymentRequired(response.headers),
+    paymentResponse: normalizePaymentResponse(response.headers),
+  };
+}
+
 export type {
   BackendQuoteForwardResult,
   BackendQuoteOptions,
   BackendUploadForwardResult,
   BackendUploadOptions,
+  BackendUploadConfirmOptions,
   ProxyQuoteOptions,
   ProxyUploadOptions,
+  ProxyUploadConfirmOptions,
 };
