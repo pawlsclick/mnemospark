@@ -696,6 +696,88 @@ describe("cloud command", () => {
     );
   });
 
+  it("returns actionable error when presigned upload confirmation fails", async () => {
+    const { homeDir, tmpBackupDir } = await createSandbox();
+    const walletKey = `0x${"66".repeat(32)}` as const;
+    const walletAddress = privateKeyToAccount(walletKey).address;
+    const objectId = "obj-upload-presigned-confirm-fail-001";
+    const archiveContent = "x".repeat(4_500_100);
+    const objectHash = sha256Hex(archiveContent);
+    await writeFile(join(tmpBackupDir, objectId), archiveContent, "utf-8");
+
+    const objectLogPath = join(homeDir, ".openclaw", "mnemospark", "object.log");
+    await mkdir(join(homeDir, ".openclaw", "mnemospark"), { recursive: true });
+    const initialLogLine = `2026-02-25 19:00:00,quote-presigned-confirm-fail,2.75,${walletAddress},${objectId},${objectHash},0.015,aws,[REDACTED]`;
+    await writeFile(objectLogPath, `${initialLogLine}\n`, "utf-8");
+
+    const command = createCloudCommand({
+      objectLogHomeDir: homeDir,
+      backupOptions: { tmpDir: tmpBackupDir },
+      resolveWalletPrivateKeyFn: async () => walletKey,
+      idempotencyKeyFn: () => "idemp-presigned-confirm-fail-123",
+      fetchImpl: async () => new Response("", { status: 200 }),
+      createPaymentFetchFn: () => ({
+        fetch: async () =>
+          new Response(
+            JSON.stringify({
+              quote_id: "quote-presigned-confirm-fail",
+              addr: walletAddress,
+              addr_hash: "addr-hash",
+              trans_id: "tx-confirm-fail",
+              storage_price: 2.75,
+              object_id: objectId,
+              object_key: "obj-upload-presigned-confirm-fail-001.tar.gz.enc",
+              provider: "aws",
+              bucket_name: "mnemospark-1234",
+              location: "[REDACTED]",
+              upload_url: "https://example-presigned-upload.local/put",
+              upload_headers: {
+                "content-type": "application/octet-stream",
+                "x-amz-meta-wrapped-dek": "wrapped",
+              },
+              confirmation_required: true,
+            }),
+            {
+              status: 200,
+              headers: { "Content-Type": "application/json" },
+            },
+          ),
+        cache: new PaymentCache(),
+      }),
+      requestStorageUploadConfirmFn: async () => {
+        throw new Error(
+          JSON.stringify({
+            error: "not_found",
+            message: "S3 object not found. Upload the file using the presigned URL first.",
+          }),
+        );
+      },
+    });
+
+    const result = await command.handler({
+      channel: "test",
+      isAuthorizedSender: true,
+      args: [
+        "upload",
+        "--quote-id quote-presigned-confirm-fail",
+        `--wallet-address ${walletAddress}`,
+        `--object-id ${objectId}`,
+        `--object-id-hash ${objectHash}`,
+      ].join(" "),
+      commandBody: "upload",
+      config: {},
+    });
+
+    expect(result.isError).toBe(true);
+    expect(result.text).toContain("Upload to S3 succeeded, but backend confirmation failed");
+    expect(result.text).toContain("trans_id: tx-confirm-fail");
+    expect(result.text).toContain("idempotency_key: idemp-presigned-confirm-fail-123");
+    expect(result.text).toContain("S3 object not found");
+
+    const logContent = await readFile(objectLogPath, "utf-8");
+    expect(logContent.trim()).toBe(initialLogLine);
+  });
+
   it("returns error when presigned upload response is missing upload URL", async () => {
     const { homeDir, tmpBackupDir } = await createSandbox();
     const walletKey = `0x${"33".repeat(32)}` as const;
@@ -842,7 +924,7 @@ describe("cloud command", () => {
       location: undefined,
     });
     expect(result.isError).not.toBe(true);
-    expect(result.text).toBe("File backup/archive.tar.gz downloaded");
+    expect(result.text).toBe("File backup/archive.tar.gz downloaded to /tmp/backup/archive.tar.gz");
   });
 
   it("handles /mnemospark cloud delete, removes cron job, and prints two user messages", async () => {
@@ -907,7 +989,7 @@ describe("cloud command", () => {
     expect(result.isError).not.toBe(true);
     expect(result.text).toBe(
       [
-        `File \`backup/archive.tar.gz\` has been deleted from the cloud and the cron job \`${cronId}\` has been deleted from your system.`,
+        `File \`backup/archive.tar.gz\` has been deleted from the cloud and the cron job \`${cronId}\` has been removed from local mnemospark cron tracking.`,
         "Thank you for using mnemospark!",
       ].join("\n"),
     );
@@ -949,7 +1031,7 @@ describe("cloud command", () => {
     expect(result.isError).not.toBe(true);
     expect(result.text).toBe(
       [
-        "File `legacy/no-cron-object.tar.gz` has been deleted from the cloud and no matching cron job was found in your system.",
+        "File `legacy/no-cron-object.tar.gz` has been deleted from the cloud and no matching cron job was found in local mnemospark cron tracking.",
         "Thank you for using mnemospark!",
       ].join("\n"),
     );

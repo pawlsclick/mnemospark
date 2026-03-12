@@ -1106,9 +1106,9 @@ function formatStorageDeleteUserMessage(
 ): string {
   const statusLine = cronId
     ? cronDeleted
-      ? `File \`${objectKey}\` has been deleted from the cloud and the cron job \`${cronId}\` has been deleted from your system.`
-      : `File \`${objectKey}\` has been deleted from the cloud and the cron job \`${cronId}\` was not found in your system.`
-    : `File \`${objectKey}\` has been deleted from the cloud and no matching cron job was found in your system.`;
+      ? `File \`${objectKey}\` has been deleted from the cloud and the cron job \`${cronId}\` has been removed from local mnemospark cron tracking.`
+      : `File \`${objectKey}\` has been deleted from the cloud and the cron job \`${cronId}\` was not found in local mnemospark cron tracking.`
+    : `File \`${objectKey}\` has been deleted from the cloud and no matching cron job was found in local mnemospark cron tracking.`;
 
   return [statusLine, "Thank you for using mnemospark!"].join("\n");
 }
@@ -1281,7 +1281,7 @@ export function createCloudCommand(
           );
           if (!loggedQuote) {
             return {
-              text: "Cannot upload storage object: quote-id not found in object.log. Run /mnemospark cloud price-storage first.",
+              text: "Cannot upload storage object: quote-id not found in object.log. Run /mnemospark-cloud price-storage first.",
               isError: true,
             };
           }
@@ -1308,7 +1308,7 @@ export function createCloudCommand(
             archiveStats = await stat(archivePath);
           } catch {
             return {
-              text: `Cannot upload storage object: local archive not found at ${archivePath}. Run /mnemospark cloud backup first.`,
+              text: `Cannot upload storage object: local archive not found at ${archivePath}. Run /mnemospark-cloud backup first.`,
               isError: true,
             };
           }
@@ -1374,15 +1374,24 @@ export function createCloudCommand(
             preparedPayload.payload.mode === "presigned" &&
             uploadResponse.confirmation_required === true
           ) {
-            finalizedUploadResponse = await requestStorageUploadConfirm(
-              {
-                quote_id: uploadResponse.quote_id,
-                wallet_address: parsed.uploadRequest.wallet_address,
-                object_key: uploadResponse.object_key,
-                idempotency_key: idempotencyKey,
-              },
-              options.proxyUploadConfirmOptions,
-            );
+            try {
+              finalizedUploadResponse = await requestStorageUploadConfirm(
+                {
+                  quote_id: uploadResponse.quote_id,
+                  wallet_address: parsed.uploadRequest.wallet_address,
+                  object_key: uploadResponse.object_key,
+                  idempotency_key: idempotencyKey,
+                },
+                options.proxyUploadConfirmOptions,
+              );
+            } catch (confirmError) {
+              const transId = uploadResponse.trans_id ?? "unknown";
+              const confirmMessage =
+                extractUploadErrorMessage(confirmError) ?? "Upload confirmation request failed";
+              throw new Error(
+                `Upload to S3 succeeded, but backend confirmation failed (trans_id: ${transId}, idempotency_key: ${idempotencyKey}). ${confirmMessage}`,
+              );
+            }
           }
 
           await appendStorageUploadLog(finalizedUploadResponse, objectLogHomeDir, nowDateFn);
@@ -1442,7 +1451,7 @@ export function createCloudCommand(
             throw new Error("download failed");
           }
           return {
-            text: `File ${parsed.storageObjectRequest.object_key} downloaded`,
+            text: `File ${parsed.storageObjectRequest.object_key} downloaded to ${downloadResult.file_path}`,
           };
         } catch {
           return {
