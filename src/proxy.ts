@@ -14,8 +14,11 @@ import { createWalletSignatureHeaderValue } from "./mnemospark-request-sign.js";
 import {
   PRICE_STORAGE_PROXY_PATH,
   UPLOAD_PROXY_PATH,
+  UPLOAD_CONFIRM_PROXY_PATH,
+  forwardStorageUploadConfirmToBackend,
   forwardPriceStorageToBackend,
   forwardStorageUploadToBackend,
+  parseStorageUploadConfirmRequest,
   parsePriceStorageQuoteRequest,
   parseStorageUploadRequest,
 } from "./cloud-price-storage.js";
@@ -444,6 +447,81 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
         sendJson(res, 502, {
           error: "proxy_error",
           message: `Failed to forward /mnemospark cloud upload: ${err instanceof Error ? err.message : String(err)}`,
+        });
+      }
+      return;
+    }
+
+    // Mnemospark backend proxy endpoint for /mnemospark cloud upload confirm command.
+    if (req.method === "POST" && matchesProxyPath(req.url, UPLOAD_CONFIRM_PROXY_PATH)) {
+      try {
+        let payload: unknown;
+        try {
+          payload = await readProxyJsonBody(req);
+        } catch {
+          sendJson(res, 400, {
+            error: "Bad request",
+            message: "Invalid JSON body for /mnemospark cloud upload confirm",
+          });
+          return;
+        }
+
+        const requestPayload = parseStorageUploadConfirmRequest(payload);
+        if (!requestPayload) {
+          sendJson(res, 400, {
+            error: "Bad request",
+            message:
+              "Missing required fields: quote_id, wallet_address, object_key, idempotency_key",
+          });
+          return;
+        }
+
+        if (requestPayload.wallet_address.toLowerCase() !== proxyWalletAddressLower) {
+          sendJson(res, 403, {
+            error: "wallet_proof_invalid",
+            message: "wallet proof invalid",
+          });
+          return;
+        }
+
+        const walletSignature = await createBackendWalletSignature(
+          "POST",
+          "/storage/upload/confirm",
+          requestPayload.wallet_address,
+        );
+        if (!walletSignature) {
+          res.writeHead(400, { "Content-Type": "application/json" });
+          res.end(createWalletRequiredBody());
+          return;
+        }
+
+        const backendResponse = await forwardStorageUploadConfirmToBackend(requestPayload, {
+          backendBaseUrl: MNEMOSPARK_BACKEND_API_BASE_URL,
+          walletSignature,
+        });
+
+        const authFailure = normalizeBackendAuthFailure(
+          backendResponse.status,
+          backendResponse.bodyText,
+        );
+        if (authFailure) {
+          const responseHeaders = createBackendForwardHeaders({
+            contentType: authFailure.contentType,
+            paymentRequired: backendResponse.paymentRequired,
+            paymentResponse: backendResponse.paymentResponse,
+          });
+          res.writeHead(authFailure.status, responseHeaders);
+          res.end(authFailure.bodyText);
+          return;
+        }
+
+        const responseHeaders = createBackendForwardHeaders(backendResponse);
+        res.writeHead(backendResponse.status, responseHeaders);
+        res.end(backendResponse.bodyText);
+      } catch (err) {
+        sendJson(res, 502, {
+          error: "proxy_error",
+          message: `Failed to forward /mnemospark cloud upload confirm: ${err instanceof Error ? err.message : String(err)}`,
         });
       }
       return;

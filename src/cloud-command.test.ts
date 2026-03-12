@@ -589,6 +589,113 @@ describe("cloud command", () => {
     expect(result.text).toBe("Insufficient USDC balance. Current: $0.10, Required: $2.75");
   });
 
+  it("confirms presigned uploads before logging success", async () => {
+    const { homeDir, tmpBackupDir } = await createSandbox();
+    const walletKey = `0x${"55".repeat(32)}` as const;
+    const walletAddress = privateKeyToAccount(walletKey).address;
+    const objectId = "obj-upload-presigned-confirm-001";
+    const archiveContent = "x".repeat(4_500_100);
+    const objectHash = sha256Hex(archiveContent);
+    await writeFile(join(tmpBackupDir, objectId), archiveContent, "utf-8");
+
+    const objectLogPath = join(homeDir, ".openclaw", "mnemospark", "object.log");
+    await mkdir(join(homeDir, ".openclaw", "mnemospark"), { recursive: true });
+    await writeFile(
+      objectLogPath,
+      `2026-02-25 19:00:00,quote-presigned-confirm,2.75,${walletAddress},${objectId},${objectHash},0.015,aws,[REDACTED]\n`,
+      "utf-8",
+    );
+
+    let capturedConfirmRequest: Record<string, unknown> | undefined;
+    let presignedPutCount = 0;
+    const command = createCloudCommand({
+      objectLogHomeDir: homeDir,
+      backupOptions: { tmpDir: tmpBackupDir },
+      resolveWalletPrivateKeyFn: async () => walletKey,
+      idempotencyKeyFn: () => "idemp-presigned-confirm-123",
+      nowDateFn: () => new Date(2026, 1, 25, 20, 45, 0),
+      fetchImpl: async (input, init) => {
+        presignedPutCount += 1;
+        expect(String(input)).toBe("https://example-presigned-upload.local/put");
+        expect(init?.method).toBe("PUT");
+        return new Response("", { status: 200 });
+      },
+      createPaymentFetchFn: () => ({
+        fetch: async () =>
+          new Response(
+            JSON.stringify({
+              quote_id: "quote-presigned-confirm",
+              addr: walletAddress,
+              addr_hash: "addr-hash",
+              trans_id: "tx-initial",
+              storage_price: 2.75,
+              object_id: objectId,
+              object_key: "obj-upload-presigned-confirm-001.tar.gz.enc",
+              provider: "aws",
+              bucket_name: "mnemospark-1234",
+              location: "[REDACTED]",
+              upload_url: "https://example-presigned-upload.local/put",
+              upload_headers: {
+                "content-type": "application/octet-stream",
+                "x-amz-meta-wrapped-dek": "wrapped",
+              },
+              confirmation_required: true,
+            }),
+            {
+              status: 200,
+              headers: { "Content-Type": "application/json" },
+            },
+          ),
+        cache: new PaymentCache(),
+      }),
+      requestStorageUploadConfirmFn: async (request) => {
+        capturedConfirmRequest = request as Record<string, unknown>;
+        return {
+          quote_id: "quote-presigned-confirm",
+          addr: walletAddress,
+          addr_hash: "addr-hash",
+          trans_id: "tx-confirmed",
+          storage_price: 2.75,
+          object_id: objectId,
+          object_key: "obj-upload-presigned-confirm-001.tar.gz.enc",
+          provider: "aws",
+          bucket_name: "mnemospark-1234",
+          location: "[REDACTED]",
+        };
+      },
+    });
+
+    const result = await command.handler({
+      channel: "test",
+      isAuthorizedSender: true,
+      args: [
+        "upload",
+        "--quote-id quote-presigned-confirm",
+        `--wallet-address ${walletAddress}`,
+        `--object-id ${objectId}`,
+        `--object-id-hash ${objectHash}`,
+      ].join(" "),
+      commandBody: "upload",
+      config: {},
+    });
+
+    expect(result.isError).not.toBe(true);
+    expect(presignedPutCount).toBe(1);
+    expect(capturedConfirmRequest).toEqual({
+      quote_id: "quote-presigned-confirm",
+      wallet_address: walletAddress,
+      object_key: "obj-upload-presigned-confirm-001.tar.gz.enc",
+      idempotency_key: "idemp-presigned-confirm-123",
+    });
+
+    const logContent = await readFile(objectLogPath, "utf-8");
+    const logLines = logContent.trim().split("\n");
+    const uploadLogLine = logLines.at(-2);
+    expect(uploadLogLine).toBe(
+      `2026-02-25 20:45:00,quote-presigned-confirm,${walletAddress},addr-hash,tx-confirmed,2.75,obj-upload-presigned-confirm-001,obj-upload-presigned-confirm-001.tar.gz.enc,aws,mnemospark-1234,[REDACTED]`,
+    );
+  });
+
   it("returns error when presigned upload response is missing upload URL", async () => {
     const { homeDir, tmpBackupDir } = await createSandbox();
     const walletKey = `0x${"33".repeat(32)}` as const;

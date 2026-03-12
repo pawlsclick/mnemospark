@@ -12,14 +12,17 @@ import { basename, dirname, join, resolve } from "node:path";
 import { privateKeyToAccount } from "viem/accounts";
 
 import {
+  requestStorageUploadConfirmViaProxy,
   requestStorageUploadViaProxy,
   parsePriceStorageQuoteRequest,
   requestPriceStorageViaProxy,
+  type StorageUploadConfirmRequest,
   type StorageUploadRequest,
   type StorageUploadResponse,
   type UploadPayload,
   type PriceStorageQuoteRequest,
   type PriceStorageQuoteResponse,
+  type ProxyUploadConfirmOptions,
   type ProxyQuoteOptions,
   type ProxyUploadOptions,
 } from "./cloud-price-storage.js";
@@ -158,6 +161,10 @@ type CreateCloudCommandOptions = {
     request: StorageUploadRequest,
     options?: ProxyUploadOptions,
   ) => Promise<StorageUploadResponse>;
+  requestStorageUploadConfirmFn?: (
+    request: StorageUploadConfirmRequest,
+    options?: ProxyUploadConfirmOptions,
+  ) => Promise<StorageUploadResponse>;
   resolveWalletPrivateKeyFn?: (homeDir?: string) => Promise<`0x${string}`>;
   createPaymentFetchFn?: (privateKey: `0x${string}`) => PaymentFetchResult;
   fetchImpl?: FetchLike;
@@ -165,6 +172,7 @@ type CreateCloudCommandOptions = {
   idempotencyKeyFn?: () => string;
   proxyQuoteOptions?: ProxyQuoteOptions;
   proxyUploadOptions?: ProxyUploadOptions;
+  proxyUploadConfirmOptions?: ProxyUploadConfirmOptions;
   requestStorageLsFn?: (
     request: StorageObjectRequest,
     options?: ProxyStorageOptions,
@@ -1159,6 +1167,8 @@ export function createCloudCommand(
   const requestPriceStorageQuote =
     options.requestPriceStorageQuoteFn ?? requestPriceStorageViaProxy;
   const requestStorageUpload = options.requestStorageUploadFn ?? requestStorageUploadViaProxy;
+  const requestStorageUploadConfirm =
+    options.requestStorageUploadConfirmFn ?? requestStorageUploadConfirmViaProxy;
   const resolveWalletKey = options.resolveWalletPrivateKeyFn ?? resolveWalletPrivateKey;
   const createPayment = options.createPaymentFetchFn ?? createPaymentFetch;
   const fetchImpl = options.fetchImpl ?? fetch;
@@ -1359,15 +1369,31 @@ export function createCloudCommand(
             preparedPayload.encryptedContent,
             fetchImpl,
           );
-          await appendStorageUploadLog(uploadResponse, objectLogHomeDir, nowDateFn);
+          let finalizedUploadResponse = uploadResponse;
+          if (
+            preparedPayload.payload.mode === "presigned" &&
+            uploadResponse.confirmation_required === true
+          ) {
+            finalizedUploadResponse = await requestStorageUploadConfirm(
+              {
+                quote_id: uploadResponse.quote_id,
+                wallet_address: parsed.uploadRequest.wallet_address,
+                object_key: uploadResponse.object_key,
+                idempotency_key: idempotencyKey,
+              },
+              options.proxyUploadConfirmOptions,
+            );
+          }
+
+          await appendStorageUploadLog(finalizedUploadResponse, objectLogHomeDir, nowDateFn);
           const cronStoragePriceCandidate =
-            uploadResponse.storage_price ?? loggedQuote.storagePrice;
+            finalizedUploadResponse.storage_price ?? loggedQuote.storagePrice;
           const cronStoragePrice =
             Number.isFinite(cronStoragePriceCandidate) && cronStoragePriceCandidate > 0
               ? cronStoragePriceCandidate
               : loggedQuote.storagePrice;
           const cronJob = await createStoragePaymentCronJob(
-            uploadResponse,
+            finalizedUploadResponse,
             cronStoragePrice,
             objectLogHomeDir,
             nowDateFn,
@@ -1375,7 +1401,7 @@ export function createCloudCommand(
           await maybeCleanupLocalBackupArchive(archivePath);
 
           return {
-            text: formatStorageUploadUserMessage(uploadResponse, cronJob.cronId),
+            text: formatStorageUploadUserMessage(finalizedUploadResponse, cronJob.cronId),
           };
         } catch (error) {
           const uploadErrorMessage = extractUploadErrorMessage(error);
