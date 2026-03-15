@@ -1,6 +1,13 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { createDecipheriv } from "node:crypto";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join, resolve, sep } from "node:path";
 
+import {
+  AES_GCM_NONCE_BYTES,
+  AES_KEY_BYTES,
+  parseStoredAes256Key,
+  resolveWalletKekPath,
+} from "./cloud-storage-crypto.js";
 import { PROXY_PORT } from "./config.js";
 import {
   asNonEmptyString,
@@ -68,6 +75,7 @@ type BackendStorageForwardResult = {
 
 type DownloadStorageToDiskOptions = {
   outputDir?: string;
+  homeDir?: string;
   fetchImpl?: FetchLike;
 };
 
@@ -76,6 +84,8 @@ type DownloadStorageToDiskResult = {
   filePath: string;
   bytesWritten: number;
 };
+
+const AES_GCM_TAG_BYTES = 16;
 
 function asBooleanOrDefault(value: unknown, defaultValue: boolean): boolean {
   if (typeof value === "boolean") {
@@ -149,6 +159,44 @@ function parseFilenameFromContentDisposition(contentDisposition?: string): strin
   }
 
   return undefined;
+}
+
+async function loadWalletKek(walletAddress: string, homeDir?: string): Promise<Buffer> {
+  const keyPath = resolveWalletKekPath(walletAddress, homeDir);
+  const raw = await readFile(keyPath);
+  return parseStoredAes256Key(raw, "Invalid KEK file format");
+}
+
+function decryptAesGcm(payload: Buffer, key: Buffer): Buffer {
+  if (key.length !== AES_KEY_BYTES) {
+    throw new Error("Expected 32-byte AES key");
+  }
+  if (payload.length <= AES_GCM_NONCE_BYTES + AES_GCM_TAG_BYTES) {
+    throw new Error("Encrypted payload is too short");
+  }
+
+  const nonce = payload.subarray(0, AES_GCM_NONCE_BYTES);
+  const tag = payload.subarray(payload.length - AES_GCM_TAG_BYTES);
+  const ciphertext = payload.subarray(AES_GCM_NONCE_BYTES, payload.length - AES_GCM_TAG_BYTES);
+
+  const decipher = createDecipheriv("aes-256-gcm", key, nonce);
+  decipher.setAuthTag(tag);
+  return Buffer.concat([decipher.update(ciphertext), decipher.final()]);
+}
+
+async function decryptDownloadBytes(
+  encryptedBytes: Buffer,
+  wrappedDekBase64: string,
+  walletAddress: string,
+  homeDir?: string,
+): Promise<Buffer> {
+  const kek = await loadWalletKek(walletAddress, homeDir);
+  const wrappedDek = Buffer.from(wrappedDekBase64, "base64");
+  const dek = decryptAesGcm(wrappedDek, kek);
+  if (dek.length !== AES_KEY_BYTES) {
+    throw new Error("Unwrapped DEK length is invalid");
+  }
+  return decryptAesGcm(encryptedBytes, dek);
 }
 
 async function requestJsonViaProxy<T>(
@@ -372,6 +420,7 @@ export async function downloadStorageToDisk(
 ): Promise<DownloadStorageToDiskResult> {
   const fetchImpl = options.fetchImpl ?? fetch;
   const outputDir = options.outputDir ?? process.cwd();
+  const homeDir = options.homeDir;
 
   let objectKey = request.object_key;
   let bytes = backendResponse.bodyBuffer;
@@ -391,6 +440,8 @@ export async function downloadStorageToDisk(
       asNonEmptyString(payload.content) ??
       asNonEmptyString(payload.body_base64) ??
       asNonEmptyString(payload.data);
+    const payloadWrappedDek =
+      asNonEmptyString(payload.wrapped_dek) ?? asNonEmptyString(payload["wrapped-dek"]);
 
     if (payloadObjectKey) {
       objectKey = payloadObjectKey;
@@ -402,8 +453,25 @@ export async function downloadStorageToDisk(
         throw new Error(`Presigned download failed with status ${fileResponse.status}`);
       }
       bytes = Buffer.from(await fileResponse.arrayBuffer());
+      const wrappedDekHeader = fileResponse.headers.get("x-amz-meta-wrapped-dek")?.trim();
+      if (wrappedDekHeader) {
+        bytes = await decryptDownloadBytes(
+          bytes,
+          wrappedDekHeader,
+          request.wallet_address,
+          homeDir,
+        );
+      }
     } else if (inlineContent) {
       bytes = Buffer.from(inlineContent, "base64");
+      if (payloadWrappedDek) {
+        bytes = await decryptDownloadBytes(
+          bytes,
+          payloadWrappedDek,
+          request.wallet_address,
+          homeDir,
+        );
+      }
     } else {
       throw new Error("Download response did not include download_url or inline content");
     }
