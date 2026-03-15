@@ -122,6 +122,13 @@ type BackendUploadConfirmOptions = {
   fetchImpl?: FetchLike;
 };
 
+/** Request body for POST /payment/settle. */
+export type PaymentSettleRequest = {
+  quote_id: string;
+  wallet_address: string;
+  payment?: Record<string, unknown>;
+  payment_authorization?: Record<string, unknown> | string;
+};
 /** Options for forwarding payment/settle to the backend. */
 export type BackendSettleOptions = {
   backendBaseUrl?: string;
@@ -130,12 +137,20 @@ export type BackendSettleOptions = {
   /** Optional payment authorization (PAYMENT-SIGNATURE / x-payment) for 402 retry. */
   paymentSignature?: string;
   legacyPayment?: string;
+  /** Optional inline payment authorization payload. */
+  payment?: Record<string, unknown>;
+  /** Optional alternate inline payment authorization envelope. */
+  paymentAuthorization?: Record<string, unknown> | string;
 };
 
 /** Options for requesting payment/settle via the proxy. */
 export type ProxySettleOptions = {
   proxyBaseUrl?: string;
   fetchImpl?: FetchLike;
+  /** Optional inline payment authorization payload. */
+  payment?: Record<string, unknown>;
+  /** Optional alternate inline payment authorization envelope. */
+  paymentAuthorization?: Record<string, unknown> | string;
 };
 
 /** Result from forwarding payment/settle to the backend (or proxy). */
@@ -641,10 +656,20 @@ export async function forwardPaymentSettleToBackend(
   }
 
   const targetUrl = `${normalizeBaseUrl(backendBaseUrl)}/payment/settle`;
+  const requestBody: PaymentSettleRequest = {
+    quote_id: quoteId,
+    wallet_address: walletAddress,
+  };
+  if (options.payment) {
+    requestBody.payment = options.payment;
+  }
+  if (options.paymentAuthorization !== undefined) {
+    requestBody.payment_authorization = options.paymentAuthorization;
+  }
   const response = await fetchImpl(targetUrl, {
     method: "POST",
     headers,
-    body: JSON.stringify({ quote_id: quoteId, wallet_address: walletAddress }),
+    body: JSON.stringify(requestBody),
   });
 
   return {
@@ -670,10 +695,20 @@ export async function requestPaymentSettleViaProxy(
     options.proxyBaseUrl ?? `http://127.0.0.1:${PROXY_PORT.toString()}`,
   );
   const targetUrl = `${baseUrl}${PAYMENT_SETTLE_PROXY_PATH}`;
+  const requestBody: PaymentSettleRequest = {
+    quote_id: quoteId,
+    wallet_address: walletAddress,
+  };
+  if (options.payment) {
+    requestBody.payment = options.payment;
+  }
+  if (options.paymentAuthorization !== undefined) {
+    requestBody.payment_authorization = options.paymentAuthorization;
+  }
   const response = await fetchImpl(targetUrl, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ quote_id: quoteId, wallet_address: walletAddress }),
+    body: JSON.stringify(requestBody),
   });
 
   return {
@@ -750,7 +785,6 @@ export async function forwardStorageUploadToBackend(
     mode: request.payload.mode,
     content_sha256: request.payload.content_sha256,
     content_length_bytes: request.payload.content_length_bytes,
-    encryption_algorithm: request.payload.encryption_algorithm,
     object_key: objectKey,
   };
   if (request.payload.content_base64) {

@@ -413,11 +413,43 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
         const quoteId = typeof record?.quote_id === "string" ? record.quote_id.trim() : "";
         const walletAddress =
           typeof record?.wallet_address === "string" ? record.wallet_address.trim() : "";
+        const inlinePayment = record?.payment;
+        const inlinePaymentAuthorization = record?.payment_authorization;
         if (!quoteId || !walletAddress) {
           logProxyEvent("warn", "proxy_payment_settle_missing_fields");
           sendJson(res, 400, {
             error: "Bad request",
             message: "Missing required fields: quote_id, wallet_address",
+          });
+          return;
+        }
+        if (
+          inlinePayment !== undefined &&
+          (inlinePayment === null ||
+            typeof inlinePayment !== "object" ||
+            Array.isArray(inlinePayment))
+        ) {
+          logProxyEvent("warn", "proxy_payment_settle_invalid_payment_shape");
+          sendJson(res, 400, {
+            error: "Bad request",
+            message: "Invalid field: payment must be an object when provided",
+          });
+          return;
+        }
+        if (
+          inlinePaymentAuthorization !== undefined &&
+          !(
+            typeof inlinePaymentAuthorization === "string" ||
+            (inlinePaymentAuthorization !== null &&
+              typeof inlinePaymentAuthorization === "object" &&
+              !Array.isArray(inlinePaymentAuthorization))
+          )
+        ) {
+          logProxyEvent("warn", "proxy_payment_settle_invalid_payment_authorization_shape");
+          sendJson(res, 400, {
+            error: "Bad request",
+            message:
+              "Invalid field: payment_authorization must be an object or string when provided",
           });
           return;
         }
@@ -453,6 +485,16 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
           fetchImpl: paymentFetch,
           paymentSignature: readHeaderValue(req.headers["payment-signature"]),
           legacyPayment: readHeaderValue(req.headers["x-payment"]),
+          payment:
+            inlinePayment && typeof inlinePayment === "object" && !Array.isArray(inlinePayment)
+              ? (inlinePayment as Record<string, unknown>)
+              : undefined,
+          paymentAuthorization:
+            typeof inlinePaymentAuthorization === "string"
+              ? inlinePaymentAuthorization.trim() || undefined
+              : inlinePaymentAuthorization !== undefined
+                ? (inlinePaymentAuthorization as Record<string, unknown>)
+                : undefined,
         });
         logProxyEvent("info", "proxy_payment_settle_backend_response", {
           status: backendResponse.status,

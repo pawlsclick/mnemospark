@@ -396,6 +396,7 @@ describe("cloud price-storage transport", () => {
     expect(forwardedBody.ciphertext).toBe(SAMPLE_UPLOAD_REQUEST.payload.content_base64);
     expect(forwardedBody.wrapped_dek).toBe(SAMPLE_UPLOAD_REQUEST.payload.wrapped_dek);
     expect(forwardedBody.mode).toBe("inline");
+    expect(forwardedBody.encryption_algorithm).toBeUndefined();
     expect(forwardedBody.payload).toBeUndefined();
     expect(forwardedBody.quoted_storage_price).toBeUndefined();
     expect(forwarded.status).toBe(200);
@@ -473,6 +474,7 @@ describe("cloud price-storage transport", () => {
     const result = await forwardPaymentSettleToBackend("quote-123", "0x1234abcd", {
       backendBaseUrl: "https://api.example.com/prod/",
       walletSignature: "wallet-proof-header",
+      paymentAuthorization: "signed-inline-payment",
       fetchImpl: async (input, init) => {
         capturedUrl = String(input);
         capturedInit = init;
@@ -492,9 +494,10 @@ describe("cloud price-storage transport", () => {
     expect(capturedInit?.method).toBe("POST");
     const headers = capturedInit?.headers as Record<string, string>;
     expect(headers["X-Wallet-Signature"]).toBe("wallet-proof-header");
-    const body = JSON.parse(String(capturedInit?.body)) as Record<string, string>;
+    const body = JSON.parse(String(capturedInit?.body)) as Record<string, unknown>;
     expect(body.quote_id).toBe("quote-123");
     expect(body.wallet_address).toBe("0x1234abcd");
+    expect(body.payment_authorization).toBe("signed-inline-payment");
     expect(result.status).toBe(200);
   });
 
@@ -504,6 +507,7 @@ describe("cloud price-storage transport", () => {
 
     const result = await requestPaymentSettleViaProxy("quote-456", "0xabcd", {
       proxyBaseUrl: "http://127.0.0.1:9999/",
+      payment: { intent: "charge" },
       fetchImpl: async (input, init) => {
         capturedUrl = String(input);
         capturedBody = typeof init?.body === "string" ? init.body : "";
@@ -515,9 +519,10 @@ describe("cloud price-storage transport", () => {
     });
 
     expect(capturedUrl).toBe("http://127.0.0.1:9999/mnemospark/payment/settle");
-    const body = JSON.parse(capturedBody) as Record<string, string>;
+    const body = JSON.parse(capturedBody) as Record<string, unknown>;
     expect(body.quote_id).toBe("quote-456");
     expect(body.wallet_address).toBe("0xabcd");
+    expect(body.payment).toEqual({ intent: "charge" });
     expect(result.status).toBe(200);
   });
 });
