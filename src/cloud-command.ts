@@ -1404,23 +1404,26 @@ async function runCloudCommandHandler(
         parsed.uploadRequest.wallet_address,
         objectLogHomeDir,
       );
-      const paymentFetch = createPayment(walletKey).fetch;
       const idempotencyKey = idempotencyKeyFn();
+      const shouldSettleBeforeUpload = requestStorageUpload !== requestStorageUploadViaProxy;
 
-      // Settle payment first (with 402 handling); then upload with plain fetch and no payment headers.
-      const settleResult = await requestPaymentSettleViaProxy(
-        parsed.uploadRequest.quote_id,
-        parsed.uploadRequest.wallet_address,
-        {
-          ...options.proxyUploadOptions,
-          fetchImpl: (input, init) => paymentFetch(input, init),
-        },
-      );
-      if (settleResult.status !== 200) {
-        const message =
-          settleResult.bodyText?.trim() ||
-          `Payment settle failed with status ${settleResult.status}`;
-        throw new Error(message);
+      if (shouldSettleBeforeUpload) {
+        const paymentFetch = createPayment(walletKey).fetch;
+        // Settle payment first (with 402 handling) when upload transport does not settle itself.
+        const settleResult = await requestPaymentSettleViaProxy(
+          parsed.uploadRequest.quote_id,
+          parsed.uploadRequest.wallet_address,
+          {
+            ...options.proxyUploadOptions,
+            fetchImpl: (input, init) => paymentFetch(input, init),
+          },
+        );
+        if (settleResult.status !== 200) {
+          const message =
+            settleResult.bodyText?.trim() ||
+            `Payment settle failed with status ${settleResult.status}`;
+          throw new Error(message);
+        }
       }
 
       const uploadFetchImpl = options.proxyUploadOptions?.fetchImpl ?? fetchImpl;

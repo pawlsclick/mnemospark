@@ -345,6 +345,12 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
           "/price-storage",
           requestPayload.wallet_address,
         );
+        if (!walletSignature) {
+          logProxyEvent("warn", "proxy_price_storage_wallet_signature_missing");
+          res.writeHead(400, { "Content-Type": "application/json" });
+          res.end(createWalletRequiredBody());
+          return;
+        }
         const backendResponse = await forwardPriceStorageToBackend(requestPayload, {
           backendBaseUrl: MNEMOSPARK_BACKEND_API_BASE_URL,
           walletSignature,

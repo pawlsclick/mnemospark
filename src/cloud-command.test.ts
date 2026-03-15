@@ -410,7 +410,7 @@ describe("cloud command", () => {
       config: {},
     });
 
-    expect(createPaymentFetchCalls).toBe(1);
+    expect(createPaymentFetchCalls).toBe(0);
     expect(capturedIdempotency).toBe("idempotency-123");
     expect(capturedBody?.quoted_storage_price).toBe(2.75);
     const payload = capturedBody?.payload as Record<string, unknown>;
@@ -537,7 +537,7 @@ describe("cloud command", () => {
         config: {},
       });
 
-      expect(createPaymentFetchCalls).toBe(1);
+      expect(createPaymentFetchCalls).toBe(0);
       expect(result.isError).not.toBe(true);
 
       await expect(stat(archivePath)).rejects.toThrow();
@@ -571,8 +571,8 @@ describe("cloud command", () => {
       objectLogHomeDir: homeDir,
       backupOptions: { tmpDir: tmpBackupDir },
       resolveWalletPrivateKeyFn: async () => walletKey,
-      createPaymentFetchFn: () => ({
-        fetch: async () =>
+      proxyUploadOptions: {
+        fetchImpl: async () =>
           new Response(
             JSON.stringify({
               error: "insufficient_balance",
@@ -583,8 +583,7 @@ describe("cloud command", () => {
               headers: { "Content-Type": "application/json" },
             },
           ),
-        cache: new PaymentCache(),
-      }),
+      },
     });
 
     const result = await command.handler({
