@@ -10,6 +10,7 @@ import {
 import { normalizeWalletSignature } from "./wallet-signature.js";
 
 export const PRICE_STORAGE_PROXY_PATH = "/mnemospark/price-storage";
+export const PAYMENT_SETTLE_PROXY_PATH = "/mnemospark/payment/settle";
 export const UPLOAD_PROXY_PATH = "/mnemospark/upload";
 export const UPLOAD_CONFIRM_PROXY_PATH = "/mnemospark/upload/confirm";
 
@@ -96,8 +97,14 @@ type ProxyUploadConfirmOptions = {
   fetchImpl?: FetchLike;
 };
 
+/**
+ * Options for forwarding price-storage to the backend directly.
+ * When backendBaseUrl is set, walletSignature is required (backend requires X-Wallet-Signature).
+ * Use the proxy for price-storage if you do not have a wallet signature, or pass walletSignature.
+ */
 type BackendQuoteOptions = {
   backendBaseUrl?: string;
+  /** Required when calling the backend directly. Omit only when using the proxy. */
   walletSignature?: string;
   fetchImpl?: FetchLike;
 };
@@ -115,6 +122,37 @@ type BackendUploadConfirmOptions = {
   backendBaseUrl?: string;
   walletSignature?: string;
   fetchImpl?: FetchLike;
+};
+
+/** Request body for POST /payment/settle. */
+export type PaymentSettleRequest = {
+  quote_id: string;
+  wallet_address: string;
+};
+
+/** Options for forwarding payment/settle to the backend. */
+export type BackendSettleOptions = {
+  backendBaseUrl?: string;
+  walletSignature?: string;
+  fetchImpl?: FetchLike;
+  /** Optional payment authorization (PAYMENT-SIGNATURE / x-payment) for 402 retry. */
+  paymentSignature?: string;
+  legacyPayment?: string;
+};
+
+/** Options for requesting payment/settle via the proxy. */
+export type ProxySettleOptions = {
+  proxyBaseUrl?: string;
+  fetchImpl?: FetchLike;
+};
+
+/** Result from forwarding payment/settle to the backend (or proxy). */
+export type BackendSettleForwardResult = {
+  status: number;
+  bodyText: string;
+  contentType: string;
+  paymentRequired?: string;
+  paymentResponse?: string;
 };
 
 type BackendQuoteForwardResult = {
@@ -527,6 +565,11 @@ export async function requestStorageUploadConfirmViaProxy(
   return parseStorageUploadResponse(payload);
 }
 
+/**
+ * Forwards a price-storage quote request to the backend API.
+ * When calling the backend directly (backendBaseUrl set), wallet proof is required:
+ * pass walletSignature or the backend will return 403. Use the proxy or provide walletSignature.
+ */
 export async function forwardPriceStorageToBackend(
   request: PriceStorageQuoteRequest,
   options: BackendQuoteOptions = {},
@@ -539,18 +582,106 @@ export async function forwardPriceStorageToBackend(
     throw new Error("MNEMOSPARK_BACKEND_API_BASE_URL is not configured");
   }
 
+  if (!walletSignature) {
+    throw new Error(
+      "Wallet proof is required for /price-storage when calling the backend directly. Use the proxy or provide walletSignature.",
+    );
+  }
+
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
+    "X-Wallet-Signature": walletSignature,
   };
-  if (walletSignature) {
-    headers["X-Wallet-Signature"] = walletSignature;
-  }
 
   const targetUrl = `${normalizeBaseUrl(backendBaseUrl)}/price-storage`;
   const response = await fetchImpl(targetUrl, {
     method: "POST",
     headers,
     body: JSON.stringify(request),
+  });
+
+  return {
+    status: response.status,
+    bodyText: await response.text(),
+    contentType: response.headers.get("content-type") ?? "application/json",
+    paymentRequired: normalizePaymentRequired(response.headers),
+    paymentResponse: normalizePaymentResponse(response.headers),
+  };
+}
+
+/**
+ * Forwards a payment/settle request to the backend API.
+ * Use fetchImpl from createPaymentFetch for 402 handling (sign and retry).
+ */
+export async function forwardPaymentSettleToBackend(
+  quoteId: string,
+  walletAddress: string,
+  options: BackendSettleOptions = {},
+): Promise<BackendSettleForwardResult> {
+  const fetchImpl = options.fetchImpl ?? fetch;
+  const backendBaseUrl = (options.backendBaseUrl ?? "").trim();
+  const walletSignature = normalizeWalletSignature(options.walletSignature);
+
+  if (!backendBaseUrl) {
+    throw new Error("MNEMOSPARK_BACKEND_API_BASE_URL is not configured");
+  }
+  if (!walletSignature) {
+    throw new Error(
+      "Wallet proof is required for /payment/settle when calling the backend directly.",
+    );
+  }
+
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    "X-Wallet-Signature": walletSignature,
+  };
+  const paymentSignature = options.paymentSignature?.trim();
+  const legacyPayment = options.legacyPayment?.trim();
+  if (paymentSignature) {
+    headers["PAYMENT-SIGNATURE"] = paymentSignature;
+    headers["x-payment"] = paymentSignature;
+  }
+  if (legacyPayment) {
+    headers["x-payment"] = legacyPayment;
+    if (!headers["PAYMENT-SIGNATURE"]) {
+      headers["PAYMENT-SIGNATURE"] = legacyPayment;
+    }
+  }
+
+  const targetUrl = `${normalizeBaseUrl(backendBaseUrl)}/payment/settle`;
+  const response = await fetchImpl(targetUrl, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ quote_id: quoteId, wallet_address: walletAddress }),
+  });
+
+  return {
+    status: response.status,
+    bodyText: await response.text(),
+    contentType: response.headers.get("content-type") ?? "application/json",
+    paymentRequired: normalizePaymentRequired(response.headers),
+    paymentResponse: normalizePaymentResponse(response.headers),
+  };
+}
+
+/**
+ * Sends payment/settle to the proxy (POST /mnemospark/payment/settle).
+ * Use fetchImpl from createPaymentFetch for 402 handling.
+ */
+export async function requestPaymentSettleViaProxy(
+  quoteId: string,
+  walletAddress: string,
+  options: ProxySettleOptions = {},
+): Promise<BackendSettleForwardResult> {
+  const fetchImpl = options.fetchImpl ?? fetch;
+  const baseUrl = normalizeBaseUrl(
+    options.proxyBaseUrl ?? `http://127.0.0.1:${PROXY_PORT.toString()}`,
+  );
+  const targetUrl = `${baseUrl}${PAYMENT_SETTLE_PROXY_PATH}`;
+  const response = await fetchImpl(targetUrl, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ quote_id: quoteId, wallet_address: walletAddress }),
   });
 
   return {
@@ -588,16 +719,8 @@ export async function forwardStorageUploadToBackend(
     requestHeaders["Idempotency-Key"] = options.idempotencyKey.trim();
   }
 
-  const paymentSignature = options.paymentSignature?.trim();
-  const legacyPayment = options.legacyPayment?.trim();
-  if (paymentSignature) {
-    requestHeaders["PAYMENT-SIGNATURE"] = paymentSignature;
-    requestHeaders["x-payment"] = paymentSignature;
-  }
-  if (legacyPayment) {
-    requestHeaders["x-payment"] = legacyPayment;
-    requestHeaders["PAYMENT-SIGNATURE"] = requestHeaders["PAYMENT-SIGNATURE"] ?? legacyPayment;
-  }
+  // Payment is settled via POST /payment/settle before upload; backend checks the ledger.
+  // Do not send PAYMENT-SIGNATURE / x-payment on upload.
 
   const payloadHints = request.payload as UploadPayload & {
     object_key?: unknown;
@@ -703,10 +826,13 @@ export async function forwardStorageUploadConfirmToBackend(
 export type {
   BackendQuoteForwardResult,
   BackendQuoteOptions,
+  BackendSettleForwardResult,
+  BackendSettleOptions,
   BackendUploadForwardResult,
   BackendUploadOptions,
   BackendUploadConfirmOptions,
   ProxyQuoteOptions,
+  ProxySettleOptions,
   ProxyUploadOptions,
   ProxyUploadConfirmOptions,
 };

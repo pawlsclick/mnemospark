@@ -12,6 +12,7 @@ import { basename, dirname, join, resolve } from "node:path";
 import { privateKeyToAccount } from "viem/accounts";
 
 import {
+  requestPaymentSettleViaProxy,
   requestStorageUploadConfirmViaProxy,
   requestStorageUploadViaProxy,
   parsePriceStorageQuoteRequest,
@@ -1406,6 +1407,23 @@ async function runCloudCommandHandler(
       const paymentFetch = createPayment(walletKey).fetch;
       const idempotencyKey = idempotencyKeyFn();
 
+      // Settle payment first (with 402 handling); then upload with plain fetch and no payment headers.
+      const settleResult = await requestPaymentSettleViaProxy(
+        parsed.uploadRequest.quote_id,
+        parsed.uploadRequest.wallet_address,
+        {
+          ...options.proxyUploadOptions,
+          fetchImpl: (input, init) => paymentFetch(input, init),
+        },
+      );
+      if (settleResult.status !== 200) {
+        const message =
+          settleResult.bodyText?.trim() ||
+          `Payment settle failed with status ${settleResult.status}`;
+        throw new Error(message);
+      }
+
+      const uploadFetchImpl = options.proxyUploadOptions?.fetchImpl ?? fetchImpl;
       const uploadResponse = await requestStorageUpload(
         {
           quote_id: parsed.uploadRequest.quote_id,
@@ -1418,7 +1436,7 @@ async function runCloudCommandHandler(
         {
           ...options.proxyUploadOptions,
           idempotencyKey,
-          fetchImpl: (input, init) => paymentFetch(input, init),
+          fetchImpl: uploadFetchImpl,
         },
       );
 
