@@ -826,13 +826,10 @@ export async function forwardStorageUploadConfirmToBackend(
 export type {
   BackendQuoteForwardResult,
   BackendQuoteOptions,
-  BackendSettleForwardResult,
-  BackendSettleOptions,
   BackendUploadForwardResult,
   BackendUploadOptions,
   BackendUploadConfirmOptions,
   ProxyQuoteOptions,
-  ProxySettleOptions,
   ProxyUploadOptions,
   ProxyUploadConfirmOptions,
 };
