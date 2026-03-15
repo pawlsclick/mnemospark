@@ -366,7 +366,6 @@ describe("cloud price-storage transport", () => {
     const forwarded = await forwardStorageUploadToBackend(SAMPLE_UPLOAD_REQUEST, {
       backendBaseUrl: "https://api.example.com/prod/",
       walletSignature: "wallet-proof-header",
-      paymentSignature: "signed-payment-payload",
       idempotencyKey: "idemp-456",
       fetchImpl: async (input, init) => {
         capturedUrl = String(input);
