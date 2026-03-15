@@ -1,6 +1,6 @@
-import { createCipheriv, createHash, randomBytes } from "node:crypto";
+import { createCipheriv, randomBytes } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { homedir, tmpdir } from "node:os";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
@@ -14,6 +14,7 @@ import {
   type BackendStorageForwardResult,
   type StorageObjectRequest,
 } from "./cloud-storage.js";
+import { AES_GCM_NONCE_BYTES, resolveWalletKekPath } from "./cloud-storage-crypto.js";
 
 const sandboxDirs: string[] = [];
 
@@ -30,12 +31,6 @@ const SAMPLE_REQUEST: StorageObjectRequest = {
   wallet_address: "0x1234abcd",
   object_key: "backup/archive.tar.gz",
 };
-
-const AES_GCM_NONCE_BYTES = 12;
-
-function walletShortHash(walletAddress: string): string {
-  return createHash("sha256").update(walletAddress.trim().toLowerCase()).digest("hex").slice(0, 16);
-}
 
 function encryptAesGcm(plaintext: Buffer, key: Buffer): Buffer {
   const nonce = randomBytes(AES_GCM_NONCE_BYTES);
@@ -187,9 +182,11 @@ describe("cloud storage transport", () => {
   it("decrypts presigned download bytes when wrapped DEK metadata is present", async () => {
     const outputDir = await mkdtemp(join(tmpdir(), "mnemospark-cloud-storage-decrypt-"));
     sandboxDirs.push(outputDir);
+    const homeDir = await mkdtemp(join(tmpdir(), "mnemospark-cloud-storage-home-"));
+    sandboxDirs.push(homeDir);
 
-    const kekDir = join(homedir(), ".openclaw", "mnemospark", "keys");
-    const keyPath = join(kekDir, `${walletShortHash(SAMPLE_REQUEST.wallet_address)}.key`);
+    const keyPath = resolveWalletKekPath(SAMPLE_REQUEST.wallet_address, homeDir);
+    const kekDir = join(homeDir, ".openclaw", "mnemospark", "keys");
     const kek = randomBytes(32);
     await mkdir(kekDir, { recursive: true });
     await writeFile(keyPath, kek, { mode: 0o600 });
@@ -220,6 +217,7 @@ describe("cloud storage transport", () => {
     try {
       const result = await downloadStorageToDisk(SAMPLE_REQUEST, backendResponse, {
         outputDir,
+        homeDir,
         fetchImpl: async () => {
           return new Response(new Uint8Array(encryptedPayload), {
             status: 200,

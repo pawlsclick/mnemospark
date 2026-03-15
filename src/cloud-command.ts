@@ -38,6 +38,12 @@ import {
   type StorageLsResponse,
   type StorageObjectRequest,
 } from "./cloud-storage.js";
+import {
+  AES_GCM_NONCE_BYTES,
+  parseStoredAes256Key,
+  resolveWalletKekPath,
+  walletShortHash,
+} from "./cloud-storage-crypto.js";
 import type { OpenClawPluginCommandDefinition } from "./types.js";
 import { createPaymentFetch, type PaymentFetchResult } from "./x402.js";
 import { isValidWalletPrivateKey } from "./wallet-key.js";
@@ -49,9 +55,7 @@ const OBJECT_LOG_SUBPATH = join(".openclaw", "mnemospark", "object.log");
 const CRON_TABLE_SUBPATH = join(".openclaw", "mnemospark", "crontab.txt");
 const BLOCKRUN_WALLET_KEY_SUBPATH = join(".openclaw", "blockrun", "wallet.key");
 const MNEMOSPARK_WALLET_KEY_SUBPATH = join(".openclaw", "mnemospark", "wallet", "wallet.key");
-const KEY_STORE_SUBPATH = join(".openclaw", "mnemospark", "keys");
 const INLINE_UPLOAD_MAX_BYTES = 4_500_000;
-const AES_GCM_NONCE_BYTES = 12;
 const PAYMENT_REMINDER_INTERVAL_DAYS = 30;
 const PAYMENT_DELETE_DEADLINE_DAYS = 32;
 // Standard cron cannot express "every 30 days" from an arbitrary date. */30 in day-of-month
@@ -929,10 +933,6 @@ function sha256Buffer(content: Buffer): string {
   return createHash("sha256").update(content).digest("hex");
 }
 
-function walletShortHash(walletAddress: string): string {
-  return sha256Buffer(Buffer.from(walletAddress.trim().toLowerCase(), "utf-8")).slice(0, 16);
-}
-
 function bucketNameForWallet(walletAddress: string): string {
   return `mnemospark-${walletShortHash(walletAddress)}`;
 }
@@ -956,23 +956,12 @@ async function loadOrCreateKek(
   walletAddress: string,
   homeDir?: string,
 ): Promise<{ kek: Buffer; keyPath: string }> {
-  const keyPath = join(
-    homeDir ?? homedir(),
-    KEY_STORE_SUBPATH,
-    `${walletShortHash(walletAddress)}.key`,
-  );
+  const keyPath = resolveWalletKekPath(walletAddress, homeDir);
   await mkdir(dirname(keyPath), { recursive: true });
 
   try {
     const existing = await readFile(keyPath);
-    if (existing.length === 32) {
-      return { kek: existing, keyPath };
-    }
-    const decoded = Buffer.from(existing.toString("utf-8").trim(), "base64");
-    if (decoded.length === 32) {
-      return { kek: decoded, keyPath };
-    }
-    throw new Error("Invalid key file format");
+    return { kek: parseStoredAes256Key(existing), keyPath };
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
       throw error;
