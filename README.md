@@ -134,4 +134,3 @@ The blockchain transaction is the payment record.
 
 - Plugin: `pawlsclick/mnemospark`
 - Backend: `pawlsclick/mnemospark-backend`
-
