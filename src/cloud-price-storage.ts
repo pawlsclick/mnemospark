@@ -113,8 +113,6 @@ type BackendUploadOptions = {
   backendBaseUrl?: string;
   walletSignature?: string;
   fetchImpl?: FetchLike;
-  paymentSignature?: string;
-  legacyPayment?: string;
   idempotencyKey?: string;
 };
 
@@ -122,12 +120,6 @@ type BackendUploadConfirmOptions = {
   backendBaseUrl?: string;
   walletSignature?: string;
   fetchImpl?: FetchLike;
-};
-
-/** Request body for POST /payment/settle. */
-export type PaymentSettleRequest = {
-  quote_id: string;
-  wallet_address: string;
 };
 
 /** Options for forwarding payment/settle to the backend. */
