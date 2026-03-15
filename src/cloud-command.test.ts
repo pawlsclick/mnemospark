@@ -347,6 +347,19 @@ describe("cloud command", () => {
     let capturedBody: Record<string, unknown> | undefined;
     let capturedIdempotency: string | null = null;
 
+    const uploadResponseBody = {
+      quote_id: "quote-abc123",
+      addr: walletAddress,
+      addr_hash: "addr-hash",
+      trans_id: "tx-001",
+      storage_price: 2.75,
+      object_id: objectId,
+      object_key: "obj-upload-001.tar.gz.enc",
+      provider: "aws",
+      bucket_name: "mnemospark-1234",
+      location: "us-east-1",
+    };
+
     const command = createCloudCommand({
       objectLogHomeDir: homeDir,
       backupOptions: { tmpDir: tmpBackupDir },
@@ -361,27 +374,25 @@ describe("cloud command", () => {
             if (typeof init?.body === "string") {
               capturedBody = JSON.parse(init.body) as Record<string, unknown>;
             }
-            return new Response(
-              JSON.stringify({
-                quote_id: "quote-abc123",
-                addr: walletAddress,
-                addr_hash: "addr-hash",
-                trans_id: "tx-001",
-                storage_price: 2.75,
-                object_id: objectId,
-                object_key: "obj-upload-001.tar.gz.enc",
-                provider: "aws",
-                bucket_name: "mnemospark-1234",
-                location: "us-east-1",
-              }),
-              {
-                status: 200,
-                headers: { "Content-Type": "application/json" },
-              },
-            );
+            return new Response(JSON.stringify(uploadResponseBody), {
+              status: 200,
+              headers: { "Content-Type": "application/json" },
+            });
           },
           cache: new PaymentCache(),
         };
+      },
+      proxyUploadOptions: {
+        fetchImpl: async (_input: RequestInfo | URL, init?: RequestInit) => {
+          if (typeof init?.body === "string") {
+            capturedBody = JSON.parse(init.body) as Record<string, unknown>;
+          }
+          capturedIdempotency = new Headers(init?.headers).get("Idempotency-Key");
+          return new Response(JSON.stringify(uploadResponseBody), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          });
+        },
       },
     });
 
@@ -399,7 +410,7 @@ describe("cloud command", () => {
       config: {},
     });
 
-    expect(createPaymentFetchCalls).toBe(1);
+    expect(createPaymentFetchCalls).toBe(0);
     expect(capturedIdempotency).toBe("idempotency-123");
     expect(capturedBody?.quoted_storage_price).toBe(2.75);
     const payload = capturedBody?.payload as Record<string, unknown>;
@@ -473,6 +484,18 @@ describe("cloud command", () => {
     const previousEnv = process.env.MNEMOSPARK_DELETE_BACKUP_AFTER_UPLOAD;
     process.env.MNEMOSPARK_DELETE_BACKUP_AFTER_UPLOAD = "1";
 
+    const uploadResponseCleanup = {
+      quote_id: "quote-cleanup",
+      addr: walletAddress,
+      addr_hash: "addr-hash-cleanup",
+      trans_id: "tx-cleanup-001",
+      storage_price: 2.75,
+      object_id: objectId,
+      object_key: "obj-upload-cleanup-001.tar.gz.enc",
+      provider: "aws",
+      bucket_name: "mnemospark-5678",
+      location: "us-east-1",
+    };
     try {
       const command = createCloudCommand({
         objectLogHomeDir: homeDir,
@@ -484,26 +507,19 @@ describe("cloud command", () => {
           createPaymentFetchCalls += 1;
           return {
             fetch: async () =>
-              new Response(
-                JSON.stringify({
-                  quote_id: "quote-cleanup",
-                  addr: walletAddress,
-                  addr_hash: "addr-hash-cleanup",
-                  trans_id: "tx-cleanup-001",
-                  storage_price: 2.75,
-                  object_id: objectId,
-                  object_key: "obj-upload-cleanup-001.tar.gz.enc",
-                  provider: "aws",
-                  bucket_name: "mnemospark-5678",
-                  location: "us-east-1",
-                }),
-                {
-                  status: 200,
-                  headers: { "Content-Type": "application/json" },
-                },
-              ),
+              new Response(JSON.stringify(uploadResponseCleanup), {
+                status: 200,
+                headers: { "Content-Type": "application/json" },
+              }),
             cache: new PaymentCache(),
           };
+        },
+        proxyUploadOptions: {
+          fetchImpl: async () =>
+            new Response(JSON.stringify(uploadResponseCleanup), {
+              status: 200,
+              headers: { "Content-Type": "application/json" },
+            }),
         },
       });
 
@@ -521,7 +537,7 @@ describe("cloud command", () => {
         config: {},
       });
 
-      expect(createPaymentFetchCalls).toBe(1);
+      expect(createPaymentFetchCalls).toBe(0);
       expect(result.isError).not.toBe(true);
 
       await expect(stat(archivePath)).rejects.toThrow();
@@ -555,8 +571,8 @@ describe("cloud command", () => {
       objectLogHomeDir: homeDir,
       backupOptions: { tmpDir: tmpBackupDir },
       resolveWalletPrivateKeyFn: async () => walletKey,
-      createPaymentFetchFn: () => ({
-        fetch: async () =>
+      proxyUploadOptions: {
+        fetchImpl: async () =>
           new Response(
             JSON.stringify({
               error: "insufficient_balance",
@@ -567,8 +583,7 @@ describe("cloud command", () => {
               headers: { "Content-Type": "application/json" },
             },
           ),
-        cache: new PaymentCache(),
-      }),
+      },
     });
 
     const result = await command.handler({
@@ -648,6 +663,30 @@ describe("cloud command", () => {
           ),
         cache: new PaymentCache(),
       }),
+      proxyUploadOptions: {
+        fetchImpl: async () =>
+          new Response(
+            JSON.stringify({
+              quote_id: "quote-presigned-confirm",
+              addr: walletAddress,
+              addr_hash: "addr-hash",
+              trans_id: "tx-initial",
+              storage_price: 2.75,
+              object_id: objectId,
+              object_key: "obj-upload-presigned-confirm-001.tar.gz.enc",
+              provider: "aws",
+              bucket_name: "mnemospark-1234",
+              location: "[REDACTED]",
+              upload_url: "https://example-presigned-upload.local/put",
+              upload_headers: {
+                "content-type": "application/octet-stream",
+                "x-amz-meta-wrapped-dek": "wrapped",
+              },
+              confirmation_required: true,
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          ),
+      },
       requestStorageUploadConfirmFn: async (request) => {
         capturedConfirmRequest = request as Record<string, unknown>;
         return {
@@ -744,6 +783,30 @@ describe("cloud command", () => {
           ),
         cache: new PaymentCache(),
       }),
+      proxyUploadOptions: {
+        fetchImpl: async () =>
+          new Response(
+            JSON.stringify({
+              quote_id: "quote-presigned-confirm-fail",
+              addr: walletAddress,
+              addr_hash: "addr-hash",
+              trans_id: "tx-confirm-fail",
+              storage_price: 2.75,
+              object_id: objectId,
+              object_key: "obj-upload-presigned-confirm-fail-001.tar.gz.enc",
+              provider: "aws",
+              bucket_name: "mnemospark-1234",
+              location: "[REDACTED]",
+              upload_url: "https://example-presigned-upload.local/put",
+              upload_headers: {
+                "content-type": "application/octet-stream",
+                "x-amz-meta-wrapped-dek": "wrapped",
+              },
+              confirmation_required: true,
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          ),
+      },
       requestStorageUploadConfirmFn: async () => {
         throw new Error(
           JSON.stringify({
@@ -793,33 +856,38 @@ describe("cloud command", () => {
     await writeFile(objectLogPath, `${initialLogLine}\n`, "utf-8");
 
     let capturedBody: Record<string, unknown> | undefined;
+    const uploadResponseNoUrl = {
+      quote_id: "quote-presigned",
+      addr: walletAddress,
+      object_id: objectId,
+      object_key: "obj-upload-presigned-001.tar.gz.enc",
+      provider: "aws",
+      bucket_name: "mnemospark-1234",
+      location: "us-east-1",
+    };
     const command = createCloudCommand({
       objectLogHomeDir: homeDir,
       backupOptions: { tmpDir: tmpBackupDir },
       resolveWalletPrivateKeyFn: async () => walletKey,
       createPaymentFetchFn: () => ({
-        fetch: async (_input, init) => {
+        fetch: async () =>
+          new Response(JSON.stringify(uploadResponseNoUrl), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+        cache: new PaymentCache(),
+      }),
+      proxyUploadOptions: {
+        fetchImpl: async (_input: RequestInfo | URL, init?: RequestInit) => {
           if (typeof init?.body === "string") {
             capturedBody = JSON.parse(init.body) as Record<string, unknown>;
           }
-          return new Response(
-            JSON.stringify({
-              quote_id: "quote-presigned",
-              addr: walletAddress,
-              object_id: objectId,
-              object_key: "obj-upload-presigned-001.tar.gz.enc",
-              provider: "aws",
-              bucket_name: "mnemospark-1234",
-              location: "us-east-1",
-            }),
-            {
-              status: 200,
-              headers: { "Content-Type": "application/json" },
-            },
-          );
+          return new Response(JSON.stringify(uploadResponseNoUrl), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          });
         },
-        cache: new PaymentCache(),
-      }),
+      },
     });
 
     const result = await command.handler({

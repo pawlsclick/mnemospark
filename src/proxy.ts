@@ -14,9 +14,11 @@ import { BalanceMonitor } from "./balance.js";
 import { PROXY_PORT, MNEMOSPARK_BACKEND_API_BASE_URL } from "./config.js";
 import { createWalletSignatureHeaderValue } from "./mnemospark-request-sign.js";
 import {
+  PAYMENT_SETTLE_PROXY_PATH,
   PRICE_STORAGE_PROXY_PATH,
   UPLOAD_PROXY_PATH,
   UPLOAD_CONFIRM_PROXY_PATH,
+  forwardPaymentSettleToBackend,
   forwardStorageUploadConfirmToBackend,
   forwardPriceStorageToBackend,
   forwardStorageUploadToBackend,
@@ -24,6 +26,7 @@ import {
   parsePriceStorageQuoteRequest,
   parseStorageUploadRequest,
 } from "./cloud-price-storage.js";
+import { createPaymentFetch } from "./x402.js";
 import {
   STORAGE_DELETE_PROXY_PATH,
   STORAGE_DOWNLOAD_PROXY_PATH,
@@ -342,6 +345,12 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
           "/price-storage",
           requestPayload.wallet_address,
         );
+        if (!walletSignature) {
+          logProxyEvent("warn", "proxy_price_storage_wallet_signature_missing");
+          res.writeHead(400, { "Content-Type": "application/json" });
+          res.end(createWalletRequiredBody());
+          return;
+        }
         const backendResponse = await forwardPriceStorageToBackend(requestPayload, {
           backendBaseUrl: MNEMOSPARK_BACKEND_API_BASE_URL,
           walletSignature,
@@ -378,6 +387,147 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
         sendJson(res, 502, {
           error: "proxy_error",
           message: `Failed to forward /mnemospark-cloud price-storage: ${err instanceof Error ? err.message : String(err)}`,
+        });
+      }
+      return;
+    }
+
+    // Mnemospark proxy endpoint for payment/settle (forwards to backend POST /payment/settle).
+    if (req.method === "POST" && matchesProxyPath(req.url, PAYMENT_SETTLE_PROXY_PATH)) {
+      logProxyEvent("info", "proxy_payment_settle_received");
+      try {
+        let payload: unknown;
+        try {
+          payload = await readProxyJsonBody(req);
+        } catch {
+          logProxyEvent("warn", "proxy_payment_settle_invalid_json");
+          sendJson(res, 400, {
+            error: "Bad request",
+            message: "Invalid JSON body for /mnemospark/payment/settle",
+          });
+          return;
+        }
+
+        const record =
+          payload && typeof payload === "object" ? (payload as Record<string, unknown>) : null;
+        const quoteId = typeof record?.quote_id === "string" ? record.quote_id.trim() : "";
+        const walletAddress =
+          typeof record?.wallet_address === "string" ? record.wallet_address.trim() : "";
+        const inlinePayment = record?.payment;
+        const inlinePaymentAuthorization = record?.payment_authorization;
+        if (!quoteId || !walletAddress) {
+          logProxyEvent("warn", "proxy_payment_settle_missing_fields");
+          sendJson(res, 400, {
+            error: "Bad request",
+            message: "Missing required fields: quote_id, wallet_address",
+          });
+          return;
+        }
+        if (
+          inlinePayment !== undefined &&
+          (inlinePayment === null ||
+            typeof inlinePayment !== "object" ||
+            Array.isArray(inlinePayment))
+        ) {
+          logProxyEvent("warn", "proxy_payment_settle_invalid_payment_shape");
+          sendJson(res, 400, {
+            error: "Bad request",
+            message: "Invalid field: payment must be an object when provided",
+          });
+          return;
+        }
+        if (
+          inlinePaymentAuthorization !== undefined &&
+          !(
+            typeof inlinePaymentAuthorization === "string" ||
+            (inlinePaymentAuthorization !== null &&
+              typeof inlinePaymentAuthorization === "object" &&
+              !Array.isArray(inlinePaymentAuthorization))
+          )
+        ) {
+          logProxyEvent("warn", "proxy_payment_settle_invalid_payment_authorization_shape");
+          sendJson(res, 400, {
+            error: "Bad request",
+            message:
+              "Invalid field: payment_authorization must be an object or string when provided",
+          });
+          return;
+        }
+
+        if (walletAddress.toLowerCase() !== proxyWalletAddressLower) {
+          logProxyEvent("warn", "proxy_payment_settle_wallet_mismatch", {
+            request_wallet: walletAddress,
+            proxy_wallet: account.address,
+          });
+          sendJson(res, 403, {
+            error: "wallet_proof_invalid",
+            message: "wallet proof invalid",
+          });
+          return;
+        }
+
+        const walletSignature = await createBackendWalletSignature(
+          "POST",
+          "/payment/settle",
+          walletAddress,
+        );
+        if (!walletSignature) {
+          logProxyEvent("warn", "proxy_payment_settle_wallet_signature_missing");
+          res.writeHead(400, { "Content-Type": "application/json" });
+          res.end(createWalletRequiredBody());
+          return;
+        }
+
+        const paymentFetch = createPaymentFetch(walletPrivateKey).fetch;
+        const backendResponse = await forwardPaymentSettleToBackend(quoteId, walletAddress, {
+          backendBaseUrl: MNEMOSPARK_BACKEND_API_BASE_URL,
+          walletSignature,
+          fetchImpl: paymentFetch,
+          paymentSignature: readHeaderValue(req.headers["payment-signature"]),
+          legacyPayment: readHeaderValue(req.headers["x-payment"]),
+          payment:
+            inlinePayment && typeof inlinePayment === "object" && !Array.isArray(inlinePayment)
+              ? (inlinePayment as Record<string, unknown>)
+              : undefined,
+          paymentAuthorization:
+            typeof inlinePaymentAuthorization === "string"
+              ? inlinePaymentAuthorization.trim() || undefined
+              : inlinePaymentAuthorization !== undefined
+                ? (inlinePaymentAuthorization as Record<string, unknown>)
+                : undefined,
+        });
+        logProxyEvent("info", "proxy_payment_settle_backend_response", {
+          status: backendResponse.status,
+        });
+
+        const authFailure = normalizeBackendAuthFailure(
+          backendResponse.status,
+          backendResponse.bodyText,
+        );
+        if (authFailure) {
+          logProxyEvent("warn", "proxy_payment_settle_auth_failure", {
+            status: authFailure.status,
+          });
+          const responseHeaders = createBackendForwardHeaders({
+            contentType: authFailure.contentType,
+            paymentRequired: backendResponse.paymentRequired,
+            paymentResponse: backendResponse.paymentResponse,
+          });
+          res.writeHead(authFailure.status, responseHeaders);
+          res.end(authFailure.bodyText);
+          return;
+        }
+
+        const responseHeaders = createBackendForwardHeaders(backendResponse);
+        res.writeHead(backendResponse.status, responseHeaders);
+        res.end(backendResponse.bodyText);
+      } catch (err) {
+        logProxyEvent("error", "proxy_payment_settle_forward_failed", {
+          error: err instanceof Error ? err.message : String(err),
+        });
+        sendJson(res, 502, {
+          error: "proxy_error",
+          message: `Failed to forward /mnemospark/payment/settle: ${err instanceof Error ? err.message : String(err)}`,
         });
       }
       return;
@@ -475,11 +625,45 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
           });
         }
 
+        // Settle payment first (with 402 handling); then upload without payment headers.
+        const settleWalletSignature = await createBackendWalletSignature(
+          "POST",
+          "/payment/settle",
+          requestPayload.wallet_address,
+        );
+        if (!settleWalletSignature) {
+          logProxyEvent("warn", "proxy_upload_settle_signature_missing");
+          res.writeHead(400, { "Content-Type": "application/json" });
+          res.end(createWalletRequiredBody());
+          return;
+        }
+        const uploadPaymentFetch = createPaymentFetch(walletPrivateKey).fetch;
+        const settleResponse = await forwardPaymentSettleToBackend(
+          requestPayload.quote_id,
+          requestPayload.wallet_address,
+          {
+            backendBaseUrl: MNEMOSPARK_BACKEND_API_BASE_URL,
+            walletSignature: settleWalletSignature,
+            fetchImpl: uploadPaymentFetch,
+          },
+        );
+        if (settleResponse.status !== 200) {
+          logProxyEvent("warn", "proxy_upload_settle_failed", {
+            status: settleResponse.status,
+          });
+          const responseHeaders = createBackendForwardHeaders({
+            contentType: settleResponse.contentType,
+            paymentRequired: settleResponse.paymentRequired,
+            paymentResponse: settleResponse.paymentResponse,
+          });
+          res.writeHead(settleResponse.status, responseHeaders);
+          res.end(settleResponse.bodyText);
+          return;
+        }
+
         const backendResponse = await forwardStorageUploadToBackend(requestPayload, {
           backendBaseUrl: MNEMOSPARK_BACKEND_API_BASE_URL,
           walletSignature,
-          paymentSignature: readHeaderValue(req.headers["payment-signature"]),
-          legacyPayment: readHeaderValue(req.headers["x-payment"]),
           idempotencyKey: readHeaderValue(req.headers["idempotency-key"]),
         });
         logProxyEvent("info", "proxy_upload_backend_response", {

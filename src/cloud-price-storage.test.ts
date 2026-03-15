@@ -1,9 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  forwardPaymentSettleToBackend,
   forwardPriceStorageToBackend,
   forwardStorageUploadConfirmToBackend,
   forwardStorageUploadToBackend,
+  requestPaymentSettleViaProxy,
   requestPriceStorageViaProxy,
   requestStorageUploadConfirmViaProxy,
   requestStorageUploadViaProxy,
@@ -95,7 +97,7 @@ describe("cloud price-storage transport", () => {
     expect(quote.storage_price).toBe(3.5);
   });
 
-  it("forwards price-storage request to backend with optional wallet signature", async () => {
+  it("forwards price-storage request to backend with required wallet signature", async () => {
     let capturedUrl = "";
     let capturedInit: RequestInit | undefined;
 
@@ -122,6 +124,27 @@ describe("cloud price-storage transport", () => {
     expect(headers["x-api-key"]).toBeUndefined();
     expect(forwarded.status).toBe(402);
     expect(forwarded.paymentRequired).toBe("legacy-required-header");
+  });
+
+  it("throws when backendBaseUrl is set but walletSignature is missing for price-storage", async () => {
+    await expect(
+      forwardPriceStorageToBackend(SAMPLE_REQUEST, {
+        backendBaseUrl: "https://api.example.com/prod/",
+      }),
+    ).rejects.toThrow(
+      "Wallet proof is required for /price-storage when calling the backend directly. Use the proxy or provide walletSignature.",
+    );
+  });
+
+  it("throws when backendBaseUrl is set but walletSignature is empty for price-storage", async () => {
+    await expect(
+      forwardPriceStorageToBackend(SAMPLE_REQUEST, {
+        backendBaseUrl: "https://api.example.com/prod/",
+        walletSignature: "  ",
+      }),
+    ).rejects.toThrow(
+      "Wallet proof is required for /price-storage when calling the backend directly. Use the proxy or provide walletSignature.",
+    );
   });
 
   it("sends upload request to local proxy with Idempotency-Key and parses response", async () => {
@@ -336,14 +359,13 @@ describe("cloud price-storage transport", () => {
     expect(upload.object_key).toBe("obj-001.tar.gz.enc");
   });
 
-  it("forwards upload request with payment and idempotency headers", async () => {
+  it("forwards upload request with wallet and idempotency headers (no payment headers)", async () => {
     let capturedUrl = "";
     let capturedInit: RequestInit | undefined;
 
     const forwarded = await forwardStorageUploadToBackend(SAMPLE_UPLOAD_REQUEST, {
       backendBaseUrl: "https://api.example.com/prod/",
       walletSignature: "wallet-proof-header",
-      paymentSignature: "signed-payment-payload",
       idempotencyKey: "idemp-456",
       fetchImpl: async (input, init) => {
         capturedUrl = String(input);
@@ -364,8 +386,8 @@ describe("cloud price-storage transport", () => {
     expect(headers["X-Wallet-Signature"]).toBe("wallet-proof-header");
     expect(headers["x-api-key"]).toBeUndefined();
     expect(headers["Idempotency-Key"]).toBe("idemp-456");
-    expect(headers["PAYMENT-SIGNATURE"]).toBe("signed-payment-payload");
-    expect(headers["x-payment"]).toBe("signed-payment-payload");
+    expect(headers["PAYMENT-SIGNATURE"]).toBeUndefined();
+    expect(headers["x-payment"]).toBeUndefined();
     const forwardedBody = JSON.parse(String(capturedInit?.body)) as Record<string, unknown>;
     expect(forwardedBody.quote_id).toBe(SAMPLE_UPLOAD_REQUEST.quote_id);
     expect(forwardedBody.wallet_address).toBe(SAMPLE_UPLOAD_REQUEST.wallet_address);
@@ -374,6 +396,7 @@ describe("cloud price-storage transport", () => {
     expect(forwardedBody.ciphertext).toBe(SAMPLE_UPLOAD_REQUEST.payload.content_base64);
     expect(forwardedBody.wrapped_dek).toBe(SAMPLE_UPLOAD_REQUEST.payload.wrapped_dek);
     expect(forwardedBody.mode).toBe("inline");
+    expect(forwardedBody.encryption_algorithm).toBeUndefined();
     expect(forwardedBody.payload).toBeUndefined();
     expect(forwardedBody.quoted_storage_price).toBeUndefined();
     expect(forwarded.status).toBe(200);
@@ -442,5 +465,64 @@ describe("cloud price-storage transport", () => {
         backendBaseUrl: "https://api.example.com/prod/",
       }),
     ).rejects.toThrow("Wallet required for storage endpoints");
+  });
+
+  it("forwards payment/settle to backend with wallet signature", async () => {
+    let capturedUrl = "";
+    let capturedInit: RequestInit | undefined;
+
+    const result = await forwardPaymentSettleToBackend("quote-123", "0x1234abcd", {
+      backendBaseUrl: "https://api.example.com/prod/",
+      walletSignature: "wallet-proof-header",
+      paymentAuthorization: "signed-inline-payment",
+      fetchImpl: async (input, init) => {
+        capturedUrl = String(input);
+        capturedInit = init;
+        return new Response(
+          JSON.stringify({
+            quote_id: "quote-123",
+            wallet_address: "0x1234abcd",
+            trans_id: "tx-001",
+            payment_status: "confirmed",
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      },
+    });
+
+    expect(capturedUrl).toBe("https://api.example.com/prod/payment/settle");
+    expect(capturedInit?.method).toBe("POST");
+    const headers = capturedInit?.headers as Record<string, string>;
+    expect(headers["X-Wallet-Signature"]).toBe("wallet-proof-header");
+    const body = JSON.parse(String(capturedInit?.body)) as Record<string, unknown>;
+    expect(body.quote_id).toBe("quote-123");
+    expect(body.wallet_address).toBe("0x1234abcd");
+    expect(body.payment_authorization).toBe("signed-inline-payment");
+    expect(result.status).toBe(200);
+  });
+
+  it("requestPaymentSettleViaProxy POSTs to proxy path", async () => {
+    let capturedUrl = "";
+    let capturedBody = "";
+
+    const result = await requestPaymentSettleViaProxy("quote-456", "0xabcd", {
+      proxyBaseUrl: "http://127.0.0.1:9999/",
+      payment: { intent: "charge" },
+      fetchImpl: async (input, init) => {
+        capturedUrl = String(input);
+        capturedBody = typeof init?.body === "string" ? init.body : "";
+        return new Response(JSON.stringify({ payment_status: "confirmed" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      },
+    });
+
+    expect(capturedUrl).toBe("http://127.0.0.1:9999/mnemospark/payment/settle");
+    const body = JSON.parse(capturedBody) as Record<string, unknown>;
+    expect(body.quote_id).toBe("quote-456");
+    expect(body.wallet_address).toBe("0xabcd");
+    expect(body.payment).toEqual({ intent: "charge" });
+    expect(result.status).toBe(200);
   });
 });
