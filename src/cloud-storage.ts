@@ -1,4 +1,6 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { createDecipheriv, createHash } from "node:crypto";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { homedir } from "node:os";
 import { dirname, join, resolve, sep } from "node:path";
 
 import { PROXY_PORT } from "./config.js";
@@ -77,6 +79,11 @@ type DownloadStorageToDiskResult = {
   bytesWritten: number;
 };
 
+const AES_GCM_NONCE_BYTES = 12;
+const AES_GCM_TAG_BYTES = 16;
+const AES_KEY_BYTES = 32;
+const KEY_STORE_SUBPATH = join(".openclaw", "mnemospark", "keys");
+
 function asBooleanOrDefault(value: unknown, defaultValue: boolean): boolean {
   if (typeof value === "boolean") {
     return value;
@@ -149,6 +156,61 @@ function parseFilenameFromContentDisposition(contentDisposition?: string): strin
   }
 
   return undefined;
+}
+
+function sha256Hex(input: string): string {
+  return createHash("sha256").update(input).digest("hex");
+}
+
+function walletShortHash(walletAddress: string): string {
+  return sha256Hex(walletAddress.trim().toLowerCase()).slice(0, 16);
+}
+
+async function loadWalletKek(walletAddress: string): Promise<Buffer> {
+  const keyPath = join(homedir(), KEY_STORE_SUBPATH, `${walletShortHash(walletAddress)}.key`);
+  const raw = await readFile(keyPath);
+
+  if (raw.length === AES_KEY_BYTES) {
+    return raw;
+  }
+
+  const decoded = Buffer.from(raw.toString("utf-8").trim(), "base64");
+  if (decoded.length === AES_KEY_BYTES) {
+    return decoded;
+  }
+
+  throw new Error("Invalid KEK file format");
+}
+
+function decryptAesGcm(payload: Buffer, key: Buffer): Buffer {
+  if (key.length !== AES_KEY_BYTES) {
+    throw new Error("Expected 32-byte AES key");
+  }
+  if (payload.length <= AES_GCM_NONCE_BYTES + AES_GCM_TAG_BYTES) {
+    throw new Error("Encrypted payload is too short");
+  }
+
+  const nonce = payload.subarray(0, AES_GCM_NONCE_BYTES);
+  const tag = payload.subarray(payload.length - AES_GCM_TAG_BYTES);
+  const ciphertext = payload.subarray(AES_GCM_NONCE_BYTES, payload.length - AES_GCM_TAG_BYTES);
+
+  const decipher = createDecipheriv("aes-256-gcm", key, nonce);
+  decipher.setAuthTag(tag);
+  return Buffer.concat([decipher.update(ciphertext), decipher.final()]);
+}
+
+async function decryptDownloadBytes(
+  encryptedBytes: Buffer,
+  wrappedDekBase64: string,
+  walletAddress: string,
+): Promise<Buffer> {
+  const kek = await loadWalletKek(walletAddress);
+  const wrappedDek = Buffer.from(wrappedDekBase64, "base64");
+  const dek = decryptAesGcm(wrappedDek, kek);
+  if (dek.length !== AES_KEY_BYTES) {
+    throw new Error("Unwrapped DEK length is invalid");
+  }
+  return decryptAesGcm(encryptedBytes, dek);
 }
 
 async function requestJsonViaProxy<T>(
@@ -391,6 +453,8 @@ export async function downloadStorageToDisk(
       asNonEmptyString(payload.content) ??
       asNonEmptyString(payload.body_base64) ??
       asNonEmptyString(payload.data);
+    const payloadWrappedDek =
+      asNonEmptyString(payload.wrapped_dek) ?? asNonEmptyString(payload["wrapped-dek"]);
 
     if (payloadObjectKey) {
       objectKey = payloadObjectKey;
@@ -402,8 +466,15 @@ export async function downloadStorageToDisk(
         throw new Error(`Presigned download failed with status ${fileResponse.status}`);
       }
       bytes = Buffer.from(await fileResponse.arrayBuffer());
+      const wrappedDekHeader = fileResponse.headers.get("x-amz-meta-wrapped-dek")?.trim();
+      if (wrappedDekHeader) {
+        bytes = await decryptDownloadBytes(bytes, wrappedDekHeader, request.wallet_address);
+      }
     } else if (inlineContent) {
       bytes = Buffer.from(inlineContent, "base64");
+      if (payloadWrappedDek) {
+        bytes = await decryptDownloadBytes(bytes, payloadWrappedDek, request.wallet_address);
+      }
     } else {
       throw new Error("Download response did not include download_url or inline content");
     }
