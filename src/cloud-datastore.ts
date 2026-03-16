@@ -62,6 +62,8 @@ export type CloudDatastore = {
   dbPath: string;
   ensureReady: () => Promise<void>;
   upsertObject: (row: StorageObjectRow) => Promise<void>;
+  findObjectByObjectKey: (objectKey: string) => Promise<StorageObjectRow | null>;
+  findObjectById: (objectId: string) => Promise<StorageObjectRow | null>;
   upsertPayment: (row: PaymentRow) => Promise<void>;
   upsertCronJob: (row: CronJobRow) => Promise<void>;
   removeCronJob: (cronId: string) => Promise<boolean>;
@@ -229,6 +231,31 @@ export async function createCloudDatastore(homeDir?: string): Promise<CloudDatas
           );
       }, undefined);
     },
+    findObjectByObjectKey: async (objectKey) =>
+      safe(() => {
+        const row = db!
+          .prepare(
+            `SELECT object_id, object_key, wallet_address, quote_id, provider, bucket_name, region, sha256, status
+             FROM objects
+             WHERE object_key = ?
+             ORDER BY updated_at DESC
+             LIMIT 1`,
+          )
+          .get(objectKey) as StorageObjectRow | undefined;
+        return row ?? null;
+      }, null),
+    findObjectById: async (objectId) =>
+      safe(() => {
+        const row = db!
+          .prepare(
+            `SELECT object_id, object_key, wallet_address, quote_id, provider, bucket_name, region, sha256, status
+             FROM objects
+             WHERE object_id = ?
+             LIMIT 1`,
+          )
+          .get(objectId) as StorageObjectRow | undefined;
+        return row ?? null;
+      }, null),
     upsertPayment: async (row) => {
       await safe(() => {
         const ts = nowIso();

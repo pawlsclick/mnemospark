@@ -1238,7 +1238,6 @@ async function runCloudCommandHandler(
   const requestStorageLs = options.requestStorageLsFn;
   const requestStorageDownload = options.requestStorageDownloadFn;
   const requestStorageDelete = options.requestStorageDeleteFn;
-  const datastore = await createCloudDatastore(objectLogHomeDir);
 
   if (parsed.mode === "help" || parsed.mode === "unknown") {
     return {
@@ -1281,6 +1280,8 @@ async function runCloudCommandHandler(
       isError: true,
     };
   }
+
+  const datastore = await createCloudDatastore(objectLogHomeDir);
 
   if (parsed.mode === "backup") {
     try {
@@ -1647,6 +1648,9 @@ async function runCloudCommandHandler(
   }
 
   if (parsed.mode === "delete") {
+    const existingObjectByKey = await datastore.findObjectByObjectKey(
+      parsed.storageObjectRequest.object_key,
+    );
     try {
       const deleteResult = await requestStorageDelete(
         parsed.storageObjectRequest,
@@ -1690,17 +1694,25 @@ async function runCloudCommandHandler(
       // Cloud delete already succeeded; cron lookup/removal is best-effort.
       // Report success without implying the delete failed.
     }
-    await datastore.upsertObject({
-      object_id: cronEntry?.objectId ?? parsed.storageObjectRequest.object_key,
-      object_key: parsed.storageObjectRequest.object_key,
-      wallet_address: parsed.storageObjectRequest.wallet_address,
-      quote_id: null,
-      provider: null,
-      bucket_name: null,
-      region: parsed.storageObjectRequest.location ?? null,
-      sha256: null,
-      status: "deleted",
-    });
+    const objectId = cronEntry?.objectId ?? existingObjectByKey?.object_id ?? null;
+    if (objectId) {
+      const existingObject =
+        existingObjectByKey?.object_id === objectId
+          ? existingObjectByKey
+          : await datastore.findObjectById(objectId);
+      await datastore.upsertObject({
+        object_id: objectId,
+        object_key: parsed.storageObjectRequest.object_key,
+        wallet_address:
+          existingObject?.wallet_address ?? parsed.storageObjectRequest.wallet_address,
+        quote_id: existingObject?.quote_id ?? null,
+        provider: existingObject?.provider ?? null,
+        bucket_name: existingObject?.bucket_name ?? null,
+        region: parsed.storageObjectRequest.location ?? existingObject?.region ?? null,
+        sha256: existingObject?.sha256 ?? null,
+        status: "deleted",
+      });
+    }
     return {
       text: formatStorageDeleteUserMessage(
         parsed.storageObjectRequest.object_key,
