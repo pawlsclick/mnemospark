@@ -73,6 +73,8 @@ const REQUIRED_UPLOAD = "--quote-id, --wallet-address, --object-id, --object-id-
 const REQUIRED_STORAGE_OBJECT =
   "--wallet-address and one of (--object-key | --name [--latest|--at])";
 const BOOLEAN_SELECTOR_FLAGS = new Set(["latest"]);
+const BOOLEAN_ASYNC_FLAGS = new Set(["async"]);
+const BOOLEAN_SELECTOR_AND_ASYNC_FLAGS = new Set(["latest", "async"]);
 
 /**
  * Expands a leading ~ to the current user's home directory.
@@ -100,17 +102,20 @@ const CLOUD_HELP_TEXT = [
   "• `/mnemospark-cloud price-storage --wallet-address <addr> --object-id <id> --object-id-hash <hash> --gb <gb> --provider <provider> --region <region>`",
   "  Required: " + REQUIRED_PRICE_STORAGE,
   "",
-  "• `/mnemospark-cloud upload --quote-id <quote-id> --wallet-address <addr> --object-id <id> --object-id-hash <hash> [--name <friendly-name>]`",
+  "• `/mnemospark-cloud upload --quote-id <quote-id> --wallet-address <addr> --object-id <id> --object-id-hash <hash> [--name <friendly-name>] [--async]`",
   "  Required: " + REQUIRED_UPLOAD,
   "",
   "• `/mnemospark-cloud ls --wallet-address <addr> [--object-key <object-key> | --name <friendly-name>] [--latest|--at <timestamp>]`",
   "  Required: " + REQUIRED_STORAGE_OBJECT,
   "",
-  "• `/mnemospark-cloud download --wallet-address <addr> [--object-key <object-key> | --name <friendly-name>] [--latest|--at <timestamp>]`",
+  "• `/mnemospark-cloud download --wallet-address <addr> [--object-key <object-key> | --name <friendly-name>] [--latest|--at <timestamp>] [--async]`",
   "  Required: " + REQUIRED_STORAGE_OBJECT,
   "",
   "• `/mnemospark-cloud delete --wallet-address <addr> [--object-key <object-key> | --name <friendly-name>] [--latest|--at <timestamp>]`",
   "  Required: " + REQUIRED_STORAGE_OBJECT,
+  "",
+  "• `/mnemospark-cloud op-status --operation-id <id>`",
+  "  Required: --operation-id",
   "",
   "Backup creates a tar+gzip object in ~/.openclaw/mnemospark/backup and appends object metadata to ~/.openclaw/mnemospark/object.log. Upload appends storage rows and cron-tracking rows to object.log, and keeps job entries in ~/.openclaw/mnemospark/crontab.txt. All storage commands (price-storage, upload, ls, download, delete) require --wallet-address.",
 ].join("\n");
@@ -151,7 +156,7 @@ type ParsedCloudArgs =
   | { mode: "backup"; backupTarget: string; friendlyName?: string }
   | { mode: "price-storage"; priceStorageRequest: PriceStorageQuoteRequest }
   | { mode: "price-storage-invalid" }
-  | { mode: "upload"; uploadRequest: UploadCommandRequest; friendlyName?: string }
+  | { mode: "upload"; uploadRequest: UploadCommandRequest; friendlyName?: string; async?: boolean }
   | { mode: "upload-invalid" }
   | { mode: "ls"; storageObjectRequest: StorageObjectRequestInput; nameSelector?: NameSelector }
   | { mode: "ls-invalid" }
@@ -159,10 +164,13 @@ type ParsedCloudArgs =
       mode: "download";
       storageObjectRequest: StorageObjectRequestInput;
       nameSelector?: NameSelector;
+      async?: boolean;
     }
   | { mode: "download-invalid" }
   | { mode: "delete"; storageObjectRequest: StorageObjectRequestInput; nameSelector?: NameSelector }
   | { mode: "delete-invalid" }
+  | { mode: "op-status"; operationId: string }
+  | { mode: "op-status-invalid" }
   | { mode: "unknown" };
 
 type CreateCloudCommandOptions = {
@@ -233,12 +241,16 @@ function stripWrappingQuotes(input: string): string {
   return trimmed;
 }
 
-function tokenizeArgs(input: string): string[] {
+function tokenizeArgsRaw(input: string): string[] {
   const tokens = input.match(/"[^"]*"|'[^']*'|\S+/g);
   if (!tokens) {
     return [];
   }
-  return tokens.map((token) => stripWrappingQuotes(token));
+  return tokens;
+}
+
+function tokenizeArgs(input: string): string[] {
+  return tokenizeArgsRaw(input).map((token) => stripWrappingQuotes(token));
 }
 
 function parseNamedFlagsTokens(
@@ -316,6 +328,12 @@ function parseStorageObjectRequestInput(
   });
 }
 
+function stripAsyncFlag(args?: string): string {
+  const tokens = tokenizeArgsRaw(args ?? "");
+  const filtered = tokens.filter((token) => token.toLowerCase() !== "--async");
+  return filtered.join(" ");
+}
+
 function parseCloudArgs(args?: string): ParsedCloudArgs {
   const trimmed = args?.trim() ?? "";
   if (!trimmed) {
@@ -364,7 +382,7 @@ function parseCloudArgs(args?: string): ParsedCloudArgs {
   }
 
   if (subcommand === "upload") {
-    const flags = parseNamedFlags(rest);
+    const flags = parseNamedFlags(rest, BOOLEAN_ASYNC_FLAGS);
     if (!flags) {
       return { mode: "upload-invalid" };
     }
@@ -381,6 +399,7 @@ function parseCloudArgs(args?: string): ParsedCloudArgs {
     return {
       mode: "upload",
       friendlyName: flags.name?.trim() || undefined,
+      async: flags.async === "true",
       uploadRequest: {
         quote_id: quoteId,
         wallet_address: walletAddress,
@@ -407,7 +426,7 @@ function parseCloudArgs(args?: string): ParsedCloudArgs {
   }
 
   if (subcommand === "download") {
-    const flags = parseNamedFlags(rest, BOOLEAN_SELECTOR_FLAGS);
+    const flags = parseNamedFlags(rest, BOOLEAN_SELECTOR_AND_ASYNC_FLAGS);
     if (!flags) {
       return { mode: "download-invalid" };
     }
@@ -419,7 +438,12 @@ function parseCloudArgs(args?: string): ParsedCloudArgs {
     if (!request) {
       return { mode: "download-invalid" };
     }
-    return { mode: "download", storageObjectRequest: request, nameSelector: selector.nameSelector };
+    return {
+      mode: "download",
+      storageObjectRequest: request,
+      nameSelector: selector.nameSelector,
+      async: flags.async === "true",
+    };
   }
 
   if (subcommand === "delete") {
@@ -436,6 +460,15 @@ function parseCloudArgs(args?: string): ParsedCloudArgs {
       return { mode: "delete-invalid" };
     }
     return { mode: "delete", storageObjectRequest: request, nameSelector: selector.nameSelector };
+  }
+
+  if (subcommand === "op-status") {
+    const flags = parseNamedFlags(rest);
+    const operationId = flags?.["operation-id"]?.trim();
+    if (!operationId) {
+      return { mode: "op-status-invalid" };
+    }
+    return { mode: "op-status", operationId };
   }
 
   return { mode: "unknown" };
@@ -1418,7 +1451,86 @@ async function runCloudCommandHandler(
     };
   }
 
+  if (parsed.mode === "op-status-invalid") {
+    return {
+      text: "Cannot get operation status: required arguments are --operation-id.",
+      isError: true,
+    };
+  }
+
   const datastore = await createCloudDatastore(objectLogHomeDir);
+
+  if (parsed.mode === "op-status") {
+    const operation = await datastore.findOperationById(parsed.operationId);
+    if (!operation) {
+      return {
+        text: `Operation not found: ${parsed.operationId}`,
+        isError: true,
+      };
+    }
+    return {
+      text: [
+        `operation-id: ${operation.operation_id}`,
+        `type: ${operation.type}`,
+        `status: ${operation.status}`,
+        `started-at: ${operation.started_at ?? "n/a"}`,
+        `finished-at: ${operation.finished_at ?? "n/a"}`,
+        operation.error_code ? `error-code: ${operation.error_code}` : null,
+        operation.error_message ? `error-message: ${operation.error_message}` : null,
+      ]
+        .filter((v): v is string => Boolean(v))
+        .join("\n"),
+      isError: operation.status === "failed",
+    };
+  }
+
+  if ((parsed.mode === "upload" || parsed.mode === "download") && parsed.async) {
+    const operationId = randomUUID();
+    const opType = parsed.mode;
+    const opObject =
+      parsed.mode === "upload"
+        ? parsed.uploadRequest.object_id
+        : (parsed.storageObjectRequest.object_key ?? null);
+    const opQuote = parsed.mode === "upload" ? parsed.uploadRequest.quote_id : null;
+    await datastore.upsertOperation({
+      operation_id: operationId,
+      type: opType,
+      object_id: opObject,
+      quote_id: opQuote,
+      status: "started",
+      error_code: null,
+      error_message: null,
+    });
+
+    const syncArgs = stripAsyncFlag(ctx.args);
+    void runCloudCommandHandler({ args: syncArgs }, options)
+      .then(async (result) => {
+        await datastore.upsertOperation({
+          operation_id: operationId,
+          type: opType,
+          object_id: opObject,
+          quote_id: opQuote,
+          status: result.isError ? "failed" : "succeeded",
+          error_code: result.isError ? "ASYNC_FAILED" : null,
+          error_message: result.isError ? result.text : null,
+        });
+      })
+      .catch(async (err) => {
+        await datastore.upsertOperation({
+          operation_id: operationId,
+          type: opType,
+          object_id: opObject,
+          quote_id: opQuote,
+          status: "failed",
+          error_code: "ASYNC_EXCEPTION",
+          error_message: err instanceof Error ? err.message : String(err),
+        });
+      });
+
+    return {
+      text: `Operation started in background. operation-id: ${operationId}\nUse /mnemospark-cloud op-status --operation-id ${operationId}`,
+    };
+  }
 
   if (parsed.mode === "backup") {
     try {

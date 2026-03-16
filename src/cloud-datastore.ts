@@ -88,6 +88,16 @@ export type CloudDatastore = {
   removeCronJob: (cronId: string) => Promise<boolean>;
   findCronByObjectKey: (objectKey: string) => Promise<{ cronId: string; objectId: string } | null>;
   upsertOperation: (row: OperationRow) => Promise<void>;
+  findOperationById: (operationId: string) => Promise<{
+    operation_id: string;
+    type: string;
+    status: string;
+    error_code: string | null;
+    error_message: string | null;
+    started_at: string | null;
+    finished_at: string | null;
+    updated_at: string;
+  } | null>;
   findQuoteById: (quoteId: string) => Promise<QuoteLookup | null>;
   upsertFriendlyName: (row: FriendlyNameRow) => Promise<void>;
   resolveFriendlyName: (params: {
@@ -407,6 +417,29 @@ export async function createCloudDatastore(homeDir?: string): Promise<CloudDatas
           );
       }, undefined);
     },
+    findOperationById: async (operationId) =>
+      safe(() => {
+        const row = db!
+          .prepare(
+            `SELECT operation_id, type, status, error_code, error_message, started_at, finished_at, updated_at
+             FROM operations
+             WHERE operation_id = ?
+             LIMIT 1`,
+          )
+          .get(operationId) as
+          | {
+              operation_id: string;
+              type: string;
+              status: string;
+              error_code: string | null;
+              error_message: string | null;
+              started_at: string | null;
+              finished_at: string | null;
+              updated_at: string;
+            }
+          | undefined;
+        return row ?? null;
+      }, null),
     findQuoteById: async (quoteId) =>
       safe(() => {
         const row = db!

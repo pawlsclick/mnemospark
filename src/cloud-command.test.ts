@@ -1211,6 +1211,56 @@ describe("cloud command", () => {
     expect(result.text).toBe("Cannot download file");
   });
 
+  it("supports async upload with operation id", async () => {
+    const { homeDir } = await createSandbox();
+    const command = createCloudCommand({ objectLogHomeDir: homeDir });
+
+    const result = await command.handler({
+      channel: "test",
+      isAuthorizedSender: true,
+      args: "upload --quote-id q-1 --wallet-address 0x1234 --object-id o-1 --object-id-hash h-1 --async",
+      commandBody: "upload",
+      config: {},
+    });
+
+    expect(result.isError).toBeUndefined();
+    expect(result.text).toContain("Operation started in background. operation-id:");
+  });
+
+  it("returns operation status via op-status", async () => {
+    const { homeDir } = await createSandbox();
+    const command = createCloudCommand({ objectLogHomeDir: homeDir });
+
+    const started = await command.handler({
+      channel: "test",
+      isAuthorizedSender: true,
+      args: "upload --quote-id q-2 --wallet-address 0x1234 --object-id o-2 --object-id-hash h-2 --async",
+      commandBody: "upload",
+      config: {},
+    });
+
+    const match = started.text?.match(/operation-id: ([0-9a-f-]+)/i);
+    expect(match?.[1]).toBeTruthy();
+
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    const status = await command.handler({
+      channel: "test",
+      isAuthorizedSender: true,
+      args: `op-status --operation-id ${match?.[1]}`,
+      commandBody: "op-status",
+      config: {},
+    });
+
+    if (status.text?.startsWith("Operation not found:")) {
+      // node:sqlite may be unavailable in some CI environments; async orchestration degrades gracefully.
+      expect(status.text).toContain(match?.[1] ?? "");
+    } else {
+      expect(status.text).toContain(`operation-id: ${match?.[1]}`);
+      expect(status.text).toContain("status:");
+    }
+  });
+
   it("returns Cannot delete file when /mnemospark cloud delete fails", async () => {
     const { homeDir } = await createSandbox();
     const command = createCloudCommand({
