@@ -84,15 +84,10 @@ describe("cloud command", () => {
       throw new Error("Expected cloud help text");
     }
 
-    expect(result.text).toContain(
-      "/mnemospark-cloud ls --wallet-address <addr> --object-key <object-key>",
-    );
-    expect(result.text).toContain(
-      "/mnemospark-cloud download --wallet-address <addr> --object-key <object-key>",
-    );
-    expect(result.text).toContain(
-      "/mnemospark-cloud delete --wallet-address <addr> --object-key <object-key>",
-    );
+    expect(result.text).toContain("/mnemospark-cloud ls --wallet-address <addr>");
+    expect(result.text).toContain("[--object-key <object-key> | --name <friendly-name>]");
+    expect(result.text).toContain("/mnemospark-cloud download --wallet-address <addr>");
+    expect(result.text).toContain("/mnemospark-cloud delete --wallet-address <addr>");
     expect(result.text).not.toContain("<s3-key>");
     expect(result.text).not.toContain("s3-key");
   });
@@ -1118,7 +1113,7 @@ describe("cloud command", () => {
 
     expect(result.isError).toBe(true);
     expect(result.text).toBe(
-      "Cannot list storage object: required arguments are --wallet-address, --object-key.",
+      "Cannot list storage object: required arguments are --wallet-address and one of (--object-key | --name [--latest|--at]).",
     );
   });
 

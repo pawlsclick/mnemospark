@@ -48,6 +48,7 @@ import type { OpenClawPluginCommandDefinition } from "./types.js";
 import { createPaymentFetch, type PaymentFetchResult } from "./x402.js";
 import { isValidWalletPrivateKey } from "./wallet-key.js";
 import { createCloudDatastore } from "./cloud-datastore.js";
+import { appendJsonlEvent } from "./cloud-jsonl.js";
 
 const SUPPORTED_BACKUP_PLATFORMS = new Set<NodeJS.Platform>(["darwin", "linux"]);
 const BACKUP_DIR_SUBPATH = join(".openclaw", "mnemospark", "backup");
@@ -69,7 +70,8 @@ const TAR_OVERHEAD_BYTES = 10 * 1024 * 1024; // Conservative headroom for tar me
 const REQUIRED_PRICE_STORAGE =
   "--wallet-address, --object-id, --object-id-hash, --gb, --provider, --region";
 const REQUIRED_UPLOAD = "--quote-id, --wallet-address, --object-id, --object-id-hash";
-const REQUIRED_STORAGE_OBJECT = "--wallet-address, --object-key";
+const REQUIRED_STORAGE_OBJECT =
+  "--wallet-address and one of (--object-key | --name [--latest|--at])";
 
 /**
  * Expands a leading ~ to the current user's home directory.
@@ -91,22 +93,22 @@ const CLOUD_HELP_TEXT = [
   "",
   "• `/mnemospark-cloud` or `/mnemospark-cloud help` — show this message",
   "",
-  "• `/mnemospark-cloud backup <file>` or `/mnemospark-cloud backup <directory>`",
+  "• `/mnemospark-cloud backup <file>` or `/mnemospark-cloud backup <directory> [--name <friendly-name>]`",
   "  Required: <file> or <directory> (path to back up)",
   "",
   "• `/mnemospark-cloud price-storage --wallet-address <addr> --object-id <id> --object-id-hash <hash> --gb <gb> --provider <provider> --region <region>`",
   "  Required: " + REQUIRED_PRICE_STORAGE,
   "",
-  "• `/mnemospark-cloud upload --quote-id <quote-id> --wallet-address <addr> --object-id <id> --object-id-hash <hash>`",
+  "• `/mnemospark-cloud upload --quote-id <quote-id> --wallet-address <addr> --object-id <id> --object-id-hash <hash> [--name <friendly-name>]`",
   "  Required: " + REQUIRED_UPLOAD,
   "",
-  "• `/mnemospark-cloud ls --wallet-address <addr> --object-key <object-key>`",
+  "• `/mnemospark-cloud ls --wallet-address <addr> [--object-key <object-key> | --name <friendly-name>] [--latest|--at <timestamp>]`",
   "  Required: " + REQUIRED_STORAGE_OBJECT,
   "",
-  "• `/mnemospark-cloud download --wallet-address <addr> --object-key <object-key>`",
+  "• `/mnemospark-cloud download --wallet-address <addr> [--object-key <object-key> | --name <friendly-name>] [--latest|--at <timestamp>]`",
   "  Required: " + REQUIRED_STORAGE_OBJECT,
   "",
-  "• `/mnemospark-cloud delete --wallet-address <addr> --object-key <object-key>`",
+  "• `/mnemospark-cloud delete --wallet-address <addr> [--object-key <object-key> | --name <friendly-name>] [--latest|--at <timestamp>]`",
   "  Required: " + REQUIRED_STORAGE_OBJECT,
   "",
   "Backup creates a tar+gzip object in ~/.openclaw/mnemospark/backup and appends object metadata to ~/.openclaw/mnemospark/object.log. Upload appends storage rows and cron-tracking rows to object.log, and keeps job entries in ~/.openclaw/mnemospark/crontab.txt. All storage commands (price-storage, upload, ls, download, delete) require --wallet-address.",
@@ -138,18 +140,20 @@ type BackupObjectResult = {
   objectLogPath: string;
 };
 
+type NameSelector = { name: string; latest?: boolean; at?: string };
+
 type ParsedCloudArgs =
   | { mode: "help" }
-  | { mode: "backup"; backupTarget: string }
+  | { mode: "backup"; backupTarget: string; friendlyName?: string }
   | { mode: "price-storage"; priceStorageRequest: PriceStorageQuoteRequest }
   | { mode: "price-storage-invalid" }
-  | { mode: "upload"; uploadRequest: UploadCommandRequest }
+  | { mode: "upload"; uploadRequest: UploadCommandRequest; friendlyName?: string }
   | { mode: "upload-invalid" }
-  | { mode: "ls"; storageObjectRequest: StorageObjectRequest }
+  | { mode: "ls"; storageObjectRequest: StorageObjectRequest; nameSelector?: NameSelector }
   | { mode: "ls-invalid" }
-  | { mode: "download"; storageObjectRequest: StorageObjectRequest }
+  | { mode: "download"; storageObjectRequest: StorageObjectRequest; nameSelector?: NameSelector }
   | { mode: "download-invalid" }
-  | { mode: "delete"; storageObjectRequest: StorageObjectRequest }
+  | { mode: "delete"; storageObjectRequest: StorageObjectRequest; nameSelector?: NameSelector }
   | { mode: "delete-invalid" }
   | { mode: "unknown" };
 
@@ -244,12 +248,29 @@ function parseNamedFlags(input: string): Record<string, string> | null {
     const key = keyToken.slice(2).toLowerCase();
     const value = tokens[i + 1];
     if (!value || value.startsWith("--")) {
-      return null;
+      parsed[key] = "true";
+      continue;
     }
     parsed[key] = value;
     i += 1;
   }
   return parsed;
+}
+
+function parseObjectSelector(
+  flags: Record<string, string>,
+): { objectKey?: string; nameSelector?: NameSelector } | null {
+  const objectKey = flags["object-key"]?.trim();
+  const name = flags.name?.trim();
+  const latest = flags.latest === "true";
+  const at = flags.at?.trim();
+
+  if (objectKey && name) return null;
+  if (!objectKey && !name) return null;
+  if (latest && at) return null;
+
+  if (objectKey) return { objectKey };
+  return { nameSelector: { name: name!, latest, at } };
 }
 
 function parseCloudArgs(args?: string): ParsedCloudArgs {
@@ -267,11 +288,16 @@ function parseCloudArgs(args?: string): ParsedCloudArgs {
   }
 
   if (subcommand === "backup") {
-    const backupTarget = stripWrappingQuotes(rest);
+    const tokens = tokenizeArgs(rest);
+    if (tokens.length === 0) {
+      return { mode: "unknown" };
+    }
+    const backupTarget = tokens[0] ? stripWrappingQuotes(tokens[0]) : "";
     if (!backupTarget) {
       return { mode: "unknown" };
     }
-    return { mode: "backup", backupTarget };
+    const flags = parseNamedFlags(tokens.slice(1).join(" "));
+    return { mode: "backup", backupTarget, friendlyName: flags?.name?.trim() || undefined };
   }
 
   if (subcommand === "price-storage") {
@@ -311,6 +337,7 @@ function parseCloudArgs(args?: string): ParsedCloudArgs {
 
     return {
       mode: "upload",
+      friendlyName: flags.name?.trim() || undefined,
       uploadRequest: {
         quote_id: quoteId,
         wallet_address: walletAddress,
@@ -325,15 +352,19 @@ function parseCloudArgs(args?: string): ParsedCloudArgs {
     if (!flags) {
       return { mode: "ls-invalid" };
     }
+    const selector = parseObjectSelector(flags);
+    if (!selector) {
+      return { mode: "ls-invalid" };
+    }
     const request = parseStorageObjectRequest({
       wallet_address: flags["wallet-address"],
-      object_key: flags["object-key"],
+      object_key: selector.objectKey ?? "placeholder",
       location: flags.location ?? flags.region,
     });
     if (!request) {
       return { mode: "ls-invalid" };
     }
-    return { mode: "ls", storageObjectRequest: request };
+    return { mode: "ls", storageObjectRequest: request, nameSelector: selector.nameSelector };
   }
 
   if (subcommand === "download") {
@@ -341,15 +372,19 @@ function parseCloudArgs(args?: string): ParsedCloudArgs {
     if (!flags) {
       return { mode: "download-invalid" };
     }
+    const selector = parseObjectSelector(flags);
+    if (!selector) {
+      return { mode: "download-invalid" };
+    }
     const request = parseStorageObjectRequest({
       wallet_address: flags["wallet-address"],
-      object_key: flags["object-key"],
+      object_key: selector.objectKey ?? "placeholder",
       location: flags.location ?? flags.region,
     });
     if (!request) {
       return { mode: "download-invalid" };
     }
-    return { mode: "download", storageObjectRequest: request };
+    return { mode: "download", storageObjectRequest: request, nameSelector: selector.nameSelector };
   }
 
   if (subcommand === "delete") {
@@ -357,15 +392,19 @@ function parseCloudArgs(args?: string): ParsedCloudArgs {
     if (!flags) {
       return { mode: "delete-invalid" };
     }
+    const selector = parseObjectSelector(flags);
+    if (!selector) {
+      return { mode: "delete-invalid" };
+    }
     const request = parseStorageObjectRequest({
       wallet_address: flags["wallet-address"],
-      object_key: flags["object-key"],
+      object_key: selector.objectKey ?? "placeholder",
       location: flags.location ?? flags.region,
     });
     if (!request) {
       return { mode: "delete-invalid" };
     }
-    return { mode: "delete", storageObjectRequest: request };
+    return { mode: "delete", storageObjectRequest: request, nameSelector: selector.nameSelector };
   }
 
   return { mode: "unknown" };
@@ -1220,6 +1259,52 @@ type RunCloudCommandHandlerOptions = {
   proxyStorageOptions: CreateCloudCommandOptions["proxyStorageOptions"];
 };
 
+async function resolveNameSelectorIfNeeded(
+  datastore: Awaited<ReturnType<typeof createCloudDatastore>>,
+  request: StorageObjectRequest,
+  selector?: NameSelector,
+): Promise<{ request: StorageObjectRequest; error?: string }> {
+  if (!selector) return { request };
+  const matches = await datastore.countFriendlyNameMatches(request.wallet_address, selector.name);
+  if (matches > 1 && !selector.latest && !selector.at) {
+    return {
+      request,
+      error: `Multiple objects match --name ${selector.name}. Add --latest or --at <timestamp>.`,
+    };
+  }
+  const resolved = await datastore.resolveFriendlyName({
+    walletAddress: request.wallet_address,
+    friendlyName: selector.name,
+    latest: selector.latest,
+    at: selector.at,
+  });
+  if (!resolved || !resolved.objectKey) {
+    return { request, error: `No object found for --name ${selector.name}.` };
+  }
+  return {
+    request: {
+      ...request,
+      object_key: resolved.objectKey,
+    },
+  };
+}
+
+async function emitCloudEvent(
+  eventType: string,
+  details: Record<string, unknown>,
+  homeDir?: string,
+): Promise<void> {
+  await appendJsonlEvent(
+    "events.jsonl",
+    {
+      ts: new Date().toISOString(),
+      event_type: eventType,
+      ...details,
+    },
+    homeDir,
+  );
+}
+
 async function runCloudCommandHandler(
   ctx: { args?: string },
   options: RunCloudCommandHandlerOptions,
@@ -1286,6 +1371,16 @@ async function runCloudCommandHandler(
   if (parsed.mode === "backup") {
     try {
       const result = await backupBuilder(parsed.backupTarget, options.backupOptions);
+      await emitCloudEvent(
+        "backup.completed",
+        {
+          operation_id: randomUUID(),
+          object_id: result.objectId,
+          status: "succeeded",
+          details: { friendly_name: parsed.friendlyName ?? basename(parsed.backupTarget) },
+        },
+        objectLogHomeDir,
+      );
       await datastore.upsertObject({
         object_id: result.objectId,
         object_key: null,
@@ -1297,6 +1392,16 @@ async function runCloudCommandHandler(
         sha256: result.objectIdHash,
         status: "backed_up",
       });
+      const friendlyName = parsed.friendlyName?.trim() || basename(parsed.backupTarget);
+      if (friendlyName) {
+        await datastore.upsertFriendlyName({
+          friendly_name: friendlyName,
+          object_id: result.objectId,
+          object_key: null,
+          quote_id: null,
+          wallet_address: "unknown",
+        });
+      }
       return {
         text: [
           `object-id: ${result.objectId}`,
@@ -1537,6 +1642,39 @@ async function runCloudCommandHandler(
         command: cronJob.command,
         status: "active",
       });
+      if (parsed.friendlyName?.trim()) {
+        await datastore.upsertFriendlyName({
+          friendly_name: parsed.friendlyName.trim(),
+          object_id: finalizedUploadResponse.object_id,
+          object_key: finalizedUploadResponse.object_key,
+          quote_id: finalizedUploadResponse.quote_id,
+          wallet_address: finalizedUploadResponse.addr,
+        });
+        await appendJsonlEvent(
+          "manifest.jsonl",
+          {
+            friendly_name: parsed.friendlyName.trim(),
+            object_id: finalizedUploadResponse.object_id,
+            object_key: finalizedUploadResponse.object_key,
+            quote_id: finalizedUploadResponse.quote_id,
+            wallet_address: finalizedUploadResponse.addr,
+            created_at: new Date().toISOString(),
+          },
+          objectLogHomeDir,
+        );
+      }
+      await emitCloudEvent(
+        "upload.completed",
+        {
+          operation_id: idempotencyKey,
+          wallet_address: finalizedUploadResponse.addr,
+          object_id: finalizedUploadResponse.object_id,
+          object_key: finalizedUploadResponse.object_key,
+          quote_id: finalizedUploadResponse.quote_id,
+          status: "succeeded",
+        },
+        objectLogHomeDir,
+      );
       await maybeCleanupLocalBackupArchive(archivePath);
 
       return {
@@ -1552,46 +1690,72 @@ async function runCloudCommandHandler(
   }
 
   if (parsed.mode === "ls") {
+    const resolved = await resolveNameSelectorIfNeeded(
+      datastore,
+      parsed.storageObjectRequest,
+      parsed.nameSelector,
+    );
+    if (resolved.error) {
+      return { text: resolved.error, isError: true };
+    }
+
     const operationId = randomUUID();
     await datastore.upsertOperation({
       operation_id: operationId,
       type: "ls",
-      object_id: parsed.storageObjectRequest.object_key,
+      object_id: resolved.request.object_key,
       quote_id: null,
       status: "started",
       error_code: null,
       error_message: null,
     });
     try {
-      const lsResult = await requestStorageLs(
-        parsed.storageObjectRequest,
-        options.proxyStorageOptions,
-      );
+      const lsResult = await requestStorageLs(resolved.request, options.proxyStorageOptions);
       if (!lsResult.success) {
         throw new Error("ls failed");
       }
       await datastore.upsertOperation({
         operation_id: operationId,
         type: "ls",
-        object_id: parsed.storageObjectRequest.object_key,
+        object_id: resolved.request.object_key,
         quote_id: null,
         status: "succeeded",
         error_code: null,
         error_message: null,
       });
+      await emitCloudEvent(
+        "ls.completed",
+        {
+          operation_id: operationId,
+          wallet_address: resolved.request.wallet_address,
+          object_key: resolved.request.object_key,
+          status: "succeeded",
+        },
+        objectLogHomeDir,
+      );
       return {
-        text: formatStorageLsUserMessage(lsResult, parsed.storageObjectRequest.object_key),
+        text: formatStorageLsUserMessage(lsResult, resolved.request.object_key),
       };
     } catch {
       await datastore.upsertOperation({
         operation_id: operationId,
         type: "ls",
-        object_id: parsed.storageObjectRequest.object_key,
+        object_id: resolved.request.object_key,
         quote_id: null,
         status: "failed",
         error_code: "LS_FAILED",
         error_message: "Cannot list storage object",
       });
+      await emitCloudEvent(
+        "ls.completed",
+        {
+          operation_id: operationId,
+          wallet_address: resolved.request.wallet_address,
+          object_key: resolved.request.object_key,
+          status: "failed",
+        },
+        objectLogHomeDir,
+      );
       return {
         text: "Cannot list storage object",
         isError: true,
@@ -1600,11 +1764,20 @@ async function runCloudCommandHandler(
   }
 
   if (parsed.mode === "download") {
+    const resolved = await resolveNameSelectorIfNeeded(
+      datastore,
+      parsed.storageObjectRequest,
+      parsed.nameSelector,
+    );
+    if (resolved.error) {
+      return { text: resolved.error, isError: true };
+    }
+
     const operationId = randomUUID();
     await datastore.upsertOperation({
       operation_id: operationId,
       type: "download",
-      object_id: parsed.storageObjectRequest.object_key,
+      object_id: resolved.request.object_key,
       quote_id: null,
       status: "started",
       error_code: null,
@@ -1612,7 +1785,7 @@ async function runCloudCommandHandler(
     });
     try {
       const downloadResult = await requestStorageDownload(
-        parsed.storageObjectRequest,
+        resolved.request,
         options.proxyStorageOptions,
       );
       if (!downloadResult.success) {
@@ -1621,25 +1794,45 @@ async function runCloudCommandHandler(
       await datastore.upsertOperation({
         operation_id: operationId,
         type: "download",
-        object_id: parsed.storageObjectRequest.object_key,
+        object_id: resolved.request.object_key,
         quote_id: null,
         status: "succeeded",
         error_code: null,
         error_message: null,
       });
+      await emitCloudEvent(
+        "download.completed",
+        {
+          operation_id: operationId,
+          wallet_address: resolved.request.wallet_address,
+          object_key: resolved.request.object_key,
+          status: "succeeded",
+        },
+        objectLogHomeDir,
+      );
       return {
-        text: `File ${parsed.storageObjectRequest.object_key} downloaded to ${downloadResult.file_path}`,
+        text: `File ${resolved.request.object_key} downloaded to ${downloadResult.file_path}`,
       };
     } catch {
       await datastore.upsertOperation({
         operation_id: operationId,
         type: "download",
-        object_id: parsed.storageObjectRequest.object_key,
+        object_id: resolved.request.object_key,
         quote_id: null,
         status: "failed",
         error_code: "DOWNLOAD_FAILED",
         error_message: "Cannot download file",
       });
+      await emitCloudEvent(
+        "download.completed",
+        {
+          operation_id: operationId,
+          wallet_address: resolved.request.wallet_address,
+          object_key: resolved.request.object_key,
+          status: "failed",
+        },
+        objectLogHomeDir,
+      );
       return {
         text: "Cannot download file",
         isError: true,
@@ -1648,12 +1841,19 @@ async function runCloudCommandHandler(
   }
 
   if (parsed.mode === "delete") {
-    const existingObjectByKey = await datastore.findObjectByObjectKey(
-      parsed.storageObjectRequest.object_key,
+    const resolved = await resolveNameSelectorIfNeeded(
+      datastore,
+      parsed.storageObjectRequest,
+      parsed.nameSelector,
     );
+    if (resolved.error) {
+      return { text: resolved.error, isError: true };
+    }
+
+    const existingObjectByKey = await datastore.findObjectByObjectKey(resolved.request.object_key);
     try {
       const deleteResult = await requestStorageDelete(
-        parsed.storageObjectRequest,
+        resolved.request,
         options.proxyStorageOptions,
       );
       if (!deleteResult.success) {
@@ -1668,17 +1868,17 @@ async function runCloudCommandHandler(
     let cronEntry: LoggedStoragePaymentCron | null = null;
     let cronDeleted = false;
     try {
-      const dbCron = await datastore.findCronByObjectKey(parsed.storageObjectRequest.object_key);
+      const dbCron = await datastore.findCronByObjectKey(resolved.request.object_key);
       if (dbCron) {
         cronEntry = {
           cronId: dbCron.cronId,
           objectId: dbCron.objectId,
-          objectKey: parsed.storageObjectRequest.object_key,
+          objectKey: resolved.request.object_key,
         };
       }
       if (!cronEntry) {
         cronEntry = await findLoggedStoragePaymentCronByObjectKey(
-          parsed.storageObjectRequest.object_key,
+          resolved.request.object_key,
           objectLogHomeDir,
         );
       }
@@ -1702,7 +1902,7 @@ async function runCloudCommandHandler(
           : await datastore.findObjectById(objectId);
       await datastore.upsertObject({
         object_id: objectId,
-        object_key: parsed.storageObjectRequest.object_key,
+        object_key: resolved.request.object_key,
         wallet_address:
           existingObject?.wallet_address ?? parsed.storageObjectRequest.wallet_address,
         quote_id: existingObject?.quote_id ?? null,
@@ -1715,7 +1915,7 @@ async function runCloudCommandHandler(
     }
     return {
       text: formatStorageDeleteUserMessage(
-        parsed.storageObjectRequest.object_key,
+        resolved.request.object_key,
         cronEntry?.cronId ?? null,
         cronDeleted,
       ),
