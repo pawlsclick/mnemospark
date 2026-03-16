@@ -72,6 +72,7 @@ const REQUIRED_PRICE_STORAGE =
 const REQUIRED_UPLOAD = "--quote-id, --wallet-address, --object-id, --object-id-hash";
 const REQUIRED_STORAGE_OBJECT =
   "--wallet-address and one of (--object-key | --name [--latest|--at])";
+const BOOLEAN_SELECTOR_FLAGS = new Set(["latest"]);
 
 /**
  * Expands a leading ~ to the current user's home directory.
@@ -233,8 +234,10 @@ function tokenizeArgs(input: string): string[] {
   return tokens.map((token) => stripWrappingQuotes(token));
 }
 
-function parseNamedFlags(input: string): Record<string, string> | null {
-  const tokens = tokenizeArgs(input);
+function parseNamedFlagsTokens(
+  tokens: string[],
+  booleanFlags: ReadonlySet<string> = new Set(),
+): Record<string, string> | null {
   if (tokens.length === 0) {
     return null;
   }
@@ -248,13 +251,24 @@ function parseNamedFlags(input: string): Record<string, string> | null {
     const key = keyToken.slice(2).toLowerCase();
     const value = tokens[i + 1];
     if (!value || value.startsWith("--")) {
-      parsed[key] = "true";
-      continue;
+      if (booleanFlags.has(key)) {
+        parsed[key] = "true";
+        continue;
+      }
+      return null;
     }
     parsed[key] = value;
     i += 1;
   }
   return parsed;
+}
+
+function parseNamedFlags(
+  input: string,
+  booleanFlags: ReadonlySet<string> = new Set(),
+): Record<string, string> | null {
+  const tokens = tokenizeArgs(input);
+  return parseNamedFlagsTokens(tokens, booleanFlags);
 }
 
 function parseObjectSelector(
@@ -296,7 +310,7 @@ function parseCloudArgs(args?: string): ParsedCloudArgs {
     if (!backupTarget) {
       return { mode: "unknown" };
     }
-    const flags = parseNamedFlags(tokens.slice(1).join(" "));
+    const flags = parseNamedFlagsTokens(tokens.slice(1));
     return { mode: "backup", backupTarget, friendlyName: flags?.name?.trim() || undefined };
   }
 
@@ -348,7 +362,7 @@ function parseCloudArgs(args?: string): ParsedCloudArgs {
   }
 
   if (subcommand === "ls") {
-    const flags = parseNamedFlags(rest);
+    const flags = parseNamedFlags(rest, BOOLEAN_SELECTOR_FLAGS);
     if (!flags) {
       return { mode: "ls-invalid" };
     }
@@ -368,7 +382,7 @@ function parseCloudArgs(args?: string): ParsedCloudArgs {
   }
 
   if (subcommand === "download") {
-    const flags = parseNamedFlags(rest);
+    const flags = parseNamedFlags(rest, BOOLEAN_SELECTOR_FLAGS);
     if (!flags) {
       return { mode: "download-invalid" };
     }
@@ -388,7 +402,7 @@ function parseCloudArgs(args?: string): ParsedCloudArgs {
   }
 
   if (subcommand === "delete") {
-    const flags = parseNamedFlags(rest);
+    const flags = parseNamedFlags(rest, BOOLEAN_SELECTOR_FLAGS);
     if (!flags) {
       return { mode: "delete-invalid" };
     }
@@ -1903,12 +1917,11 @@ async function runCloudCommandHandler(
       await datastore.upsertObject({
         object_id: objectId,
         object_key: resolved.request.object_key,
-        wallet_address:
-          existingObject?.wallet_address ?? parsed.storageObjectRequest.wallet_address,
+        wallet_address: existingObject?.wallet_address ?? resolved.request.wallet_address,
         quote_id: existingObject?.quote_id ?? null,
         provider: existingObject?.provider ?? null,
         bucket_name: existingObject?.bucket_name ?? null,
-        region: parsed.storageObjectRequest.location ?? existingObject?.region ?? null,
+        region: resolved.request.location ?? existingObject?.region ?? null,
         sha256: existingObject?.sha256 ?? null,
         status: "deleted",
       });

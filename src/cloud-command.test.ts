@@ -196,6 +196,40 @@ describe("cloud command", () => {
     expect(result.text).toContain("object-size:");
   });
 
+  it("preserves quoted backup friendly names and writes events.jsonl under the mnemospark home subdirectory", async () => {
+    const { homeDir, tmpBackupDir, root } = await createSandbox();
+    const sourcePathWithSpaces = join(root, "source file.txt");
+    await writeFile(sourcePathWithSpaces, "backup me");
+
+    const command = createCloudCommand({
+      backupOptions: {
+        platform: "linux",
+        homeDir,
+        tmpDir: tmpBackupDir,
+        now: () => 1700000001000,
+        randomBytes: randomBytesFixture,
+      },
+    });
+
+    const result = await command.handler({
+      channel: "test",
+      isAuthorizedSender: true,
+      args: `backup "${sourcePathWithSpaces}" --name "my project"`,
+      commandBody: `backup "${sourcePathWithSpaces}" --name "my project"`,
+      config: {},
+    });
+
+    expect(result.isError).not.toBe(true);
+    const eventsPath = join(homeDir, ".openclaw", "mnemospark", "events.jsonl");
+    const eventsContent = await readFile(eventsPath, "utf-8");
+    const backupEvent = JSON.parse(eventsContent.trim().split("\n").at(-1) ?? "{}") as {
+      event_type?: string;
+      details?: { friendly_name?: string };
+    };
+    expect(backupEvent.event_type).toBe("backup.completed");
+    expect(backupEvent.details?.friendly_name).toBe("my project");
+  });
+
   it("returns graceful unsupported-platform message", async () => {
     const command = createCloudCommand({
       backupOptions: {
@@ -1115,6 +1149,35 @@ describe("cloud command", () => {
     expect(result.text).toBe(
       "Cannot list storage object: required arguments are --wallet-address and one of (--object-key | --name [--latest|--at]).",
     );
+  });
+
+  it("returns Cannot list storage object when a required flag value is missing", async () => {
+    let lsCalled = false;
+    const command = createCloudCommand({
+      requestStorageLsFn: async () => {
+        lsCalled = true;
+        return {
+          success: true,
+          key: "backup/archive.tar.gz",
+          size_bytes: 1536,
+          bucket: "wallet-bucket-001",
+        };
+      },
+    });
+
+    const result = await command.handler({
+      channel: "test",
+      isAuthorizedSender: true,
+      args: "ls --wallet-address --object-key backup/archive.tar.gz",
+      commandBody: "ls",
+      config: {},
+    });
+
+    expect(result.isError).toBe(true);
+    expect(result.text).toBe(
+      "Cannot list storage object: required arguments are --wallet-address and one of (--object-key | --name [--latest|--at]).",
+    );
+    expect(lsCalled).toBe(false);
   });
 
   it("returns Cannot download file when /mnemospark cloud download fails", async () => {
