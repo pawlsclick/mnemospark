@@ -58,7 +58,6 @@ export type QuoteLookup = {
 };
 
 export type CloudDatastore = {
-  enabled: boolean;
   dbPath: string;
   ensureReady: () => Promise<void>;
   upsertObject: (row: StorageObjectRow) => Promise<void>;
@@ -195,7 +194,6 @@ export async function createCloudDatastore(homeDir?: string): Promise<CloudDatas
   };
 
   return {
-    enabled: true,
     dbPath,
     ensureReady,
     upsertObject: async (row) => {
@@ -374,9 +372,16 @@ export async function createCloudDatastore(homeDir?: string): Promise<CloudDatas
             `SELECT object_id, sha256, provider, region FROM objects WHERE quote_id = ? ORDER BY updated_at DESC LIMIT 1`,
           )
           .get(quoteId) as
-          | { object_id: string; sha256: string; provider: string; region: string }
+          | {
+              object_id: string;
+              sha256: string | null;
+              provider: string | null;
+              region: string | null;
+            }
           | undefined;
         if (!row || !object) return null;
+        if (object.sha256 === null || object.provider === null || object.region === null)
+          return null;
         return {
           quoteId,
           storagePrice: Number(row.amount),

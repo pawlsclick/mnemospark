@@ -93,6 +93,36 @@ describe("cloud datastore", () => {
     expect(updated?.objectId).toBe("obj-1");
   });
 
+  it("returns null quote lookup when object metadata is missing", async () => {
+    const datastore = await createCloudDatastore(homeDir);
+    if (!sqliteAvailable) {
+      expect(await datastore.findQuoteById("q-nulls")).toBeNull();
+      return;
+    }
+
+    await datastore.upsertObject({
+      object_id: "obj-nulls",
+      object_key: null,
+      wallet_address: "0xabc",
+      quote_id: "q-nulls",
+      provider: null,
+      bucket_name: null,
+      region: null,
+      sha256: null,
+      status: "deleted",
+    });
+    await datastore.upsertPayment({
+      quote_id: "q-nulls",
+      wallet_address: "0xabc",
+      trans_id: null,
+      amount: 1.23,
+      network: null,
+      status: "quoted",
+    });
+
+    expect(await datastore.findQuoteById("q-nulls")).toBeNull();
+  });
+
   it("tracks and removes cron rows", async () => {
     const datastore = await createCloudDatastore(homeDir);
 
