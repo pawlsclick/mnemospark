@@ -10,7 +10,8 @@ const MAX_BYTES = 10 * 1024 * 1024;
 const KEEP_ROTATED = 10;
 
 function resolvePath(fileName: string, homeDir?: string): string {
-  return join(homeDir ?? BASE_DIR, fileName);
+  const baseDir = homeDir ? join(homeDir, ".openclaw", "mnemospark") : BASE_DIR;
+  return join(baseDir, fileName);
 }
 
 async function rotateIfNeeded(path: string): Promise<void> {
