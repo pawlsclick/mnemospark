@@ -1311,9 +1311,9 @@ async function emitCloudEvent(
   await appendJsonlEvent(
     "events.jsonl",
     {
+      ...details,
       ts: new Date().toISOString(),
       event_type: eventType,
-      ...details,
     },
     homeDir,
   );
