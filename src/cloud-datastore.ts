@@ -104,10 +104,10 @@ export async function createCloudDatastore(homeDir?: string): Promise<CloudDatas
     }
 
     db = new DatabaseSync(dbPath);
-    db.exec("PRAGMA journal_mode=WAL;");
-    db.exec("PRAGMA foreign_keys=ON;");
+    db!.exec("PRAGMA journal_mode=WAL;");
+    db!.exec("PRAGMA foreign_keys=ON;");
 
-    db.exec(`
+    db!.exec(`
       CREATE TABLE IF NOT EXISTS schema_migrations (
         version INTEGER PRIMARY KEY,
         applied_at TEXT NOT NULL
@@ -174,11 +174,13 @@ export async function createCloudDatastore(homeDir?: string): Promise<CloudDatas
       CREATE INDEX IF NOT EXISTS idx_operations_quote_id ON operations(quote_id);
     `);
 
-    db.prepare(
-      `INSERT INTO schema_migrations(version, applied_at)
+    db!
+      .prepare(
+        `INSERT INTO schema_migrations(version, applied_at)
        VALUES(?, ?)
        ON CONFLICT(version) DO NOTHING`,
-    ).run(SCHEMA_VERSION, nowIso());
+      )
+      .run(SCHEMA_VERSION, nowIso());
   };
 
   const safe = async <T>(fn: () => T, fallback: T): Promise<T> => {
@@ -197,8 +199,9 @@ export async function createCloudDatastore(homeDir?: string): Promise<CloudDatas
     upsertObject: async (row) => {
       await safe(() => {
         const ts = nowIso();
-        db.prepare(
-          `INSERT INTO objects(object_id, object_key, wallet_address, quote_id, provider, bucket_name, region, sha256, status, created_at, updated_at)
+        db!
+          .prepare(
+            `INSERT INTO objects(object_id, object_key, wallet_address, quote_id, provider, bucket_name, region, sha256, status, created_at, updated_at)
            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(object_id) DO UPDATE SET
              object_key=excluded.object_key,
@@ -210,26 +213,28 @@ export async function createCloudDatastore(homeDir?: string): Promise<CloudDatas
              sha256=excluded.sha256,
              status=excluded.status,
              updated_at=excluded.updated_at`,
-        ).run(
-          row.object_id,
-          row.object_key,
-          row.wallet_address,
-          row.quote_id,
-          row.provider,
-          row.bucket_name,
-          row.region,
-          row.sha256,
-          row.status,
-          ts,
-          ts,
-        );
+          )
+          .run(
+            row.object_id,
+            row.object_key,
+            row.wallet_address,
+            row.quote_id,
+            row.provider,
+            row.bucket_name,
+            row.region,
+            row.sha256,
+            row.status,
+            ts,
+            ts,
+          );
       }, undefined);
     },
     upsertPayment: async (row) => {
       await safe(() => {
         const ts = nowIso();
-        db.prepare(
-          `INSERT INTO payments(quote_id, wallet_address, trans_id, amount, network, status, settled_at, created_at, updated_at)
+        db!
+          .prepare(
+            `INSERT INTO payments(quote_id, wallet_address, trans_id, amount, network, status, settled_at, created_at, updated_at)
            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(quote_id) DO UPDATE SET
              wallet_address=excluded.wallet_address,
@@ -239,24 +244,26 @@ export async function createCloudDatastore(homeDir?: string): Promise<CloudDatas
              status=excluded.status,
              settled_at=excluded.settled_at,
              updated_at=excluded.updated_at`,
-        ).run(
-          row.quote_id,
-          row.wallet_address,
-          row.trans_id,
-          row.amount,
-          row.network,
-          row.status,
-          row.settled_at ?? null,
-          ts,
-          ts,
-        );
+          )
+          .run(
+            row.quote_id,
+            row.wallet_address,
+            row.trans_id,
+            row.amount,
+            row.network,
+            row.status,
+            row.settled_at ?? null,
+            ts,
+            ts,
+          );
       }, undefined);
     },
     upsertCronJob: async (row) => {
       await safe(() => {
         const ts = nowIso();
-        db.prepare(
-          `INSERT INTO cron_jobs(cron_id, object_id, object_key, quote_id, schedule, command, status, created_at, updated_at)
+        db!
+          .prepare(
+            `INSERT INTO cron_jobs(cron_id, object_id, object_key, quote_id, schedule, command, status, created_at, updated_at)
            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(cron_id) DO UPDATE SET
              object_id=excluded.object_id,
@@ -266,27 +273,28 @@ export async function createCloudDatastore(homeDir?: string): Promise<CloudDatas
              command=excluded.command,
              status=excluded.status,
              updated_at=excluded.updated_at`,
-        ).run(
-          row.cron_id,
-          row.object_id,
-          row.object_key,
-          row.quote_id,
-          row.schedule,
-          row.command,
-          row.status,
-          ts,
-          ts,
-        );
+          )
+          .run(
+            row.cron_id,
+            row.object_id,
+            row.object_key,
+            row.quote_id,
+            row.schedule,
+            row.command,
+            row.status,
+            ts,
+            ts,
+          );
       }, undefined);
     },
     removeCronJob: async (cronId) =>
       safe(() => {
-        const res = db.prepare(`DELETE FROM cron_jobs WHERE cron_id = ?`).run(cronId);
+        const res = db!.prepare(`DELETE FROM cron_jobs WHERE cron_id = ?`).run(cronId);
         return Number(res.changes ?? 0) > 0;
       }, false),
     findCronByObjectKey: async (objectKey) =>
       safe(() => {
-        const row = db
+        const row = db!
           .prepare(
             `SELECT cron_id, object_id FROM cron_jobs WHERE object_key = ? ORDER BY updated_at DESC LIMIT 1`,
           )
@@ -297,8 +305,9 @@ export async function createCloudDatastore(homeDir?: string): Promise<CloudDatas
     upsertOperation: async (row) => {
       await safe(() => {
         const ts = nowIso();
-        db.prepare(
-          `INSERT INTO operations(operation_id, type, object_id, quote_id, status, error_code, error_message, started_at, finished_at, created_at, updated_at)
+        db!
+          .prepare(
+            `INSERT INTO operations(operation_id, type, object_id, quote_id, status, error_code, error_message, started_at, finished_at, created_at, updated_at)
            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(operation_id) DO UPDATE SET
              type=excluded.type,
@@ -310,29 +319,30 @@ export async function createCloudDatastore(homeDir?: string): Promise<CloudDatas
              started_at=excluded.started_at,
              finished_at=excluded.finished_at,
              updated_at=excluded.updated_at`,
-        ).run(
-          row.operation_id,
-          row.type,
-          row.object_id,
-          row.quote_id,
-          row.status,
-          row.error_code,
-          row.error_message,
-          row.status === "started" ? ts : null,
-          row.status === "succeeded" || row.status === "failed" ? ts : null,
-          ts,
-          ts,
-        );
+          )
+          .run(
+            row.operation_id,
+            row.type,
+            row.object_id,
+            row.quote_id,
+            row.status,
+            row.error_code,
+            row.error_message,
+            row.status === "started" ? ts : null,
+            row.status === "succeeded" || row.status === "failed" ? ts : null,
+            ts,
+            ts,
+          );
       }, undefined);
     },
     findQuoteById: async (quoteId) =>
       safe(() => {
-        const row = db
+        const row = db!
           .prepare(
             `SELECT quote_id, amount, wallet_address FROM payments WHERE quote_id = ? ORDER BY updated_at DESC LIMIT 1`,
           )
           .get(quoteId) as { quote_id: string; amount: number; wallet_address: string } | undefined;
-        const object = db
+        const object = db!
           .prepare(
             `SELECT object_id, sha256, provider, region FROM objects WHERE quote_id = ? ORDER BY updated_at DESC LIMIT 1`,
           )
