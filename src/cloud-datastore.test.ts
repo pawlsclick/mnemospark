@@ -7,9 +7,16 @@ import { createCloudDatastore, resolveCloudDatastorePath } from "./cloud-datasto
 
 describe("cloud datastore", () => {
   let homeDir: string;
+  let sqliteAvailable = true;
 
   beforeEach(async () => {
     homeDir = await mkdtemp(join(tmpdir(), "mnemospark-db-"));
+    try {
+      await import("node:sqlite");
+      sqliteAvailable = true;
+    } catch {
+      sqliteAvailable = false;
+    }
   });
 
   afterEach(async () => {
@@ -18,6 +25,10 @@ describe("cloud datastore", () => {
 
   it("initializes database and schema migrations", async () => {
     const datastore = await createCloudDatastore(homeDir);
+    if (!sqliteAvailable) {
+      await expect(datastore.ensureReady()).rejects.toThrow();
+      return;
+    }
     await datastore.ensureReady();
 
     expect(datastore.dbPath).toBe(resolveCloudDatastorePath(homeDir));
@@ -25,6 +36,22 @@ describe("cloud datastore", () => {
 
   it("supports insert/update/query for quote + object", async () => {
     const datastore = await createCloudDatastore(homeDir);
+    if (!sqliteAvailable) {
+      await datastore.upsertObject({
+        object_id: "obj-1",
+        object_key: null,
+        wallet_address: "0xabc",
+        quote_id: "q-1",
+        provider: "s3",
+        bucket_name: null,
+        region: "us-east-1",
+        sha256: "hash1",
+        status: "quoted",
+      });
+      const quote = await datastore.findQuoteById("q-1");
+      expect(quote).toBeNull();
+      return;
+    }
     await datastore.upsertObject({
       object_id: "obj-1",
       object_key: null,
@@ -68,6 +95,14 @@ describe("cloud datastore", () => {
 
   it("tracks and removes cron rows", async () => {
     const datastore = await createCloudDatastore(homeDir);
+
+    if (!sqliteAvailable) {
+      const found = await datastore.findCronByObjectKey("obj-key-1");
+      expect(found).toBeNull();
+      const removed = await datastore.removeCronJob("cron-1");
+      expect(removed).toBe(false);
+      return;
+    }
 
     await datastore.upsertCronJob({
       cron_id: "cron-1",
