@@ -72,7 +72,9 @@ const REQUIRED_PRICE_STORAGE =
 const REQUIRED_UPLOAD = "--quote-id, --wallet-address, --object-id, --object-id-hash";
 const REQUIRED_STORAGE_OBJECT =
   "--wallet-address and one of (--object-key | --name [--latest|--at])";
-const BOOLEAN_SELECTOR_FLAGS = new Set(["latest", "async"]);
+const BOOLEAN_SELECTOR_FLAGS = new Set(["latest"]);
+const BOOLEAN_ASYNC_FLAGS = new Set(["async"]);
+const BOOLEAN_SELECTOR_AND_ASYNC_FLAGS = new Set(["latest", "async"]);
 
 /**
  * Expands a leading ~ to the current user's home directory.
@@ -239,12 +241,16 @@ function stripWrappingQuotes(input: string): string {
   return trimmed;
 }
 
-function tokenizeArgs(input: string): string[] {
+function tokenizeArgsRaw(input: string): string[] {
   const tokens = input.match(/"[^"]*"|'[^']*'|\S+/g);
   if (!tokens) {
     return [];
   }
-  return tokens.map((token) => stripWrappingQuotes(token));
+  return tokens;
+}
+
+function tokenizeArgs(input: string): string[] {
+  return tokenizeArgsRaw(input).map((token) => stripWrappingQuotes(token));
 }
 
 function parseNamedFlagsTokens(
@@ -323,8 +329,8 @@ function parseStorageObjectRequestInput(
 }
 
 function stripAsyncFlag(args?: string): string {
-  const tokens = tokenizeArgs(args ?? "");
-  const filtered = tokens.filter((t) => t.toLowerCase() !== "--async");
+  const tokens = tokenizeArgsRaw(args ?? "");
+  const filtered = tokens.filter((token) => token.toLowerCase() !== "--async");
   return filtered.join(" ");
 }
 
@@ -376,7 +382,7 @@ function parseCloudArgs(args?: string): ParsedCloudArgs {
   }
 
   if (subcommand === "upload") {
-    const flags = parseNamedFlags(rest, BOOLEAN_SELECTOR_FLAGS);
+    const flags = parseNamedFlags(rest, BOOLEAN_ASYNC_FLAGS);
     if (!flags) {
       return { mode: "upload-invalid" };
     }
@@ -420,7 +426,7 @@ function parseCloudArgs(args?: string): ParsedCloudArgs {
   }
 
   if (subcommand === "download") {
-    const flags = parseNamedFlags(rest, BOOLEAN_SELECTOR_FLAGS);
+    const flags = parseNamedFlags(rest, BOOLEAN_SELECTOR_AND_ASYNC_FLAGS);
     if (!flags) {
       return { mode: "download-invalid" };
     }
