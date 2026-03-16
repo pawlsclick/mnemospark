@@ -104,11 +104,11 @@ export async function createCloudDatastore(homeDir?: string): Promise<CloudDatas
       throw new Error("node:sqlite DatabaseSync is unavailable");
     }
 
-    db = new DatabaseSync(dbPath);
-    db!.exec("PRAGMA journal_mode=WAL;");
-    db!.exec("PRAGMA foreign_keys=ON;");
+    const nextDb = new DatabaseSync(dbPath);
+    nextDb.exec("PRAGMA journal_mode=WAL;");
+    nextDb.exec("PRAGMA foreign_keys=ON;");
 
-    db!.exec(`
+    nextDb.exec(`
       CREATE TABLE IF NOT EXISTS schema_migrations (
         version INTEGER PRIMARY KEY,
         applied_at TEXT NOT NULL
@@ -175,13 +175,14 @@ export async function createCloudDatastore(homeDir?: string): Promise<CloudDatas
       CREATE INDEX IF NOT EXISTS idx_operations_quote_id ON operations(quote_id);
     `);
 
-    db!
+    nextDb
       .prepare(
         `INSERT INTO schema_migrations(version, applied_at)
        VALUES(?, ?)
        ON CONFLICT(version) DO NOTHING`,
       )
       .run(SCHEMA_VERSION, nowIso());
+    db = nextDb;
   };
 
   const safe = async <T>(fn: () => T, fallback: T): Promise<T> => {
