@@ -108,6 +108,20 @@ function logProxyEvent(
   console.info(message);
 }
 
+function isAlreadySettledConflict(status: number, bodyText: string): boolean {
+  if (status !== 409) {
+    return false;
+  }
+  try {
+    const payload = JSON.parse(bodyText) as Record<string, unknown>;
+    const errorCode = String(payload.error_code ?? payload.error ?? "").toLowerCase();
+    const message = String(payload.message ?? "").toLowerCase();
+    return errorCode === "payment_already_settled" || message.includes("already settled");
+  } catch {
+    return false;
+  }
+}
+
 function createBackendForwardHeaders(response: {
   contentType: string;
   paymentRequired?: string;
@@ -647,7 +661,11 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
             fetchImpl: uploadPaymentFetch,
           },
         );
-        if (settleResponse.status !== 200) {
+        const settledAlready = isAlreadySettledConflict(
+          settleResponse.status,
+          settleResponse.bodyText,
+        );
+        if (settleResponse.status !== 200 && !settledAlready) {
           logProxyEvent("warn", "proxy_upload_settle_failed", {
             status: settleResponse.status,
           });
@@ -659,6 +677,11 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
           res.writeHead(settleResponse.status, responseHeaders);
           res.end(settleResponse.bodyText);
           return;
+        }
+        if (settledAlready) {
+          logProxyEvent("info", "proxy_upload_settle_already_confirmed", {
+            status: settleResponse.status,
+          });
         }
 
         const backendResponse = await forwardStorageUploadToBackend(requestPayload, {
