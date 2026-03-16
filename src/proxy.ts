@@ -5,6 +5,7 @@
  * serves health checks. It does not handle chat completions or model routing.
  */
 
+import { randomUUID } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { homedir } from "node:os";
@@ -37,6 +38,7 @@ import {
   forwardStorageLsToBackend,
   parseStorageObjectRequest,
 } from "./cloud-storage.js";
+import { appendJsonlEvent } from "./cloud-jsonl.js";
 
 const HEALTH_CHECK_TIMEOUT_MS = 2_000; // Timeout for checking existing proxy
 const PORT_RETRY_ATTEMPTS = 5; // Max attempts to bind port (handles TIME_WAIT)
@@ -106,6 +108,35 @@ function logProxyEvent(
     return;
   }
   console.info(message);
+}
+
+type ProxyEventCorrelation = {
+  trace_id: string;
+  operation_id: string;
+  quote_id?: string;
+  wallet_address?: string;
+  object_id?: string;
+  object_key?: string;
+};
+
+function emitProxyEvent(
+  eventType: string,
+  status: "start" | "result" | "success" | "failure" | "decision",
+  correlation: ProxyEventCorrelation,
+  details: Record<string, unknown> = {},
+): void {
+  void appendJsonlEvent("proxy-events.jsonl", {
+    ts: new Date().toISOString(),
+    event_type: eventType,
+    status,
+    trace_id: correlation.trace_id,
+    operation_id: correlation.operation_id,
+    quote_id: correlation.quote_id ?? null,
+    wallet_address: correlation.wallet_address ?? null,
+    object_id: correlation.object_id ?? null,
+    object_key: correlation.object_key ?? null,
+    details,
+  }).catch(() => undefined);
 }
 
 function isAlreadySettledConflict(status: number, bodyText: string): boolean {
@@ -329,7 +360,12 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
 
     // Mnemospark backend proxy endpoint for /mnemospark-cloud price-storage command.
     if (req.method === "POST" && matchesProxyPath(req.url, PRICE_STORAGE_PROXY_PATH)) {
+      const correlation: ProxyEventCorrelation = {
+        trace_id: randomUUID(),
+        operation_id: randomUUID(),
+      };
       logProxyEvent("info", "proxy_price_storage_received");
+      emitProxyEvent("request.received", "start", correlation, { path: PRICE_STORAGE_PROXY_PATH });
       try {
         let payload: unknown;
         try {
@@ -354,6 +390,10 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
           return;
         }
 
+        correlation.wallet_address = requestPayload.wallet_address;
+        correlation.object_id = requestPayload.object_id;
+        emitProxyEvent("storage.call", "start", correlation, { target: "price-storage" });
+
         const walletSignature = await createBackendWalletSignature(
           "POST",
           "/price-storage",
@@ -372,6 +412,7 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
         logProxyEvent("info", "proxy_price_storage_backend_response", {
           status: backendResponse.status,
         });
+        emitProxyEvent("storage.call", "result", correlation, { status: backendResponse.status });
 
         const authFailure = normalizeBackendAuthFailure(
           backendResponse.status,
@@ -394,7 +435,13 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
         const responseHeaders = createBackendForwardHeaders(backendResponse);
         res.writeHead(backendResponse.status, responseHeaders);
         res.end(backendResponse.bodyText);
+        emitProxyEvent("terminal.success", "success", correlation, {
+          status: backendResponse.status,
+        });
       } catch (err) {
+        emitProxyEvent("terminal.failure", "failure", correlation, {
+          error: err instanceof Error ? err.message : String(err),
+        });
         logProxyEvent("error", "proxy_price_storage_forward_failed", {
           error: err instanceof Error ? err.message : String(err),
         });
@@ -408,7 +455,12 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
 
     // Mnemospark proxy endpoint for payment/settle (forwards to backend POST /payment/settle).
     if (req.method === "POST" && matchesProxyPath(req.url, PAYMENT_SETTLE_PROXY_PATH)) {
+      const correlation: ProxyEventCorrelation = {
+        trace_id: randomUUID(),
+        operation_id: randomUUID(),
+      };
       logProxyEvent("info", "proxy_payment_settle_received");
+      emitProxyEvent("request.received", "start", correlation, { path: PAYMENT_SETTLE_PROXY_PATH });
       try {
         let payload: unknown;
         try {
@@ -492,6 +544,10 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
           return;
         }
 
+        correlation.quote_id = quoteId;
+        correlation.wallet_address = walletAddress;
+        emitProxyEvent("payment.settle", "start", correlation);
+
         const paymentFetch = createPaymentFetch(walletPrivateKey).fetch;
         const backendResponse = await forwardPaymentSettleToBackend(quoteId, walletAddress, {
           backendBaseUrl: MNEMOSPARK_BACKEND_API_BASE_URL,
@@ -513,6 +569,7 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
         logProxyEvent("info", "proxy_payment_settle_backend_response", {
           status: backendResponse.status,
         });
+        emitProxyEvent("payment.settle", "result", correlation, { status: backendResponse.status });
 
         const authFailure = normalizeBackendAuthFailure(
           backendResponse.status,
@@ -535,7 +592,13 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
         const responseHeaders = createBackendForwardHeaders(backendResponse);
         res.writeHead(backendResponse.status, responseHeaders);
         res.end(backendResponse.bodyText);
+        emitProxyEvent("terminal.success", "success", correlation, {
+          status: backendResponse.status,
+        });
       } catch (err) {
+        emitProxyEvent("terminal.failure", "failure", correlation, {
+          error: err instanceof Error ? err.message : String(err),
+        });
         logProxyEvent("error", "proxy_payment_settle_forward_failed", {
           error: err instanceof Error ? err.message : String(err),
         });
@@ -549,7 +612,12 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
 
     // Mnemospark backend proxy endpoint for /mnemospark-cloud upload command.
     if (req.method === "POST" && matchesProxyPath(req.url, UPLOAD_PROXY_PATH)) {
+      const correlation: ProxyEventCorrelation = {
+        trace_id: randomUUID(),
+        operation_id: randomUUID(),
+      };
       logProxyEvent("info", "proxy_upload_received");
+      emitProxyEvent("request.received", "start", correlation, { path: UPLOAD_PROXY_PATH });
       try {
         let payload: unknown;
         try {
@@ -573,6 +641,11 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
           });
           return;
         }
+
+        correlation.quote_id = requestPayload.quote_id;
+        correlation.wallet_address = requestPayload.wallet_address;
+        correlation.object_id = requestPayload.object_id;
+        emitProxyEvent("storage.call", "start", correlation, { target: "storage/upload" });
 
         if (requestPayload.wallet_address.toLowerCase() !== proxyWalletAddressLower) {
           logProxyEvent("warn", "proxy_upload_wallet_mismatch", {
@@ -652,6 +725,7 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
           return;
         }
         const uploadPaymentFetch = createPaymentFetch(walletPrivateKey).fetch;
+        emitProxyEvent("payment.settle", "start", correlation, { via: "upload" });
         const settleResponse = await forwardPaymentSettleToBackend(
           requestPayload.quote_id,
           requestPayload.wallet_address,
@@ -661,6 +735,7 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
             fetchImpl: uploadPaymentFetch,
           },
         );
+        emitProxyEvent("payment.settle", "result", correlation, { status: settleResponse.status });
         const settledAlready = isAlreadySettledConflict(
           settleResponse.status,
           settleResponse.bodyText,
@@ -679,6 +754,10 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
           return;
         }
         if (settledAlready) {
+          emitProxyEvent("retry.decision", "decision", correlation, {
+            reason: "payment_already_settled_conflict",
+            status: settleResponse.status,
+          });
           logProxyEvent("info", "proxy_upload_settle_already_confirmed", {
             status: settleResponse.status,
           });
@@ -692,6 +771,7 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
         logProxyEvent("info", "proxy_upload_backend_response", {
           status: backendResponse.status,
         });
+        emitProxyEvent("storage.call", "result", correlation, { status: backendResponse.status });
 
         const authFailure = normalizeBackendAuthFailure(
           backendResponse.status,
@@ -714,7 +794,13 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
         const responseHeaders = createBackendForwardHeaders(backendResponse);
         res.writeHead(backendResponse.status, responseHeaders);
         res.end(backendResponse.bodyText);
+        emitProxyEvent("terminal.success", "success", correlation, {
+          status: backendResponse.status,
+        });
       } catch (err) {
+        emitProxyEvent("terminal.failure", "failure", correlation, {
+          error: err instanceof Error ? err.message : String(err),
+        });
         logProxyEvent("error", "proxy_upload_forward_failed", {
           error: err instanceof Error ? err.message : String(err),
         });
@@ -820,7 +906,12 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
 
     // Mnemospark backend proxy endpoint for /mnemospark-cloud ls command.
     if (req.method === "POST" && matchesProxyPath(req.url, STORAGE_LS_PROXY_PATH)) {
+      const correlation: ProxyEventCorrelation = {
+        trace_id: randomUUID(),
+        operation_id: randomUUID(),
+      };
       logProxyEvent("info", "proxy_ls_received");
+      emitProxyEvent("request.received", "start", correlation, { path: STORAGE_LS_PROXY_PATH });
       try {
         let payload: unknown;
         try {
@@ -844,6 +935,9 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
           return;
         }
 
+        correlation.wallet_address = requestPayload.wallet_address;
+        correlation.object_key = requestPayload.object_key;
+
         if (requestPayload.wallet_address.toLowerCase() !== proxyWalletAddressLower) {
           logProxyEvent("warn", "proxy_ls_wallet_mismatch");
           sendJson(res, 403, {
@@ -865,11 +959,13 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
           return;
         }
 
+        emitProxyEvent("storage.call", "start", correlation, { target: "storage/ls" });
         const backendResponse = await forwardStorageLsToBackend(requestPayload, {
           backendBaseUrl: MNEMOSPARK_BACKEND_API_BASE_URL,
           walletSignature,
         });
         logProxyEvent("info", "proxy_ls_backend_response", { status: backendResponse.status });
+        emitProxyEvent("storage.call", "result", correlation, { status: backendResponse.status });
 
         const authFailure = normalizeBackendAuthFailure(
           backendResponse.status,
@@ -890,7 +986,13 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
         const responseHeaders = createBackendForwardHeaders(backendResponse);
         res.writeHead(backendResponse.status, responseHeaders);
         res.end(backendResponse.bodyText);
+        emitProxyEvent("terminal.success", "success", correlation, {
+          status: backendResponse.status,
+        });
       } catch (err) {
+        emitProxyEvent("terminal.failure", "failure", correlation, {
+          error: err instanceof Error ? err.message : String(err),
+        });
         logProxyEvent("error", "proxy_ls_forward_failed", {
           error: err instanceof Error ? err.message : String(err),
         });
@@ -904,7 +1006,14 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
 
     // Mnemospark backend proxy endpoint for /mnemospark-cloud download command.
     if (req.method === "POST" && matchesProxyPath(req.url, STORAGE_DOWNLOAD_PROXY_PATH)) {
+      const correlation: ProxyEventCorrelation = {
+        trace_id: randomUUID(),
+        operation_id: randomUUID(),
+      };
       logProxyEvent("info", "proxy_download_received");
+      emitProxyEvent("request.received", "start", correlation, {
+        path: STORAGE_DOWNLOAD_PROXY_PATH,
+      });
       try {
         let payload: unknown;
         try {
@@ -928,6 +1037,9 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
           return;
         }
 
+        correlation.wallet_address = requestPayload.wallet_address;
+        correlation.object_key = requestPayload.object_key;
+
         if (requestPayload.wallet_address.toLowerCase() !== proxyWalletAddressLower) {
           logProxyEvent("warn", "proxy_download_wallet_mismatch");
           sendJson(res, 403, {
@@ -949,6 +1061,7 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
           return;
         }
 
+        emitProxyEvent("storage.call", "start", correlation, { target: "storage/download" });
         const backendResponse = await forwardStorageDownloadToBackend(requestPayload, {
           backendBaseUrl: MNEMOSPARK_BACKEND_API_BASE_URL,
           walletSignature,
@@ -956,6 +1069,7 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
         logProxyEvent("info", "proxy_download_backend_response", {
           status: backendResponse.status,
         });
+        emitProxyEvent("storage.call", "result", correlation, { status: backendResponse.status });
 
         const authFailure = normalizeBackendAuthFailure(
           backendResponse.status,
@@ -1000,7 +1114,13 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
           file_path: downloadResult.filePath,
           bytes_written: downloadResult.bytesWritten,
         });
+        emitProxyEvent("terminal.success", "success", correlation, {
+          status: 200,
+        });
       } catch (err) {
+        emitProxyEvent("terminal.failure", "failure", correlation, {
+          error: err instanceof Error ? err.message : String(err),
+        });
         logProxyEvent("error", "proxy_download_forward_failed", {
           error: err instanceof Error ? err.message : String(err),
         });
@@ -1014,7 +1134,12 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
 
     // Mnemospark backend proxy endpoint for /mnemospark-cloud delete command.
     if (req.method === "POST" && matchesProxyPath(req.url, STORAGE_DELETE_PROXY_PATH)) {
+      const correlation: ProxyEventCorrelation = {
+        trace_id: randomUUID(),
+        operation_id: randomUUID(),
+      };
       logProxyEvent("info", "proxy_delete_received");
+      emitProxyEvent("request.received", "start", correlation, { path: STORAGE_DELETE_PROXY_PATH });
       try {
         let payload: unknown;
         try {
@@ -1038,6 +1163,9 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
           return;
         }
 
+        correlation.wallet_address = requestPayload.wallet_address;
+        correlation.object_key = requestPayload.object_key;
+
         if (requestPayload.wallet_address.toLowerCase() !== proxyWalletAddressLower) {
           logProxyEvent("warn", "proxy_delete_wallet_mismatch");
           sendJson(res, 403, {
@@ -1059,6 +1187,7 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
           return;
         }
 
+        emitProxyEvent("storage.call", "start", correlation, { target: "storage/delete" });
         const backendResponse = await forwardStorageDeleteToBackend(requestPayload, {
           backendBaseUrl: MNEMOSPARK_BACKEND_API_BASE_URL,
           walletSignature,
@@ -1066,6 +1195,7 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
         logProxyEvent("info", "proxy_delete_backend_response", {
           status: backendResponse.status,
         });
+        emitProxyEvent("storage.call", "result", correlation, { status: backendResponse.status });
 
         const authFailure = normalizeBackendAuthFailure(
           backendResponse.status,
@@ -1088,7 +1218,13 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
         const responseHeaders = createBackendForwardHeaders(backendResponse);
         res.writeHead(backendResponse.status, responseHeaders);
         res.end(backendResponse.bodyText);
+        emitProxyEvent("terminal.success", "success", correlation, {
+          status: backendResponse.status,
+        });
       } catch (err) {
+        emitProxyEvent("terminal.failure", "failure", correlation, {
+          error: err instanceof Error ? err.message : String(err),
+        });
         logProxyEvent("error", "proxy_delete_forward_failed", {
           error: err instanceof Error ? err.message : String(err),
         });
