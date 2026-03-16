@@ -1397,7 +1397,7 @@ async function runCloudCommandHandler(
   if (parsed.mode === "backup") {
     try {
       const result = await backupBuilder(parsed.backupTarget, options.backupOptions);
-      await emitCloudEvent(
+      await emitCloudEventBestEffort(
         "backup.completed",
         {
           operation_id: randomUUID(),
@@ -1676,18 +1676,22 @@ async function runCloudCommandHandler(
           quote_id: finalizedUploadResponse.quote_id,
           wallet_address: finalizedUploadResponse.addr,
         });
-        await appendJsonlEvent(
-          "manifest.jsonl",
-          {
-            friendly_name: parsed.friendlyName.trim(),
-            object_id: finalizedUploadResponse.object_id,
-            object_key: finalizedUploadResponse.object_key,
-            quote_id: finalizedUploadResponse.quote_id,
-            wallet_address: finalizedUploadResponse.addr,
-            created_at: new Date().toISOString(),
-          },
-          objectLogHomeDir,
-        );
+        try {
+          await appendJsonlEvent(
+            "manifest.jsonl",
+            {
+              friendly_name: parsed.friendlyName.trim(),
+              object_id: finalizedUploadResponse.object_id,
+              object_key: finalizedUploadResponse.object_key,
+              quote_id: finalizedUploadResponse.quote_id,
+              wallet_address: finalizedUploadResponse.addr,
+              created_at: new Date().toISOString(),
+            },
+            objectLogHomeDir,
+          );
+        } catch {
+          // Manifest logging is non-critical and must not affect command results.
+        }
       }
       await emitCloudEventBestEffort(
         "upload.completed",
