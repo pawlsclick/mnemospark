@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.20](https://github.com/pawlsclick/mnemospark/compare/v0.1.19...v0.1.20) (2026-03-16)
+
+
+### Bug Fixes
+
+* **proxy:** allow upload retry when payment is already settled ([#31](https://github.com/pawlsclick/mnemospark/issues/31)) ([4f7d4a1](https://github.com/pawlsclick/mnemospark/commit/4f7d4a188a942edcc18e261e9725199380059b33))
+
 ## [0.1.19] - 2026-03-15
 
 ### Features & fixes
