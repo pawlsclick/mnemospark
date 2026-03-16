@@ -2,7 +2,7 @@ import { createGzip } from "node:zlib";
 import { createReadStream, createWriteStream } from "node:fs";
 import { appendFile, mkdir, readdir, rename, stat, unlink } from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { pipeline } from "node:stream/promises";
 
 const BASE_DIR = join(homedir(), ".openclaw", "mnemospark");
@@ -31,7 +31,7 @@ async function rotateIfNeeded(path: string): Promise<void> {
   await unlink(rotated).catch(() => undefined);
 
   const dir = dirname(path);
-  const base = path.split("/").pop() ?? "events.jsonl";
+  const base = basename(path) || "events.jsonl";
   const all = (await readdir(dir))
     .filter((name) => name.startsWith(`${base}.`) && name.endsWith(".gz"))
     .sort()

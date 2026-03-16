@@ -1319,6 +1319,18 @@ async function emitCloudEvent(
   );
 }
 
+async function emitCloudEventBestEffort(
+  eventType: string,
+  details: Record<string, unknown>,
+  homeDir?: string,
+): Promise<void> {
+  try {
+    await emitCloudEvent(eventType, details, homeDir);
+  } catch {
+    // Event logging is non-critical and must not affect command results.
+  }
+}
+
 async function runCloudCommandHandler(
   ctx: { args?: string },
   options: RunCloudCommandHandlerOptions,
@@ -1677,7 +1689,7 @@ async function runCloudCommandHandler(
           objectLogHomeDir,
         );
       }
-      await emitCloudEvent(
+      await emitCloudEventBestEffort(
         "upload.completed",
         {
           operation_id: idempotencyKey,
@@ -1737,7 +1749,7 @@ async function runCloudCommandHandler(
         error_code: null,
         error_message: null,
       });
-      await emitCloudEvent(
+      await emitCloudEventBestEffort(
         "ls.completed",
         {
           operation_id: operationId,
@@ -1760,7 +1772,7 @@ async function runCloudCommandHandler(
         error_code: "LS_FAILED",
         error_message: "Cannot list storage object",
       });
-      await emitCloudEvent(
+      await emitCloudEventBestEffort(
         "ls.completed",
         {
           operation_id: operationId,
@@ -1814,7 +1826,7 @@ async function runCloudCommandHandler(
         error_code: null,
         error_message: null,
       });
-      await emitCloudEvent(
+      await emitCloudEventBestEffort(
         "download.completed",
         {
           operation_id: operationId,
@@ -1837,7 +1849,7 @@ async function runCloudCommandHandler(
         error_code: "DOWNLOAD_FAILED",
         error_message: "Cannot download file",
       });
-      await emitCloudEvent(
+      await emitCloudEventBestEffort(
         "download.completed",
         {
           operation_id: operationId,
