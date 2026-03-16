@@ -316,8 +316,8 @@ export async function createCloudDatastore(homeDir?: string): Promise<CloudDatas
              status=excluded.status,
              error_code=excluded.error_code,
              error_message=excluded.error_message,
-             started_at=excluded.started_at,
-             finished_at=excluded.finished_at,
+             started_at=COALESCE(excluded.started_at, operations.started_at),
+             finished_at=COALESCE(excluded.finished_at, operations.finished_at),
              updated_at=excluded.updated_at`,
           )
           .run(

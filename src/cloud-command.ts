@@ -1678,10 +1678,14 @@ async function runCloudCommandHandler(
           objectLogHomeDir,
         );
       }
-      cronDeleted = cronEntry
-        ? (await removeStoragePaymentCronJob(cronEntry.cronId, objectLogHomeDir)) ||
-          (await datastore.removeCronJob(cronEntry.cronId))
-        : false;
+      if (cronEntry) {
+        const fileCronDeleted = await removeStoragePaymentCronJob(
+          cronEntry.cronId,
+          objectLogHomeDir,
+        );
+        const dbCronDeleted = await datastore.removeCronJob(cronEntry.cronId);
+        cronDeleted = fileCronDeleted || dbCronDeleted;
+      }
     } catch {
       // Cloud delete already succeeded; cron lookup/removal is best-effort.
       // Report success without implying the delete failed.
