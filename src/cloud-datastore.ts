@@ -445,15 +445,7 @@ export async function createCloudDatastore(homeDir?: string): Promise<CloudDatas
         db!
           .prepare(
             `INSERT INTO friendly_names(friendly_name_id, friendly_name, object_id, object_key, quote_id, wallet_address, created_at, updated_at, is_active)
-             VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)
-             ON CONFLICT(friendly_name_id) DO UPDATE SET
-               friendly_name=excluded.friendly_name,
-               object_id=excluded.object_id,
-               object_key=excluded.object_key,
-               quote_id=excluded.quote_id,
-               wallet_address=excluded.wallet_address,
-               updated_at=excluded.updated_at,
-               is_active=excluded.is_active`,
+             VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           )
           .run(
             randomUUID(),
