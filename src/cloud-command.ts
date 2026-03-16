@@ -306,7 +306,7 @@ function parseCloudArgs(args?: string): ParsedCloudArgs {
     if (tokens.length === 0) {
       return { mode: "unknown" };
     }
-    const backupTarget = tokens[0] ? stripWrappingQuotes(tokens[0]) : "";
+    const backupTarget = tokens[0] ?? "";
     if (!backupTarget) {
       return { mode: "unknown" };
     }
