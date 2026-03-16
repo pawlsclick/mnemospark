@@ -435,7 +435,13 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
         const responseHeaders = createBackendForwardHeaders(backendResponse);
         res.writeHead(backendResponse.status, responseHeaders);
         res.end(backendResponse.bodyText);
+        emitProxyEvent("terminal.success", "success", correlation, {
+          status: backendResponse.status,
+        });
       } catch (err) {
+        emitProxyEvent("terminal.failure", "failure", correlation, {
+          error: err instanceof Error ? err.message : String(err),
+        });
         logProxyEvent("error", "proxy_price_storage_forward_failed", {
           error: err instanceof Error ? err.message : String(err),
         });
@@ -586,6 +592,9 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
         const responseHeaders = createBackendForwardHeaders(backendResponse);
         res.writeHead(backendResponse.status, responseHeaders);
         res.end(backendResponse.bodyText);
+        emitProxyEvent("terminal.success", "success", correlation, {
+          status: backendResponse.status,
+        });
       } catch (err) {
         emitProxyEvent("terminal.failure", "failure", correlation, {
           error: err instanceof Error ? err.message : String(err),
@@ -977,6 +986,9 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
         const responseHeaders = createBackendForwardHeaders(backendResponse);
         res.writeHead(backendResponse.status, responseHeaders);
         res.end(backendResponse.bodyText);
+        emitProxyEvent("terminal.success", "success", correlation, {
+          status: backendResponse.status,
+        });
       } catch (err) {
         emitProxyEvent("terminal.failure", "failure", correlation, {
           error: err instanceof Error ? err.message : String(err),
@@ -1102,6 +1114,9 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
           file_path: downloadResult.filePath,
           bytes_written: downloadResult.bytesWritten,
         });
+        emitProxyEvent("terminal.success", "success", correlation, {
+          status: 200,
+        });
       } catch (err) {
         emitProxyEvent("terminal.failure", "failure", correlation, {
           error: err instanceof Error ? err.message : String(err),
@@ -1203,6 +1218,9 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
         const responseHeaders = createBackendForwardHeaders(backendResponse);
         res.writeHead(backendResponse.status, responseHeaders);
         res.end(backendResponse.bodyText);
+        emitProxyEvent("terminal.success", "success", correlation, {
+          status: backendResponse.status,
+        });
       } catch (err) {
         emitProxyEvent("terminal.failure", "failure", correlation, {
           error: err instanceof Error ? err.message : String(err),
