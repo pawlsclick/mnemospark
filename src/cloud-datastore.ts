@@ -81,13 +81,15 @@ function nowIso(): string {
 
 export async function createCloudDatastore(homeDir?: string): Promise<CloudDatastore> {
   const dbPath = resolveDbPath(homeDir);
-  let db: {
+  type DbLike = {
     exec: (sql: string) => void;
     prepare: (sql: string) => {
       run: (...args: unknown[]) => { changes?: number };
       get: (...args: unknown[]) => unknown;
     };
-  } | null = null;
+  };
+
+  let db: DbLike | null = null;
 
   const ensureReady = async (): Promise<void> => {
     if (db) return;
@@ -97,7 +99,7 @@ export async function createCloudDatastore(homeDir?: string): Promise<CloudDatas
 
     await mkdir(dirname(dbPath), { recursive: true });
     const sqliteMod = (await import("node:sqlite")) as {
-      DatabaseSync?: new (path: string) => typeof db;
+      DatabaseSync?: new (path: string) => DbLike;
     };
     const DatabaseSync = sqliteMod.DatabaseSync;
     if (!DatabaseSync) {
