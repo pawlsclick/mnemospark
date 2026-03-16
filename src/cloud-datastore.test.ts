@@ -123,6 +123,52 @@ describe("cloud datastore", () => {
     expect(await datastore.findQuoteById("q-nulls")).toBeNull();
   });
 
+  it("resolves friendly names with latest and at selectors", async () => {
+    const datastore = await createCloudDatastore(homeDir);
+
+    if (!sqliteAvailable) {
+      expect(
+        await datastore.resolveFriendlyName({
+          walletAddress: "0xabc",
+          friendlyName: "project-alpha",
+        }),
+      ).toBeNull();
+      return;
+    }
+
+    await datastore.upsertFriendlyName({
+      friendly_name: "project-alpha",
+      object_id: "obj-1",
+      object_key: "key-1",
+      quote_id: "q-1",
+      wallet_address: "0xabc",
+    });
+    await new Promise((r) => setTimeout(r, 2));
+    await datastore.upsertFriendlyName({
+      friendly_name: "project-alpha",
+      object_id: "obj-2",
+      object_key: "key-2",
+      quote_id: "q-2",
+      wallet_address: "0xabc",
+    });
+
+    expect(await datastore.countFriendlyNameMatches("0xabc", "project-alpha")).toBe(2);
+
+    const latest = await datastore.resolveFriendlyName({
+      walletAddress: "0xabc",
+      friendlyName: "project-alpha",
+      latest: true,
+    });
+    expect(latest?.objectId).toBe("obj-2");
+
+    const at = await datastore.resolveFriendlyName({
+      walletAddress: "0xabc",
+      friendlyName: "project-alpha",
+      at: latest?.createdAt,
+    });
+    expect(at).not.toBeNull();
+  });
+
   it("tracks and removes cron rows", async () => {
     const datastore = await createCloudDatastore(homeDir);
 

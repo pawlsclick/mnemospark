@@ -84,15 +84,10 @@ describe("cloud command", () => {
       throw new Error("Expected cloud help text");
     }
 
-    expect(result.text).toContain(
-      "/mnemospark-cloud ls --wallet-address <addr> --object-key <object-key>",
-    );
-    expect(result.text).toContain(
-      "/mnemospark-cloud download --wallet-address <addr> --object-key <object-key>",
-    );
-    expect(result.text).toContain(
-      "/mnemospark-cloud delete --wallet-address <addr> --object-key <object-key>",
-    );
+    expect(result.text).toContain("/mnemospark-cloud ls --wallet-address <addr>");
+    expect(result.text).toContain("[--object-key <object-key> | --name <friendly-name>]");
+    expect(result.text).toContain("/mnemospark-cloud download --wallet-address <addr>");
+    expect(result.text).toContain("/mnemospark-cloud delete --wallet-address <addr>");
     expect(result.text).not.toContain("<s3-key>");
     expect(result.text).not.toContain("s3-key");
   });
@@ -199,6 +194,40 @@ describe("cloud command", () => {
     expect(result.text).toContain("object-id:");
     expect(result.text).toContain("object-id-hash:");
     expect(result.text).toContain("object-size:");
+  });
+
+  it("preserves quoted backup friendly names and writes events.jsonl under the mnemospark home subdirectory", async () => {
+    const { homeDir, tmpBackupDir, root } = await createSandbox();
+    const sourcePathWithSpaces = join(root, "source file.txt");
+    await writeFile(sourcePathWithSpaces, "backup me");
+
+    const command = createCloudCommand({
+      backupOptions: {
+        platform: "linux",
+        homeDir,
+        tmpDir: tmpBackupDir,
+        now: () => 1700000001000,
+        randomBytes: randomBytesFixture,
+      },
+    });
+
+    const result = await command.handler({
+      channel: "test",
+      isAuthorizedSender: true,
+      args: `backup "${sourcePathWithSpaces}" --name "my project"`,
+      commandBody: `backup "${sourcePathWithSpaces}" --name "my project"`,
+      config: {},
+    });
+
+    expect(result.isError).not.toBe(true);
+    const eventsPath = join(homeDir, ".openclaw", "mnemospark", "events.jsonl");
+    const eventsContent = await readFile(eventsPath, "utf-8");
+    const backupEvent = JSON.parse(eventsContent.trim().split("\n").at(-1) ?? "{}") as {
+      event_type?: string;
+      details?: { friendly_name?: string };
+    };
+    expect(backupEvent.event_type).toBe("backup.completed");
+    expect(backupEvent.details?.friendly_name).toBe("my project");
   });
 
   it("returns graceful unsupported-platform message", async () => {
@@ -1064,6 +1093,18 @@ describe("cloud command", () => {
 
     const cronTableContent = await readFile(cronTablePath, "utf-8");
     expect(cronTableContent.trim()).toBe("");
+
+    const eventsPath = join(homeDir, ".openclaw", "mnemospark", "events.jsonl");
+    const deleteEvent = JSON.parse(
+      (await readFile(eventsPath, "utf-8")).trim().split("\n").at(-1) ?? "{}",
+    ) as {
+      event_type?: string;
+      status?: string;
+      object_key?: string;
+    };
+    expect(deleteEvent.event_type).toBe("delete.completed");
+    expect(deleteEvent.status).toBe("succeeded");
+    expect(deleteEvent.object_key).toBe("backup/archive.tar.gz");
   });
 
   it("handles /mnemospark cloud delete when no cron job exists for object key", async () => {
@@ -1118,8 +1159,37 @@ describe("cloud command", () => {
 
     expect(result.isError).toBe(true);
     expect(result.text).toBe(
-      "Cannot list storage object: required arguments are --wallet-address, --object-key.",
+      "Cannot list storage object: required arguments are --wallet-address and one of (--object-key | --name [--latest|--at]).",
     );
+  });
+
+  it("returns Cannot list storage object when a required flag value is missing", async () => {
+    let lsCalled = false;
+    const command = createCloudCommand({
+      requestStorageLsFn: async () => {
+        lsCalled = true;
+        return {
+          success: true,
+          key: "backup/archive.tar.gz",
+          size_bytes: 1536,
+          bucket: "wallet-bucket-001",
+        };
+      },
+    });
+
+    const result = await command.handler({
+      channel: "test",
+      isAuthorizedSender: true,
+      args: "ls --wallet-address --object-key backup/archive.tar.gz",
+      commandBody: "ls",
+      config: {},
+    });
+
+    expect(result.isError).toBe(true);
+    expect(result.text).toBe(
+      "Cannot list storage object: required arguments are --wallet-address and one of (--object-key | --name [--latest|--at]).",
+    );
+    expect(lsCalled).toBe(false);
   });
 
   it("returns Cannot download file when /mnemospark cloud download fails", async () => {
@@ -1142,7 +1212,9 @@ describe("cloud command", () => {
   });
 
   it("returns Cannot delete file when /mnemospark cloud delete fails", async () => {
+    const { homeDir } = await createSandbox();
     const command = createCloudCommand({
+      objectLogHomeDir: homeDir,
       requestStorageDeleteFn: async () => {
         throw new Error("delete failed");
       },
@@ -1158,6 +1230,18 @@ describe("cloud command", () => {
 
     expect(result.isError).toBe(true);
     expect(result.text).toBe("Cannot delete file");
+
+    const eventsPath = join(homeDir, ".openclaw", "mnemospark", "events.jsonl");
+    const deleteEvent = JSON.parse(
+      (await readFile(eventsPath, "utf-8")).trim().split("\n").at(-1) ?? "{}",
+    ) as {
+      event_type?: string;
+      status?: string;
+      object_key?: string;
+    };
+    expect(deleteEvent.event_type).toBe("delete.completed");
+    expect(deleteEvent.status).toBe("failed");
+    expect(deleteEvent.object_key).toBe("backup/archive.tar.gz");
   });
 
   it("returns success when cloud delete succeeds but cron cleanup throws", async () => {

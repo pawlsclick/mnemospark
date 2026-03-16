@@ -1,9 +1,10 @@
+import { randomUUID } from "node:crypto";
 import { mkdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
 const DB_SUBPATH = join(".openclaw", "mnemospark", "state.db");
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 2;
 
 export type StorageObjectRow = {
   object_id: string;
@@ -57,6 +58,25 @@ export type QuoteLookup = {
   location: string;
 };
 
+export type FriendlyNameRow = {
+  friendly_name: string;
+  object_id: string;
+  object_key: string | null;
+  quote_id: string | null;
+  wallet_address: string;
+  is_active?: number;
+};
+
+export type FriendlyNameLookup = {
+  friendlyNameId: string;
+  friendlyName: string;
+  objectId: string;
+  objectKey: string | null;
+  quoteId: string | null;
+  walletAddress: string;
+  createdAt: string;
+};
+
 export type CloudDatastore = {
   dbPath: string;
   ensureReady: () => Promise<void>;
@@ -69,6 +89,14 @@ export type CloudDatastore = {
   findCronByObjectKey: (objectKey: string) => Promise<{ cronId: string; objectId: string } | null>;
   upsertOperation: (row: OperationRow) => Promise<void>;
   findQuoteById: (quoteId: string) => Promise<QuoteLookup | null>;
+  upsertFriendlyName: (row: FriendlyNameRow) => Promise<void>;
+  resolveFriendlyName: (params: {
+    walletAddress: string;
+    friendlyName: string;
+    latest?: boolean;
+    at?: string;
+  }) => Promise<FriendlyNameLookup | null>;
+  countFriendlyNameMatches: (walletAddress: string, friendlyName: string) => Promise<number>;
 };
 
 function resolveDbPath(homeDir?: string): string {
@@ -175,6 +203,22 @@ export async function createCloudDatastore(homeDir?: string): Promise<CloudDatas
       CREATE INDEX IF NOT EXISTS idx_operations_type ON operations(type);
       CREATE INDEX IF NOT EXISTS idx_operations_object_id ON operations(object_id);
       CREATE INDEX IF NOT EXISTS idx_operations_quote_id ON operations(quote_id);
+
+      CREATE TABLE IF NOT EXISTS friendly_names (
+        friendly_name_id TEXT PRIMARY KEY,
+        friendly_name TEXT NOT NULL,
+        object_id TEXT NOT NULL,
+        object_key TEXT,
+        quote_id TEXT,
+        wallet_address TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        is_active INTEGER NOT NULL DEFAULT 1
+      );
+      CREATE INDEX IF NOT EXISTS idx_friendly_names_name ON friendly_names(friendly_name);
+      CREATE INDEX IF NOT EXISTS idx_friendly_names_object_id ON friendly_names(object_id);
+      CREATE INDEX IF NOT EXISTS idx_friendly_names_wallet ON friendly_names(wallet_address);
+      CREATE INDEX IF NOT EXISTS idx_friendly_names_created_at ON friendly_names(created_at);
     `);
 
     nextDb
@@ -395,6 +439,93 @@ export async function createCloudDatastore(homeDir?: string): Promise<CloudDatas
           location: object.region,
         };
       }, null),
+    upsertFriendlyName: async (row) => {
+      await safe(() => {
+        const ts = nowIso();
+        db!
+          .prepare(
+            `INSERT INTO friendly_names(friendly_name_id, friendly_name, object_id, object_key, quote_id, wallet_address, created_at, updated_at, is_active)
+             VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          )
+          .run(
+            randomUUID(),
+            row.friendly_name,
+            row.object_id,
+            row.object_key,
+            row.quote_id,
+            row.wallet_address,
+            ts,
+            ts,
+            row.is_active ?? 1,
+          );
+      }, undefined);
+    },
+    resolveFriendlyName: async (params) =>
+      safe(() => {
+        const atIso = params.at ? new Date(params.at).toISOString() : null;
+        const row =
+          params.latest || !atIso
+            ? (db!
+                .prepare(
+                  `SELECT friendly_name_id, friendly_name, object_id, object_key, quote_id, wallet_address, created_at
+                 FROM friendly_names
+                 WHERE wallet_address = ? AND friendly_name = ? AND is_active = 1
+                 ORDER BY created_at DESC
+                 LIMIT 1`,
+                )
+                .get(params.walletAddress, params.friendlyName) as
+                | {
+                    friendly_name_id: string;
+                    friendly_name: string;
+                    object_id: string;
+                    object_key: string | null;
+                    quote_id: string | null;
+                    wallet_address: string;
+                    created_at: string;
+                  }
+                | undefined)
+            : (db!
+                .prepare(
+                  `SELECT friendly_name_id, friendly_name, object_id, object_key, quote_id, wallet_address, created_at
+                 FROM friendly_names
+                 WHERE wallet_address = ? AND friendly_name = ? AND is_active = 1 AND created_at <= ?
+                 ORDER BY created_at DESC
+                 LIMIT 1`,
+                )
+                .get(params.walletAddress, params.friendlyName, atIso) as
+                | {
+                    friendly_name_id: string;
+                    friendly_name: string;
+                    object_id: string;
+                    object_key: string | null;
+                    quote_id: string | null;
+                    wallet_address: string;
+                    created_at: string;
+                  }
+                | undefined);
+
+        if (!row) return null;
+        return {
+          friendlyNameId: row.friendly_name_id,
+          friendlyName: row.friendly_name,
+          objectId: row.object_id,
+          objectKey: row.object_key,
+          quoteId: row.quote_id,
+          walletAddress: row.wallet_address,
+          createdAt: row.created_at,
+        };
+      }, null),
+    countFriendlyNameMatches: async (walletAddress, friendlyName) =>
+      safe(() => {
+        const row = db!
+          .prepare(
+            `SELECT COUNT(1) AS cnt
+             FROM friendly_names
+             WHERE wallet_address = ? AND friendly_name = ? AND is_active = 1`,
+          )
+          .get(walletAddress, friendlyName) as { cnt: number } | undefined;
+        return Number(row?.cnt ?? 0);
+      }, 0),
   };
 }
 
