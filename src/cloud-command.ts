@@ -47,6 +47,7 @@ import {
 import type { OpenClawPluginCommandDefinition } from "./types.js";
 import { createPaymentFetch, type PaymentFetchResult } from "./x402.js";
 import { isValidWalletPrivateKey } from "./wallet-key.js";
+import { createCloudDatastore } from "./cloud-datastore.js";
 
 const SUPPORTED_BACKUP_PLATFORMS = new Set<NodeJS.Platform>(["darwin", "linux"]);
 const BACKUP_DIR_SUBPATH = join(".openclaw", "mnemospark", "backup");
@@ -1280,9 +1281,22 @@ async function runCloudCommandHandler(
     };
   }
 
+  const datastore = await createCloudDatastore(objectLogHomeDir);
+
   if (parsed.mode === "backup") {
     try {
       const result = await backupBuilder(parsed.backupTarget, options.backupOptions);
+      await datastore.upsertObject({
+        object_id: result.objectId,
+        object_key: null,
+        wallet_address: "unknown",
+        quote_id: null,
+        provider: null,
+        bucket_name: null,
+        region: null,
+        sha256: result.objectIdHash,
+        status: "backed_up",
+      });
       return {
         text: [
           `object-id: ${result.objectId}`,
@@ -1311,6 +1325,25 @@ async function runCloudCommandHandler(
         options.proxyQuoteOptions,
       );
       await appendPriceStorageQuoteLog(quote, objectLogHomeDir);
+      await datastore.upsertObject({
+        object_id: quote.object_id,
+        object_key: null,
+        wallet_address: quote.addr,
+        quote_id: quote.quote_id,
+        provider: quote.provider,
+        bucket_name: null,
+        region: quote.location,
+        sha256: quote.object_id_hash,
+        status: "quoted",
+      });
+      await datastore.upsertPayment({
+        quote_id: quote.quote_id,
+        wallet_address: quote.addr,
+        trans_id: null,
+        amount: quote.storage_price,
+        network: null,
+        status: "quoted",
+      });
       return {
         text: formatPriceStorageUserMessage(quote),
       };
@@ -1326,10 +1359,9 @@ async function runCloudCommandHandler(
 
   if (parsed.mode === "upload") {
     try {
-      const loggedQuote = await findLoggedPriceStorageQuote(
-        parsed.uploadRequest.quote_id,
-        objectLogHomeDir,
-      );
+      const loggedQuote =
+        (await datastore.findQuoteById(parsed.uploadRequest.quote_id)) ??
+        (await findLoggedPriceStorageQuote(parsed.uploadRequest.quote_id, objectLogHomeDir));
       if (!loggedQuote) {
         return {
           text: "Cannot upload storage object: quote-id not found in object.log. Run /mnemospark-cloud price-storage first.",
@@ -1476,6 +1508,35 @@ async function runCloudCommandHandler(
         objectLogHomeDir,
         nowDateFn,
       );
+      await datastore.upsertObject({
+        object_id: finalizedUploadResponse.object_id,
+        object_key: finalizedUploadResponse.object_key,
+        wallet_address: finalizedUploadResponse.addr,
+        quote_id: finalizedUploadResponse.quote_id,
+        provider: finalizedUploadResponse.provider,
+        bucket_name: finalizedUploadResponse.bucket_name,
+        region: finalizedUploadResponse.location,
+        sha256: parsed.uploadRequest.object_id_hash,
+        status: "uploaded",
+      });
+      await datastore.upsertPayment({
+        quote_id: finalizedUploadResponse.quote_id,
+        wallet_address: finalizedUploadResponse.addr,
+        trans_id: finalizedUploadResponse.trans_id ?? null,
+        amount: cronStoragePrice,
+        network: null,
+        status: "settled",
+        settled_at: new Date().toISOString(),
+      });
+      await datastore.upsertCronJob({
+        cron_id: cronJob.cronId,
+        object_id: cronJob.objectId,
+        object_key: cronJob.objectKey,
+        quote_id: cronJob.quoteId,
+        schedule: cronJob.schedule,
+        command: cronJob.command,
+        status: "active",
+      });
       await maybeCleanupLocalBackupArchive(archivePath);
 
       return {
@@ -1491,6 +1552,16 @@ async function runCloudCommandHandler(
   }
 
   if (parsed.mode === "ls") {
+    const operationId = randomUUID();
+    await datastore.upsertOperation({
+      operation_id: operationId,
+      type: "ls",
+      object_id: parsed.storageObjectRequest.object_key,
+      quote_id: null,
+      status: "started",
+      error_code: null,
+      error_message: null,
+    });
     try {
       const lsResult = await requestStorageLs(
         parsed.storageObjectRequest,
@@ -1499,10 +1570,28 @@ async function runCloudCommandHandler(
       if (!lsResult.success) {
         throw new Error("ls failed");
       }
+      await datastore.upsertOperation({
+        operation_id: operationId,
+        type: "ls",
+        object_id: parsed.storageObjectRequest.object_key,
+        quote_id: null,
+        status: "succeeded",
+        error_code: null,
+        error_message: null,
+      });
       return {
         text: formatStorageLsUserMessage(lsResult, parsed.storageObjectRequest.object_key),
       };
     } catch {
+      await datastore.upsertOperation({
+        operation_id: operationId,
+        type: "ls",
+        object_id: parsed.storageObjectRequest.object_key,
+        quote_id: null,
+        status: "failed",
+        error_code: "LS_FAILED",
+        error_message: "Cannot list storage object",
+      });
       return {
         text: "Cannot list storage object",
         isError: true,
@@ -1511,6 +1600,16 @@ async function runCloudCommandHandler(
   }
 
   if (parsed.mode === "download") {
+    const operationId = randomUUID();
+    await datastore.upsertOperation({
+      operation_id: operationId,
+      type: "download",
+      object_id: parsed.storageObjectRequest.object_key,
+      quote_id: null,
+      status: "started",
+      error_code: null,
+      error_message: null,
+    });
     try {
       const downloadResult = await requestStorageDownload(
         parsed.storageObjectRequest,
@@ -1519,10 +1618,28 @@ async function runCloudCommandHandler(
       if (!downloadResult.success) {
         throw new Error("download failed");
       }
+      await datastore.upsertOperation({
+        operation_id: operationId,
+        type: "download",
+        object_id: parsed.storageObjectRequest.object_key,
+        quote_id: null,
+        status: "succeeded",
+        error_code: null,
+        error_message: null,
+      });
       return {
         text: `File ${parsed.storageObjectRequest.object_key} downloaded to ${downloadResult.file_path}`,
       };
     } catch {
+      await datastore.upsertOperation({
+        operation_id: operationId,
+        type: "download",
+        object_id: parsed.storageObjectRequest.object_key,
+        quote_id: null,
+        status: "failed",
+        error_code: "DOWNLOAD_FAILED",
+        error_message: "Cannot download file",
+      });
       return {
         text: "Cannot download file",
         isError: true,
@@ -1531,6 +1648,9 @@ async function runCloudCommandHandler(
   }
 
   if (parsed.mode === "delete") {
+    const existingObjectByKey = await datastore.findObjectByObjectKey(
+      parsed.storageObjectRequest.object_key,
+    );
     try {
       const deleteResult = await requestStorageDelete(
         parsed.storageObjectRequest,
@@ -1548,16 +1668,50 @@ async function runCloudCommandHandler(
     let cronEntry: LoggedStoragePaymentCron | null = null;
     let cronDeleted = false;
     try {
-      cronEntry = await findLoggedStoragePaymentCronByObjectKey(
-        parsed.storageObjectRequest.object_key,
-        objectLogHomeDir,
-      );
-      cronDeleted = cronEntry
-        ? await removeStoragePaymentCronJob(cronEntry.cronId, objectLogHomeDir)
-        : false;
+      const dbCron = await datastore.findCronByObjectKey(parsed.storageObjectRequest.object_key);
+      if (dbCron) {
+        cronEntry = {
+          cronId: dbCron.cronId,
+          objectId: dbCron.objectId,
+          objectKey: parsed.storageObjectRequest.object_key,
+        };
+      }
+      if (!cronEntry) {
+        cronEntry = await findLoggedStoragePaymentCronByObjectKey(
+          parsed.storageObjectRequest.object_key,
+          objectLogHomeDir,
+        );
+      }
+      if (cronEntry) {
+        const fileCronDeleted = await removeStoragePaymentCronJob(
+          cronEntry.cronId,
+          objectLogHomeDir,
+        );
+        const dbCronDeleted = await datastore.removeCronJob(cronEntry.cronId);
+        cronDeleted = fileCronDeleted || dbCronDeleted;
+      }
     } catch {
       // Cloud delete already succeeded; cron lookup/removal is best-effort.
       // Report success without implying the delete failed.
+    }
+    const objectId = cronEntry?.objectId ?? existingObjectByKey?.object_id ?? null;
+    if (objectId) {
+      const existingObject =
+        existingObjectByKey?.object_id === objectId
+          ? existingObjectByKey
+          : await datastore.findObjectById(objectId);
+      await datastore.upsertObject({
+        object_id: objectId,
+        object_key: parsed.storageObjectRequest.object_key,
+        wallet_address:
+          existingObject?.wallet_address ?? parsed.storageObjectRequest.wallet_address,
+        quote_id: existingObject?.quote_id ?? null,
+        provider: existingObject?.provider ?? null,
+        bucket_name: existingObject?.bucket_name ?? null,
+        region: parsed.storageObjectRequest.location ?? existingObject?.region ?? null,
+        sha256: existingObject?.sha256 ?? null,
+        status: "deleted",
+      });
     }
     return {
       text: formatStorageDeleteUserMessage(
