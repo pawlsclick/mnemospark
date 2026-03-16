@@ -1093,6 +1093,18 @@ describe("cloud command", () => {
 
     const cronTableContent = await readFile(cronTablePath, "utf-8");
     expect(cronTableContent.trim()).toBe("");
+
+    const eventsPath = join(homeDir, ".openclaw", "mnemospark", "events.jsonl");
+    const deleteEvent = JSON.parse(
+      (await readFile(eventsPath, "utf-8")).trim().split("\n").at(-1) ?? "{}",
+    ) as {
+      event_type?: string;
+      status?: string;
+      object_key?: string;
+    };
+    expect(deleteEvent.event_type).toBe("delete.completed");
+    expect(deleteEvent.status).toBe("succeeded");
+    expect(deleteEvent.object_key).toBe("backup/archive.tar.gz");
   });
 
   it("handles /mnemospark cloud delete when no cron job exists for object key", async () => {
@@ -1200,7 +1212,9 @@ describe("cloud command", () => {
   });
 
   it("returns Cannot delete file when /mnemospark cloud delete fails", async () => {
+    const { homeDir } = await createSandbox();
     const command = createCloudCommand({
+      objectLogHomeDir: homeDir,
       requestStorageDeleteFn: async () => {
         throw new Error("delete failed");
       },
@@ -1216,6 +1230,18 @@ describe("cloud command", () => {
 
     expect(result.isError).toBe(true);
     expect(result.text).toBe("Cannot delete file");
+
+    const eventsPath = join(homeDir, ".openclaw", "mnemospark", "events.jsonl");
+    const deleteEvent = JSON.parse(
+      (await readFile(eventsPath, "utf-8")).trim().split("\n").at(-1) ?? "{}",
+    ) as {
+      event_type?: string;
+      status?: string;
+      object_key?: string;
+    };
+    expect(deleteEvent.event_type).toBe("delete.completed");
+    expect(deleteEvent.status).toBe("failed");
+    expect(deleteEvent.object_key).toBe("backup/archive.tar.gz");
   });
 
   it("returns success when cloud delete succeeds but cron cleanup throws", async () => {
