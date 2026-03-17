@@ -962,10 +962,12 @@ describe("cloud command", () => {
 
   it("handles /mnemospark cloud ls and prints object metadata message", async () => {
     let capturedRequest: Record<string, unknown> | undefined;
+    let capturedCorrelation: { operationId?: string; traceId?: string } | undefined;
 
     const command = createCloudCommand({
-      requestStorageLsFn: async (request) => {
+      requestStorageLsFn: async (request, requestOptions) => {
         capturedRequest = request as Record<string, unknown>;
+        capturedCorrelation = requestOptions?.correlation;
         return {
           success: true,
           key: "backup/archive.tar.gz",
@@ -989,6 +991,8 @@ describe("cloud command", () => {
       object_key: "backup/archive.tar.gz",
       location: undefined,
     });
+    expect(capturedCorrelation?.operationId).toBeTruthy();
+    expect(capturedCorrelation?.traceId).toBeTruthy();
     expect(result.isError).not.toBe(true);
     expect(result.text).toBe("obj-001 with backup/archive.tar.gz is 1536 in wallet-bucket-001");
   });

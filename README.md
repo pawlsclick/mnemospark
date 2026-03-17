@@ -29,6 +29,7 @@ openclaw gateway start
 ```
 
 > Plugin registration is done by `openclaw plugins install mnemospark`.
+> The install also bundles the `skills/mnemospark` skill package so the main agent can delegate mnemospark workflows.
 
 ### 2) (Optional) Initialize wallet helpers
 

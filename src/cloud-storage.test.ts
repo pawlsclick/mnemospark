@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
+import { MNEMOSPARK_OPERATION_ID_HEADER, MNEMOSPARK_TRACE_ID_HEADER } from "./cloud-correlation.js";
 
 import {
   downloadStorageToDisk,
@@ -47,6 +48,10 @@ describe("cloud storage transport", () => {
 
     const lsResult = await requestStorageLsViaProxy(SAMPLE_REQUEST, {
       proxyBaseUrl: "http://127.0.0.1:7120/",
+      correlation: {
+        operationId: "op-ls-1",
+        traceId: "trace-ls-1",
+      },
       fetchImpl: async (input, init) => {
         capturedUrl = String(input);
         capturedInit = init;
@@ -70,6 +75,12 @@ describe("cloud storage transport", () => {
     expect(capturedInit?.method).toBe("POST");
     expect((capturedInit?.headers as Record<string, string>)["Content-Type"]).toBe(
       "application/json",
+    );
+    expect((capturedInit?.headers as Record<string, string>)[MNEMOSPARK_OPERATION_ID_HEADER]).toBe(
+      "op-ls-1",
+    );
+    expect((capturedInit?.headers as Record<string, string>)[MNEMOSPARK_TRACE_ID_HEADER]).toBe(
+      "trace-ls-1",
     );
     expect(capturedInit?.body).toBe(JSON.stringify(SAMPLE_REQUEST));
     expect(lsResult.size_bytes).toBe(2048);

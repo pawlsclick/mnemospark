@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { MNEMOSPARK_OPERATION_ID_HEADER, MNEMOSPARK_TRACE_ID_HEADER } from "./cloud-correlation.js";
 
 import {
   forwardPaymentSettleToBackend,
@@ -95,6 +96,44 @@ describe("cloud price-storage transport", () => {
     expect(capturedInit?.body).toBe(JSON.stringify(SAMPLE_REQUEST));
     expect(quote.quote_id).toBe("quote-123");
     expect(quote.storage_price).toBe(3.5);
+  });
+
+  it("adds cross-stream correlation headers to proxy requests", async () => {
+    const seenHeaders: Record<string, string> = {};
+
+    await requestPriceStorageViaProxy(SAMPLE_REQUEST, {
+      proxyBaseUrl: "http://127.0.0.1:7120/",
+      correlation: {
+        operationId: "op-corr-1",
+        traceId: "trace-corr-1",
+      },
+      fetchImpl: async (_input, init) => {
+        const headers = new Headers(init?.headers);
+        headers.forEach((value, key) => {
+          seenHeaders[key] = value;
+        });
+        return new Response(
+          JSON.stringify({
+            timestamp: "2026-02-25 20:00:00",
+            quote_id: "quote-123",
+            storage_price: 3.5,
+            addr: SAMPLE_REQUEST.wallet_address,
+            object_id: SAMPLE_REQUEST.object_id,
+            object_id_hash: SAMPLE_REQUEST.object_id_hash,
+            object_size_gb: SAMPLE_REQUEST.gb,
+            provider: SAMPLE_REQUEST.provider,
+            location: SAMPLE_REQUEST.region,
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        );
+      },
+    });
+
+    expect(seenHeaders[MNEMOSPARK_OPERATION_ID_HEADER.toLowerCase()]).toBe("op-corr-1");
+    expect(seenHeaders[MNEMOSPARK_TRACE_ID_HEADER.toLowerCase()]).toBe("trace-corr-1");
   });
 
   it("forwards price-storage request to backend with required wallet signature", async () => {
