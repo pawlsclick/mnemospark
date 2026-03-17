@@ -39,6 +39,7 @@ import {
   parseStorageObjectRequest,
 } from "./cloud-storage.js";
 import { appendJsonlEvent } from "./cloud-jsonl.js";
+import { MNEMOSPARK_OPERATION_ID_HEADER, MNEMOSPARK_TRACE_ID_HEADER } from "./cloud-correlation.js";
 
 const HEALTH_CHECK_TIMEOUT_MS = 2_000; // Timeout for checking existing proxy
 const PORT_RETRY_ATTEMPTS = 5; // Max attempts to bind port (handles TIME_WAIT)
@@ -137,6 +138,28 @@ function emitProxyEvent(
     object_key: correlation.object_key ?? null,
     details,
   }).catch(() => undefined);
+}
+
+function createProxyCorrelation(headers: IncomingMessage["headers"]): ProxyEventCorrelation {
+  const traceId =
+    readHeaderValue(headers[MNEMOSPARK_TRACE_ID_HEADER.toLowerCase()]) ?? randomUUID();
+  const operationId =
+    readHeaderValue(
+      headers[MNEMOSPARK_OPERATION_ID_HEADER.toLowerCase()] ?? headers["idempotency-key"],
+    ) ?? randomUUID();
+  return { trace_id: traceId, operation_id: operationId };
+}
+
+function emitProxyTerminalFromStatus(
+  correlation: ProxyEventCorrelation,
+  statusCode: number,
+  details: Record<string, unknown> = {},
+): void {
+  if (statusCode >= 200 && statusCode < 300) {
+    emitProxyEvent("terminal.success", "success", correlation, { status: statusCode, ...details });
+    return;
+  }
+  emitProxyEvent("terminal.failure", "failure", correlation, { status: statusCode, ...details });
 }
 
 function isAlreadySettledConflict(status: number, bodyText: string): boolean {
@@ -360,10 +383,7 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
 
     // Mnemospark backend proxy endpoint for /mnemospark-cloud price-storage command.
     if (req.method === "POST" && matchesProxyPath(req.url, PRICE_STORAGE_PROXY_PATH)) {
-      const correlation: ProxyEventCorrelation = {
-        trace_id: randomUUID(),
-        operation_id: randomUUID(),
-      };
+      const correlation = createProxyCorrelation(req.headers);
       logProxyEvent("info", "proxy_price_storage_received");
       emitProxyEvent("request.received", "start", correlation, { path: PRICE_STORAGE_PROXY_PATH });
       try {
@@ -372,6 +392,7 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
           payload = await readProxyJsonBody(req);
         } catch {
           logProxyEvent("warn", "proxy_price_storage_invalid_json");
+          emitProxyTerminalFromStatus(correlation, 400, { reason: "invalid_json" });
           sendJson(res, 400, {
             error: "Bad request",
             message: "Invalid JSON body for /mnemospark-cloud price-storage",
@@ -382,6 +403,7 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
         const requestPayload = parsePriceStorageQuoteRequest(payload);
         if (!requestPayload) {
           logProxyEvent("warn", "proxy_price_storage_missing_fields");
+          emitProxyTerminalFromStatus(correlation, 400, { reason: "missing_fields" });
           sendJson(res, 400, {
             error: "Bad request",
             message:
@@ -403,6 +425,7 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
           logProxyEvent("warn", "proxy_price_storage_wallet_signature_missing");
           res.writeHead(400, { "Content-Type": "application/json" });
           res.end(createWalletRequiredBody());
+          emitProxyTerminalFromStatus(correlation, 400, { reason: "wallet_signature_missing" });
           return;
         }
         const backendResponse = await forwardPriceStorageToBackend(requestPayload, {
@@ -429,15 +452,14 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
           });
           res.writeHead(authFailure.status, responseHeaders);
           res.end(authFailure.bodyText);
+          emitProxyTerminalFromStatus(correlation, authFailure.status, { reason: "auth_failure" });
           return;
         }
 
         const responseHeaders = createBackendForwardHeaders(backendResponse);
         res.writeHead(backendResponse.status, responseHeaders);
         res.end(backendResponse.bodyText);
-        emitProxyEvent("terminal.success", "success", correlation, {
-          status: backendResponse.status,
-        });
+        emitProxyTerminalFromStatus(correlation, backendResponse.status);
       } catch (err) {
         emitProxyEvent("terminal.failure", "failure", correlation, {
           error: err instanceof Error ? err.message : String(err),
@@ -455,10 +477,7 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
 
     // Mnemospark proxy endpoint for payment/settle (forwards to backend POST /payment/settle).
     if (req.method === "POST" && matchesProxyPath(req.url, PAYMENT_SETTLE_PROXY_PATH)) {
-      const correlation: ProxyEventCorrelation = {
-        trace_id: randomUUID(),
-        operation_id: randomUUID(),
-      };
+      const correlation = createProxyCorrelation(req.headers);
       logProxyEvent("info", "proxy_payment_settle_received");
       emitProxyEvent("request.received", "start", correlation, { path: PAYMENT_SETTLE_PROXY_PATH });
       try {
@@ -467,6 +486,7 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
           payload = await readProxyJsonBody(req);
         } catch {
           logProxyEvent("warn", "proxy_payment_settle_invalid_json");
+          emitProxyTerminalFromStatus(correlation, 400, { reason: "invalid_json" });
           sendJson(res, 400, {
             error: "Bad request",
             message: "Invalid JSON body for /mnemospark/payment/settle",
@@ -483,6 +503,7 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
         const inlinePaymentAuthorization = record?.payment_authorization;
         if (!quoteId || !walletAddress) {
           logProxyEvent("warn", "proxy_payment_settle_missing_fields");
+          emitProxyTerminalFromStatus(correlation, 400, { reason: "missing_fields" });
           sendJson(res, 400, {
             error: "Bad request",
             message: "Missing required fields: quote_id, wallet_address",
@@ -496,6 +517,7 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
             Array.isArray(inlinePayment))
         ) {
           logProxyEvent("warn", "proxy_payment_settle_invalid_payment_shape");
+          emitProxyTerminalFromStatus(correlation, 400, { reason: "invalid_payment_shape" });
           sendJson(res, 400, {
             error: "Bad request",
             message: "Invalid field: payment must be an object when provided",
@@ -512,6 +534,9 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
           )
         ) {
           logProxyEvent("warn", "proxy_payment_settle_invalid_payment_authorization_shape");
+          emitProxyTerminalFromStatus(correlation, 400, {
+            reason: "invalid_payment_authorization_shape",
+          });
           sendJson(res, 400, {
             error: "Bad request",
             message:
@@ -525,6 +550,7 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
             request_wallet: walletAddress,
             proxy_wallet: account.address,
           });
+          emitProxyTerminalFromStatus(correlation, 403, { reason: "wallet_mismatch" });
           sendJson(res, 403, {
             error: "wallet_proof_invalid",
             message: "wallet proof invalid",
@@ -541,6 +567,7 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
           logProxyEvent("warn", "proxy_payment_settle_wallet_signature_missing");
           res.writeHead(400, { "Content-Type": "application/json" });
           res.end(createWalletRequiredBody());
+          emitProxyTerminalFromStatus(correlation, 400, { reason: "wallet_signature_missing" });
           return;
         }
 
@@ -586,15 +613,14 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
           });
           res.writeHead(authFailure.status, responseHeaders);
           res.end(authFailure.bodyText);
+          emitProxyTerminalFromStatus(correlation, authFailure.status, { reason: "auth_failure" });
           return;
         }
 
         const responseHeaders = createBackendForwardHeaders(backendResponse);
         res.writeHead(backendResponse.status, responseHeaders);
         res.end(backendResponse.bodyText);
-        emitProxyEvent("terminal.success", "success", correlation, {
-          status: backendResponse.status,
-        });
+        emitProxyTerminalFromStatus(correlation, backendResponse.status);
       } catch (err) {
         emitProxyEvent("terminal.failure", "failure", correlation, {
           error: err instanceof Error ? err.message : String(err),
@@ -612,10 +638,7 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
 
     // Mnemospark backend proxy endpoint for /mnemospark-cloud upload command.
     if (req.method === "POST" && matchesProxyPath(req.url, UPLOAD_PROXY_PATH)) {
-      const correlation: ProxyEventCorrelation = {
-        trace_id: randomUUID(),
-        operation_id: randomUUID(),
-      };
+      const correlation = createProxyCorrelation(req.headers);
       logProxyEvent("info", "proxy_upload_received");
       emitProxyEvent("request.received", "start", correlation, { path: UPLOAD_PROXY_PATH });
       try {
@@ -624,6 +647,7 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
           payload = await readProxyJsonBody(req);
         } catch {
           logProxyEvent("warn", "proxy_upload_invalid_json");
+          emitProxyTerminalFromStatus(correlation, 400, { reason: "invalid_json" });
           sendJson(res, 400, {
             error: "Bad request",
             message: "Invalid JSON body for /mnemospark-cloud upload",
@@ -634,6 +658,7 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
         const requestPayload = parseStorageUploadRequest(payload);
         if (!requestPayload) {
           logProxyEvent("warn", "proxy_upload_missing_fields");
+          emitProxyTerminalFromStatus(correlation, 400, { reason: "missing_fields" });
           sendJson(res, 400, {
             error: "Bad request",
             message:
@@ -645,13 +670,13 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
         correlation.quote_id = requestPayload.quote_id;
         correlation.wallet_address = requestPayload.wallet_address;
         correlation.object_id = requestPayload.object_id;
-        emitProxyEvent("storage.call", "start", correlation, { target: "storage/upload" });
 
         if (requestPayload.wallet_address.toLowerCase() !== proxyWalletAddressLower) {
           logProxyEvent("warn", "proxy_upload_wallet_mismatch", {
             request_wallet: requestPayload.wallet_address,
             proxy_wallet: account.address,
           });
+          emitProxyTerminalFromStatus(correlation, 403, { reason: "wallet_mismatch" });
           sendJson(res, 403, {
             error: "wallet_proof_invalid",
             message: "wallet proof invalid",
@@ -668,6 +693,7 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
           logProxyEvent("warn", "proxy_upload_wallet_signature_missing");
           res.writeHead(400, { "Content-Type": "application/json" });
           res.end(createWalletRequiredBody());
+          emitProxyTerminalFromStatus(correlation, 400, { reason: "wallet_signature_missing" });
           return;
         }
 
@@ -692,6 +718,7 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
             requiredUSD,
             walletAddress: requestPayload.wallet_address,
           });
+          emitProxyTerminalFromStatus(correlation, 400, { reason: "insufficient_balance" });
           sendJson(res, 400, {
             error: "insufficient_balance",
             message: `Insufficient USDC balance. Current: ${sufficiency.info.balanceUSD}, Required: ${requiredUSD}`,
@@ -722,6 +749,7 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
           logProxyEvent("warn", "proxy_upload_settle_signature_missing");
           res.writeHead(400, { "Content-Type": "application/json" });
           res.end(createWalletRequiredBody());
+          emitProxyTerminalFromStatus(correlation, 400, { reason: "settle_signature_missing" });
           return;
         }
         const uploadPaymentFetch = createPaymentFetch(walletPrivateKey).fetch;
@@ -751,6 +779,9 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
           });
           res.writeHead(settleResponse.status, responseHeaders);
           res.end(settleResponse.bodyText);
+          emitProxyTerminalFromStatus(correlation, settleResponse.status, {
+            reason: "settle_failed",
+          });
           return;
         }
         if (settledAlready) {
@@ -763,6 +794,7 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
           });
         }
 
+        emitProxyEvent("storage.call", "start", correlation, { target: "storage/upload" });
         const backendResponse = await forwardStorageUploadToBackend(requestPayload, {
           backendBaseUrl: MNEMOSPARK_BACKEND_API_BASE_URL,
           walletSignature,
@@ -788,15 +820,14 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
           });
           res.writeHead(authFailure.status, responseHeaders);
           res.end(authFailure.bodyText);
+          emitProxyTerminalFromStatus(correlation, authFailure.status, { reason: "auth_failure" });
           return;
         }
 
         const responseHeaders = createBackendForwardHeaders(backendResponse);
         res.writeHead(backendResponse.status, responseHeaders);
         res.end(backendResponse.bodyText);
-        emitProxyEvent("terminal.success", "success", correlation, {
-          status: backendResponse.status,
-        });
+        emitProxyTerminalFromStatus(correlation, backendResponse.status);
       } catch (err) {
         emitProxyEvent("terminal.failure", "failure", correlation, {
           error: err instanceof Error ? err.message : String(err),
@@ -814,13 +845,16 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
 
     // Mnemospark backend proxy endpoint for /mnemospark-cloud upload confirm command.
     if (req.method === "POST" && matchesProxyPath(req.url, UPLOAD_CONFIRM_PROXY_PATH)) {
+      const correlation = createProxyCorrelation(req.headers);
       logProxyEvent("info", "proxy_upload_confirm_received");
+      emitProxyEvent("request.received", "start", correlation, { path: UPLOAD_CONFIRM_PROXY_PATH });
       try {
         let payload: unknown;
         try {
           payload = await readProxyJsonBody(req);
         } catch {
           logProxyEvent("warn", "proxy_upload_confirm_invalid_json");
+          emitProxyTerminalFromStatus(correlation, 400, { reason: "invalid_json" });
           sendJson(res, 400, {
             error: "Bad request",
             message: "Invalid JSON body for /mnemospark-cloud upload/confirm",
@@ -831,6 +865,7 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
         const requestPayload = parseStorageUploadConfirmRequest(payload);
         if (!requestPayload) {
           logProxyEvent("warn", "proxy_upload_confirm_missing_fields");
+          emitProxyTerminalFromStatus(correlation, 400, { reason: "missing_fields" });
           sendJson(res, 400, {
             error: "Bad request",
             message:
@@ -838,12 +873,16 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
           });
           return;
         }
+        correlation.quote_id = requestPayload.quote_id;
+        correlation.wallet_address = requestPayload.wallet_address;
+        correlation.object_key = requestPayload.object_key;
 
         if (requestPayload.wallet_address.toLowerCase() !== proxyWalletAddressLower) {
           logProxyEvent("warn", "proxy_upload_confirm_wallet_mismatch", {
             request_wallet: requestPayload.wallet_address,
             proxy_wallet: account.address,
           });
+          emitProxyTerminalFromStatus(correlation, 403, { reason: "wallet_mismatch" });
           sendJson(res, 403, {
             error: "wallet_proof_invalid",
             message: "wallet proof invalid",
@@ -860,9 +899,11 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
           logProxyEvent("warn", "proxy_upload_confirm_wallet_signature_missing");
           res.writeHead(400, { "Content-Type": "application/json" });
           res.end(createWalletRequiredBody());
+          emitProxyTerminalFromStatus(correlation, 400, { reason: "wallet_signature_missing" });
           return;
         }
 
+        emitProxyEvent("storage.call", "start", correlation, { target: "storage/upload/confirm" });
         const backendResponse = await forwardStorageUploadConfirmToBackend(requestPayload, {
           backendBaseUrl: MNEMOSPARK_BACKEND_API_BASE_URL,
           walletSignature,
@@ -870,6 +911,7 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
         logProxyEvent("info", "proxy_upload_confirm_backend_response", {
           status: backendResponse.status,
         });
+        emitProxyEvent("storage.call", "result", correlation, { status: backendResponse.status });
 
         const authFailure = normalizeBackendAuthFailure(
           backendResponse.status,
@@ -886,13 +928,18 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
           });
           res.writeHead(authFailure.status, responseHeaders);
           res.end(authFailure.bodyText);
+          emitProxyTerminalFromStatus(correlation, authFailure.status, { reason: "auth_failure" });
           return;
         }
 
         const responseHeaders = createBackendForwardHeaders(backendResponse);
         res.writeHead(backendResponse.status, responseHeaders);
         res.end(backendResponse.bodyText);
+        emitProxyTerminalFromStatus(correlation, backendResponse.status);
       } catch (err) {
+        emitProxyEvent("terminal.failure", "failure", correlation, {
+          error: err instanceof Error ? err.message : String(err),
+        });
         logProxyEvent("error", "proxy_upload_confirm_forward_failed", {
           error: err instanceof Error ? err.message : String(err),
         });
@@ -906,10 +953,7 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
 
     // Mnemospark backend proxy endpoint for /mnemospark-cloud ls command.
     if (req.method === "POST" && matchesProxyPath(req.url, STORAGE_LS_PROXY_PATH)) {
-      const correlation: ProxyEventCorrelation = {
-        trace_id: randomUUID(),
-        operation_id: randomUUID(),
-      };
+      const correlation = createProxyCorrelation(req.headers);
       logProxyEvent("info", "proxy_ls_received");
       emitProxyEvent("request.received", "start", correlation, { path: STORAGE_LS_PROXY_PATH });
       try {
@@ -918,6 +962,7 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
           payload = await readProxyJsonBody(req);
         } catch {
           logProxyEvent("warn", "proxy_ls_invalid_json");
+          emitProxyTerminalFromStatus(correlation, 400, { reason: "invalid_json" });
           sendJson(res, 400, {
             error: "Bad request",
             message: "Invalid JSON body for /mnemospark-cloud ls",
@@ -928,6 +973,7 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
         const requestPayload = parseStorageObjectRequest(payload);
         if (!requestPayload) {
           logProxyEvent("warn", "proxy_ls_missing_fields");
+          emitProxyTerminalFromStatus(correlation, 400, { reason: "missing_fields" });
           sendJson(res, 400, {
             error: "Bad request",
             message: "Missing required fields: wallet_address, object_key",
@@ -940,6 +986,7 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
 
         if (requestPayload.wallet_address.toLowerCase() !== proxyWalletAddressLower) {
           logProxyEvent("warn", "proxy_ls_wallet_mismatch");
+          emitProxyTerminalFromStatus(correlation, 403, { reason: "wallet_mismatch" });
           sendJson(res, 403, {
             error: "wallet_proof_invalid",
             message: "wallet proof invalid",
@@ -956,6 +1003,7 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
           logProxyEvent("warn", "proxy_ls_wallet_signature_missing");
           res.writeHead(400, { "Content-Type": "application/json" });
           res.end(createWalletRequiredBody());
+          emitProxyTerminalFromStatus(correlation, 400, { reason: "wallet_signature_missing" });
           return;
         }
 
@@ -980,15 +1028,14 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
           });
           res.writeHead(authFailure.status, responseHeaders);
           res.end(authFailure.bodyText);
+          emitProxyTerminalFromStatus(correlation, authFailure.status, { reason: "auth_failure" });
           return;
         }
 
         const responseHeaders = createBackendForwardHeaders(backendResponse);
         res.writeHead(backendResponse.status, responseHeaders);
         res.end(backendResponse.bodyText);
-        emitProxyEvent("terminal.success", "success", correlation, {
-          status: backendResponse.status,
-        });
+        emitProxyTerminalFromStatus(correlation, backendResponse.status);
       } catch (err) {
         emitProxyEvent("terminal.failure", "failure", correlation, {
           error: err instanceof Error ? err.message : String(err),
@@ -1006,10 +1053,7 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
 
     // Mnemospark backend proxy endpoint for /mnemospark-cloud download command.
     if (req.method === "POST" && matchesProxyPath(req.url, STORAGE_DOWNLOAD_PROXY_PATH)) {
-      const correlation: ProxyEventCorrelation = {
-        trace_id: randomUUID(),
-        operation_id: randomUUID(),
-      };
+      const correlation = createProxyCorrelation(req.headers);
       logProxyEvent("info", "proxy_download_received");
       emitProxyEvent("request.received", "start", correlation, {
         path: STORAGE_DOWNLOAD_PROXY_PATH,
@@ -1020,6 +1064,7 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
           payload = await readProxyJsonBody(req);
         } catch {
           logProxyEvent("warn", "proxy_download_invalid_json");
+          emitProxyTerminalFromStatus(correlation, 400, { reason: "invalid_json" });
           sendJson(res, 400, {
             error: "Bad request",
             message: "Invalid JSON body for /mnemospark-cloud download",
@@ -1030,6 +1075,7 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
         const requestPayload = parseStorageObjectRequest(payload);
         if (!requestPayload) {
           logProxyEvent("warn", "proxy_download_missing_fields");
+          emitProxyTerminalFromStatus(correlation, 400, { reason: "missing_fields" });
           sendJson(res, 400, {
             error: "Bad request",
             message: "Missing required fields: wallet_address, object_key",
@@ -1042,6 +1088,7 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
 
         if (requestPayload.wallet_address.toLowerCase() !== proxyWalletAddressLower) {
           logProxyEvent("warn", "proxy_download_wallet_mismatch");
+          emitProxyTerminalFromStatus(correlation, 403, { reason: "wallet_mismatch" });
           sendJson(res, 403, {
             error: "wallet_proof_invalid",
             message: "wallet proof invalid",
@@ -1058,6 +1105,7 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
           logProxyEvent("warn", "proxy_download_wallet_signature_missing");
           res.writeHead(400, { "Content-Type": "application/json" });
           res.end(createWalletRequiredBody());
+          emitProxyTerminalFromStatus(correlation, 400, { reason: "wallet_signature_missing" });
           return;
         }
 
@@ -1086,6 +1134,7 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
           });
           res.writeHead(authFailure.status, responseHeaders);
           res.end(authFailure.bodyText);
+          emitProxyTerminalFromStatus(correlation, authFailure.status, { reason: "auth_failure" });
           return;
         }
 
@@ -1097,6 +1146,7 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
           const responseHeaders = createBackendForwardHeaders(backendResponse);
           res.writeHead(backendResponse.status, responseHeaders);
           res.end(backendResponse.bodyText);
+          emitProxyTerminalFromStatus(correlation, backendResponse.status);
           return;
         }
 
@@ -1114,9 +1164,7 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
           file_path: downloadResult.filePath,
           bytes_written: downloadResult.bytesWritten,
         });
-        emitProxyEvent("terminal.success", "success", correlation, {
-          status: 200,
-        });
+        emitProxyTerminalFromStatus(correlation, 200);
       } catch (err) {
         emitProxyEvent("terminal.failure", "failure", correlation, {
           error: err instanceof Error ? err.message : String(err),
@@ -1134,10 +1182,7 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
 
     // Mnemospark backend proxy endpoint for /mnemospark-cloud delete command.
     if (req.method === "POST" && matchesProxyPath(req.url, STORAGE_DELETE_PROXY_PATH)) {
-      const correlation: ProxyEventCorrelation = {
-        trace_id: randomUUID(),
-        operation_id: randomUUID(),
-      };
+      const correlation = createProxyCorrelation(req.headers);
       logProxyEvent("info", "proxy_delete_received");
       emitProxyEvent("request.received", "start", correlation, { path: STORAGE_DELETE_PROXY_PATH });
       try {
@@ -1146,6 +1191,7 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
           payload = await readProxyJsonBody(req);
         } catch {
           logProxyEvent("warn", "proxy_delete_invalid_json");
+          emitProxyTerminalFromStatus(correlation, 400, { reason: "invalid_json" });
           sendJson(res, 400, {
             error: "Bad request",
             message: "Invalid JSON body for /mnemospark-cloud delete",
@@ -1156,6 +1202,7 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
         const requestPayload = parseStorageObjectRequest(payload);
         if (!requestPayload) {
           logProxyEvent("warn", "proxy_delete_missing_fields");
+          emitProxyTerminalFromStatus(correlation, 400, { reason: "missing_fields" });
           sendJson(res, 400, {
             error: "Bad request",
             message: "Missing required fields: wallet_address, object_key",
@@ -1168,6 +1215,7 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
 
         if (requestPayload.wallet_address.toLowerCase() !== proxyWalletAddressLower) {
           logProxyEvent("warn", "proxy_delete_wallet_mismatch");
+          emitProxyTerminalFromStatus(correlation, 403, { reason: "wallet_mismatch" });
           sendJson(res, 403, {
             error: "wallet_proof_invalid",
             message: "wallet proof invalid",
@@ -1184,6 +1232,7 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
           logProxyEvent("warn", "proxy_delete_wallet_signature_missing");
           res.writeHead(400, { "Content-Type": "application/json" });
           res.end(createWalletRequiredBody());
+          emitProxyTerminalFromStatus(correlation, 400, { reason: "wallet_signature_missing" });
           return;
         }
 
@@ -1212,15 +1261,14 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
           });
           res.writeHead(authFailure.status, responseHeaders);
           res.end(authFailure.bodyText);
+          emitProxyTerminalFromStatus(correlation, authFailure.status, { reason: "auth_failure" });
           return;
         }
 
         const responseHeaders = createBackendForwardHeaders(backendResponse);
         res.writeHead(backendResponse.status, responseHeaders);
         res.end(backendResponse.bodyText);
-        emitProxyEvent("terminal.success", "success", correlation, {
-          status: backendResponse.status,
-        });
+        emitProxyTerminalFromStatus(correlation, backendResponse.status);
       } catch (err) {
         emitProxyEvent("terminal.failure", "failure", correlation, {
           error: err instanceof Error ? err.message : String(err),

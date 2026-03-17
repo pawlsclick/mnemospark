@@ -49,6 +49,7 @@ import { createPaymentFetch, type PaymentFetchResult } from "./x402.js";
 import { isValidWalletPrivateKey } from "./wallet-key.js";
 import { createCloudDatastore } from "./cloud-datastore.js";
 import { appendJsonlEvent } from "./cloud-jsonl.js";
+import type { RequestCorrelation } from "./cloud-correlation.js";
 
 const SUPPORTED_BACKUP_PLATFORMS = new Set<NodeJS.Platform>(["darwin", "linux"]);
 const BACKUP_DIR_SUBPATH = join(".openclaw", "mnemospark", "backup");
@@ -1323,6 +1324,11 @@ type RunCloudCommandHandlerOptions = {
   proxyStorageOptions: CreateCloudCommandOptions["proxyStorageOptions"];
 };
 
+type RunCloudCommandExecutionContext = {
+  forcedOperationId?: string;
+  forcedTraceId?: string;
+};
+
 async function resolveNameSelectorIfNeeded(
   datastore: Awaited<ReturnType<typeof createCloudDatastore>>,
   request: StorageObjectRequestInput,
@@ -1390,9 +1396,19 @@ async function emitCloudEventBestEffort(
   }
 }
 
+function buildRequestCorrelation(
+  forcedOperationId?: string,
+  forcedTraceId?: string,
+): Required<RequestCorrelation> {
+  const operationId = forcedOperationId?.trim() || randomUUID();
+  const traceId = forcedTraceId?.trim() || randomUUID();
+  return { operationId, traceId };
+}
+
 async function runCloudCommandHandler(
   ctx: { args?: string },
   options: RunCloudCommandHandlerOptions,
+  executionContext: RunCloudCommandExecutionContext = {},
 ): Promise<{ text: string; isError?: boolean }> {
   const parsed = parseCloudArgs(ctx.args);
   const objectLogHomeDir = options.objectLogHomeDir;
@@ -1485,12 +1501,10 @@ async function runCloudCommandHandler(
   }
 
   if ((parsed.mode === "upload" || parsed.mode === "download") && parsed.async) {
-    const operationId = randomUUID();
+    const asyncCorrelation = buildRequestCorrelation();
+    const operationId = asyncCorrelation.operationId;
     const opType = parsed.mode;
-    const opObject =
-      parsed.mode === "upload"
-        ? parsed.uploadRequest.object_id
-        : (parsed.storageObjectRequest.object_key ?? null);
+    const opObject = parsed.mode === "upload" ? parsed.uploadRequest.object_id : null;
     const opQuote = parsed.mode === "upload" ? parsed.uploadRequest.quote_id : null;
     await datastore.upsertOperation({
       operation_id: operationId,
@@ -1503,7 +1517,10 @@ async function runCloudCommandHandler(
     });
 
     const syncArgs = stripAsyncFlag(ctx.args);
-    void runCloudCommandHandler({ args: syncArgs }, options)
+    void runCloudCommandHandler({ args: syncArgs }, options, {
+      forcedOperationId: asyncCorrelation.operationId,
+      forcedTraceId: asyncCorrelation.traceId,
+    })
       .then(async (result) => {
         await datastore.upsertOperation({
           operation_id: operationId,
@@ -1588,11 +1605,12 @@ async function runCloudCommandHandler(
   }
 
   if (parsed.mode === "price-storage") {
+    const correlation = buildRequestCorrelation();
     try {
-      const quote = await requestPriceStorageQuote(
-        parsed.priceStorageRequest,
-        options.proxyQuoteOptions,
-      );
+      const quote = await requestPriceStorageQuote(parsed.priceStorageRequest, {
+        ...options.proxyQuoteOptions,
+        correlation,
+      });
       await appendPriceStorageQuoteLog(quote, objectLogHomeDir);
       await datastore.upsertObject({
         object_id: quote.object_id,
@@ -1613,10 +1631,33 @@ async function runCloudCommandHandler(
         network: null,
         status: "quoted",
       });
+      await emitCloudEventBestEffort(
+        "price-storage.completed",
+        {
+          operation_id: correlation.operationId,
+          trace_id: correlation.traceId,
+          wallet_address: quote.addr,
+          object_id: quote.object_id,
+          quote_id: quote.quote_id,
+          status: "succeeded",
+        },
+        objectLogHomeDir,
+      );
       return {
         text: formatPriceStorageUserMessage(quote),
       };
     } catch (err) {
+      await emitCloudEventBestEffort(
+        "price-storage.completed",
+        {
+          operation_id: correlation.operationId,
+          trace_id: correlation.traceId,
+          wallet_address: parsed.priceStorageRequest.wallet_address,
+          object_id: parsed.priceStorageRequest.object_id,
+          status: "failed",
+        },
+        objectLogHomeDir,
+      );
       const message =
         err instanceof Error ? err.message : typeof err === "string" ? err : String(err);
       return {
@@ -1627,6 +1668,10 @@ async function runCloudCommandHandler(
   }
 
   if (parsed.mode === "upload") {
+    const uploadCorrelation = buildRequestCorrelation(
+      executionContext.forcedOperationId ?? idempotencyKeyFn(),
+      executionContext.forcedTraceId,
+    );
     try {
       const loggedQuote =
         (await datastore.findQuoteById(parsed.uploadRequest.quote_id)) ??
@@ -1694,7 +1739,7 @@ async function runCloudCommandHandler(
         parsed.uploadRequest.wallet_address,
         objectLogHomeDir,
       );
-      const idempotencyKey = idempotencyKeyFn();
+      const idempotencyKey = uploadCorrelation.operationId;
       const shouldSettleBeforeUpload = requestStorageUpload !== requestStorageUploadViaProxy;
 
       if (shouldSettleBeforeUpload) {
@@ -1705,6 +1750,7 @@ async function runCloudCommandHandler(
           parsed.uploadRequest.wallet_address,
           {
             ...options.proxyUploadOptions,
+            correlation: uploadCorrelation,
             fetchImpl: (input, init) => paymentFetch(input, init),
           },
         );
@@ -1729,6 +1775,7 @@ async function runCloudCommandHandler(
         {
           ...options.proxyUploadOptions,
           idempotencyKey,
+          correlation: uploadCorrelation,
           fetchImpl: uploadFetchImpl,
         },
       );
@@ -1752,7 +1799,10 @@ async function runCloudCommandHandler(
               object_key: uploadResponse.object_key,
               idempotency_key: idempotencyKey,
             },
-            options.proxyUploadConfirmOptions,
+            {
+              ...options.proxyUploadConfirmOptions,
+              correlation: uploadCorrelation,
+            },
           );
         } catch (confirmError) {
           const transId = uploadResponse.trans_id ?? "unknown";
@@ -1835,6 +1885,7 @@ async function runCloudCommandHandler(
         "upload.completed",
         {
           operation_id: idempotencyKey,
+          trace_id: uploadCorrelation.traceId,
           wallet_address: finalizedUploadResponse.addr,
           object_id: finalizedUploadResponse.object_id,
           object_key: finalizedUploadResponse.object_key,
@@ -1849,6 +1900,18 @@ async function runCloudCommandHandler(
         text: formatStorageUploadUserMessage(finalizedUploadResponse, cronJob.cronId),
       };
     } catch (error) {
+      await emitCloudEventBestEffort(
+        "upload.completed",
+        {
+          operation_id: uploadCorrelation.operationId,
+          trace_id: uploadCorrelation.traceId,
+          wallet_address: parsed.uploadRequest.wallet_address,
+          object_id: parsed.uploadRequest.object_id,
+          quote_id: parsed.uploadRequest.quote_id,
+          status: "failed",
+        },
+        objectLogHomeDir,
+      );
       const uploadErrorMessage = extractUploadErrorMessage(error);
       return {
         text: uploadErrorMessage ?? "Cannot upload storage object",
@@ -1868,25 +1931,31 @@ async function runCloudCommandHandler(
     }
     const resolvedRequest = resolved.request;
 
-    const operationId = randomUUID();
+    const correlation = buildRequestCorrelation();
+    const operationId = correlation.operationId;
+    const knownObject = await datastore.findObjectByObjectKey(resolvedRequest.object_key);
+    const operationObjectId = knownObject?.object_id ?? null;
     await datastore.upsertOperation({
       operation_id: operationId,
       type: "ls",
-      object_id: resolvedRequest.object_key,
+      object_id: operationObjectId,
       quote_id: null,
       status: "started",
       error_code: null,
       error_message: null,
     });
     try {
-      const lsResult = await requestStorageLs(resolvedRequest, options.proxyStorageOptions);
+      const lsResult = await requestStorageLs(resolvedRequest, {
+        ...options.proxyStorageOptions,
+        correlation,
+      });
       if (!lsResult.success) {
         throw new Error("ls failed");
       }
       await datastore.upsertOperation({
         operation_id: operationId,
         type: "ls",
-        object_id: resolvedRequest.object_key,
+        object_id: operationObjectId,
         quote_id: null,
         status: "succeeded",
         error_code: null,
@@ -1896,6 +1965,7 @@ async function runCloudCommandHandler(
         "ls.completed",
         {
           operation_id: operationId,
+          trace_id: correlation.traceId,
           wallet_address: resolvedRequest.wallet_address,
           object_key: resolvedRequest.object_key,
           status: "succeeded",
@@ -1909,7 +1979,7 @@ async function runCloudCommandHandler(
       await datastore.upsertOperation({
         operation_id: operationId,
         type: "ls",
-        object_id: resolvedRequest.object_key,
+        object_id: operationObjectId,
         quote_id: null,
         status: "failed",
         error_code: "LS_FAILED",
@@ -1919,6 +1989,7 @@ async function runCloudCommandHandler(
         "ls.completed",
         {
           operation_id: operationId,
+          trace_id: correlation.traceId,
           wallet_address: resolvedRequest.wallet_address,
           object_key: resolvedRequest.object_key,
           status: "failed",
@@ -1943,28 +2014,34 @@ async function runCloudCommandHandler(
     }
     const resolvedRequest = resolved.request;
 
-    const operationId = randomUUID();
+    const correlation = buildRequestCorrelation(
+      executionContext.forcedOperationId,
+      executionContext.forcedTraceId,
+    );
+    const operationId = correlation.operationId;
+    const knownObject = await datastore.findObjectByObjectKey(resolvedRequest.object_key);
+    const operationObjectId = knownObject?.object_id ?? null;
     await datastore.upsertOperation({
       operation_id: operationId,
       type: "download",
-      object_id: resolvedRequest.object_key,
+      object_id: operationObjectId,
       quote_id: null,
       status: "started",
       error_code: null,
       error_message: null,
     });
     try {
-      const downloadResult = await requestStorageDownload(
-        resolvedRequest,
-        options.proxyStorageOptions,
-      );
+      const downloadResult = await requestStorageDownload(resolvedRequest, {
+        ...options.proxyStorageOptions,
+        correlation,
+      });
       if (!downloadResult.success) {
         throw new Error("download failed");
       }
       await datastore.upsertOperation({
         operation_id: operationId,
         type: "download",
-        object_id: resolvedRequest.object_key,
+        object_id: operationObjectId,
         quote_id: null,
         status: "succeeded",
         error_code: null,
@@ -1974,6 +2051,7 @@ async function runCloudCommandHandler(
         "download.completed",
         {
           operation_id: operationId,
+          trace_id: correlation.traceId,
           wallet_address: resolvedRequest.wallet_address,
           object_key: resolvedRequest.object_key,
           status: "succeeded",
@@ -1987,7 +2065,7 @@ async function runCloudCommandHandler(
       await datastore.upsertOperation({
         operation_id: operationId,
         type: "download",
-        object_id: resolvedRequest.object_key,
+        object_id: operationObjectId,
         quote_id: null,
         status: "failed",
         error_code: "DOWNLOAD_FAILED",
@@ -1997,6 +2075,7 @@ async function runCloudCommandHandler(
         "download.completed",
         {
           operation_id: operationId,
+          trace_id: correlation.traceId,
           wallet_address: resolvedRequest.wallet_address,
           object_key: resolvedRequest.object_key,
           status: "failed",
@@ -2020,11 +2099,15 @@ async function runCloudCommandHandler(
       return { text: resolved.error ?? "Cannot resolve storage object request.", isError: true };
     }
     const resolvedRequest = resolved.request;
-    const operationId = randomUUID();
+    const correlation = buildRequestCorrelation();
+    const operationId = correlation.operationId;
 
     const existingObjectByKey = await datastore.findObjectByObjectKey(resolvedRequest.object_key);
     try {
-      const deleteResult = await requestStorageDelete(resolvedRequest, options.proxyStorageOptions);
+      const deleteResult = await requestStorageDelete(resolvedRequest, {
+        ...options.proxyStorageOptions,
+        correlation,
+      });
       if (!deleteResult.success) {
         throw new Error("delete failed");
       }
@@ -2033,6 +2116,7 @@ async function runCloudCommandHandler(
         "delete.completed",
         {
           operation_id: operationId,
+          trace_id: correlation.traceId,
           wallet_address: resolvedRequest.wallet_address,
           object_key: resolvedRequest.object_key,
           status: "failed",
@@ -2095,6 +2179,7 @@ async function runCloudCommandHandler(
       "delete.completed",
       {
         operation_id: operationId,
+        trace_id: correlation.traceId,
         wallet_address: resolvedRequest.wallet_address,
         object_key: resolvedRequest.object_key,
         status: "succeeded",

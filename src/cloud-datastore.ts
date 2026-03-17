@@ -393,7 +393,7 @@ export async function createCloudDatastore(homeDir?: string): Promise<CloudDatas
            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(operation_id) DO UPDATE SET
              type=excluded.type,
-             object_id=excluded.object_id,
+             object_id=COALESCE(excluded.object_id, operations.object_id),
              quote_id=excluded.quote_id,
              status=excluded.status,
              error_code=excluded.error_code,

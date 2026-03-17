@@ -9,6 +9,7 @@ import {
   resolveWalletKekPath,
 } from "./cloud-storage-crypto.js";
 import { PROXY_PORT } from "./config.js";
+import { applyCorrelationHeaders, type RequestCorrelation } from "./cloud-correlation.js";
 import {
   asNonEmptyString,
   asNumber,
@@ -55,6 +56,7 @@ type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Respo
 type ProxyStorageOptions = {
   proxyBaseUrl?: string;
   fetchImpl?: FetchLike;
+  correlation?: RequestCorrelation;
 };
 
 type BackendStorageOptions = {
@@ -212,9 +214,12 @@ async function requestJsonViaProxy<T>(
 
   const response = await fetchImpl(`${baseUrl}${proxyPath}`, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
+    headers: applyCorrelationHeaders(
+      {
+        "Content-Type": "application/json",
+      },
+      options.correlation,
+    ),
     body: JSON.stringify(request),
   });
 

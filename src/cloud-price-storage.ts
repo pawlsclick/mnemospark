@@ -1,4 +1,5 @@
 import { PROXY_PORT } from "./config.js";
+import { applyCorrelationHeaders, type RequestCorrelation } from "./cloud-correlation.js";
 import {
   asNonEmptyString,
   asNumber,
@@ -83,6 +84,7 @@ type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Respo
 type ProxyQuoteOptions = {
   proxyBaseUrl?: string;
   fetchImpl?: FetchLike;
+  correlation?: RequestCorrelation;
 };
 
 type ProxyUploadOptions = {
@@ -90,11 +92,13 @@ type ProxyUploadOptions = {
   fetchImpl?: FetchLike;
   idempotencyKey?: string;
   maxRetries?: number;
+  correlation?: RequestCorrelation;
 };
 
 type ProxyUploadConfirmOptions = {
   proxyBaseUrl?: string;
   fetchImpl?: FetchLike;
+  correlation?: RequestCorrelation;
 };
 
 /**
@@ -147,6 +151,7 @@ export type BackendSettleOptions = {
 export type ProxySettleOptions = {
   proxyBaseUrl?: string;
   fetchImpl?: FetchLike;
+  correlation?: RequestCorrelation;
   /** Optional inline payment authorization payload. */
   payment?: Record<string, unknown>;
   /** Optional alternate inline payment authorization envelope. */
@@ -419,9 +424,12 @@ export async function requestPriceStorageViaProxy(
   );
   const response = await fetchImpl(`${baseUrl}${PRICE_STORAGE_PROXY_PATH}`, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
+    headers: applyCorrelationHeaders(
+      {
+        "Content-Type": "application/json",
+      },
+      options.correlation,
+    ),
     body: JSON.stringify(request),
   });
 
@@ -457,6 +465,7 @@ export async function requestStorageUploadViaProxy(
   const requestHeaders: Record<string, string> = {
     "Content-Type": "application/json",
   };
+  applyCorrelationHeaders(requestHeaders, options.correlation);
 
   if (options.idempotencyKey && options.idempotencyKey.trim().length > 0) {
     requestHeaders["Idempotency-Key"] = options.idempotencyKey.trim();
@@ -552,9 +561,12 @@ export async function requestStorageUploadConfirmViaProxy(
   );
   const response = await fetchImpl(`${baseUrl}${UPLOAD_CONFIRM_PROXY_PATH}`, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
+    headers: applyCorrelationHeaders(
+      {
+        "Content-Type": "application/json",
+      },
+      options.correlation,
+    ),
     body: JSON.stringify(request),
   });
 
@@ -707,7 +719,7 @@ export async function requestPaymentSettleViaProxy(
   }
   const response = await fetchImpl(targetUrl, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: applyCorrelationHeaders({ "Content-Type": "application/json" }, options.correlation),
     body: JSON.stringify(requestBody),
   });
 
