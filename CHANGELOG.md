@@ -7,10 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.1.22](https://github.com/pawlsclick/mnemospark/compare/v0.1.21...v0.1.22) (2026-03-17)
 
-
 ### Bug Fixes
 
-* trigger 0.1.22 release ([f0e563f](https://github.com/pawlsclick/mnemospark/commit/f0e563f51737b294f00f56caa02661e0136274e9))
+- trigger 0.1.22 release ([f0e563f](https://github.com/pawlsclick/mnemospark/commit/f0e563f51737b294f00f56caa02661e0136274e9))
 
 ## [0.1.21](https://github.com/pawlsclick/mnemospark/compare/v0.1.20...v0.1.21) (2026-03-16)
 
