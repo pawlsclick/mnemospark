@@ -35,3 +35,4 @@ Use this skill for mnemospark cloud backup/storage workflows, async operation tr
 - `references/commands.md`
 - `references/state-and-logs.md`
 - `references/troubleshooting.md`
+- `scripts/debug-operation.sh` (one-step operation correlation debugger)

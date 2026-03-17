@@ -128,6 +128,7 @@ The blockchain transaction is the payment record.
 - **402 payment required**: expected in challenge flow; ensure client retries with payment authorization.
 - **Upload/storage backend errors**: verify cloud permissions (e.g., bucket access + IAM role rights).
 - **Command not recognized**: confirm plugin installed and gateway restarted.
+- **One-step operation correlation**: run `./skills/mnemospark/scripts/debug-operation.sh <operation-id>` (or omit ID to use latest).
 
 ---
 

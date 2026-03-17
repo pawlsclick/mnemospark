@@ -34,3 +34,9 @@
 
 - `--object-key` and `--name` are mutually exclusive.
 - If `--name` maps to multiple active objects, require `--latest` or `--at`.
+
+## One-step debug helper
+
+```bash
+./skills/mnemospark/scripts/debug-operation.sh <operation-id>
+```

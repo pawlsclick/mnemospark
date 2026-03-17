@@ -7,6 +7,20 @@
 3. Query: `/mnemospark-cloud op-status --operation-id <id>`.
 4. Correlate with `events.jsonl` and `proxy-events.jsonl`.
 
+## One-step correlation debugger
+
+From repo root:
+
+```bash
+./skills/mnemospark/scripts/debug-operation.sh <operation-id>
+```
+
+If you omit `<operation-id>`, the latest operation from SQLite is used:
+
+```bash
+./skills/mnemospark/scripts/debug-operation.sh
+```
+
 ## Frequent failure patterns
 
 - `Operation not found: <id>`

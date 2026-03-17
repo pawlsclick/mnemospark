@@ -32,3 +32,9 @@ Cross-stream troubleshooting should correlate by:
 - `quote_id`
 - `object_id`
 - `object_key`
+
+## Quick correlation command
+
+```bash
+./skills/mnemospark/scripts/debug-operation.sh <operation-id>
+```
