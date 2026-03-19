@@ -452,7 +452,7 @@ export async function createCloudDatastore(homeDir?: string): Promise<CloudDatas
             row.status,
             row.error_code,
             row.error_message,
-            row.status === "started" || row.status === "running" ? ts : null,
+            row.status === "started" ? ts : null,
             terminalStatuses.has(row.status) ? ts : null,
             ts,
             ts,

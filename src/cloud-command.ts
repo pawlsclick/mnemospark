@@ -239,6 +239,7 @@ type ParsedCloudArgs =
   | { mode: "help" }
   | ({ mode: "backup"; backupTarget: string; friendlyName?: string } & AsyncOperationArgs)
   | { mode: "backup-invalid" }
+  | { mode: "backup-invalid-async" }
   | { mode: "price-storage"; priceStorageRequest: PriceStorageQuoteRequest }
   | { mode: "price-storage-invalid" }
   | ({
@@ -530,7 +531,7 @@ function parseCloudArgs(args?: string): ParsedCloudArgs {
     }
     const asyncArgs = parseAsyncOperationArgs(flags);
     if (!asyncArgs) {
-      return { mode: "backup-invalid" };
+      return { mode: "backup-invalid-async" };
     }
     return {
       mode: "backup",
@@ -1937,6 +1938,13 @@ async function runCloudCommandHandler(
   }
 
   if (parsed.mode === "backup-invalid") {
+    return {
+      text: "Cannot build storage object",
+      isError: true,
+    };
+  }
+
+  if (parsed.mode === "backup-invalid-async") {
     return {
       text: `Cannot build storage object: ${INVALID_ASYNC_FLAGS_MESSAGE}`,
       isError: true,
