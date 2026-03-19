@@ -1,10 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { mkdir } from "node:fs/promises";
+import { createRequire } from "node:module";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
 const DB_SUBPATH = join(".openclaw", "mnemospark", "state.db");
 const SCHEMA_VERSION = 3;
+const require = createRequire(import.meta.url);
 
 export type StorageObjectRow = {
   object_id: string;
@@ -148,15 +150,18 @@ export async function createCloudDatastore(homeDir?: string): Promise<CloudDatas
     }
 
     await mkdir(dirname(dbPath), { recursive: true });
-    const sqliteMod = (await import("node:sqlite")) as {
+
+    // Use runtime require("node:sqlite") to prevent bundlers from rewriting
+    // the built-in specifier to "sqlite" in dist output.
+    const sqliteMod = require("node:sqlite") as {
       DatabaseSync?: new (path: string) => DbLike;
     };
-    const DatabaseSync = sqliteMod.DatabaseSync;
-    if (!DatabaseSync) {
+    const DatabaseSyncCtor = sqliteMod.DatabaseSync;
+    if (!DatabaseSyncCtor) {
       throw new Error("node:sqlite DatabaseSync is unavailable");
     }
 
-    const nextDb = new DatabaseSync(dbPath);
+    const nextDb = new DatabaseSyncCtor(dbPath);
     nextDb.exec("PRAGMA journal_mode=WAL;");
     nextDb.exec("PRAGMA foreign_keys=ON;");
 
