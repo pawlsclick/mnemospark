@@ -3,6 +3,9 @@ name: Publish
 on:
   release:
     types: [published]
+  push:
+    tags:
+      - "v*"
   workflow_dispatch:
     inputs:
       publish_ref:
@@ -13,6 +16,10 @@ on:
 permissions:
   contents: read
   id-token: write
+
+concurrency:
+  group: publish-${{ inputs.publish_ref || github.event.release.tag_name || github.ref_name }}
+  cancel-in-progress: false
 
 jobs:
   publish:
