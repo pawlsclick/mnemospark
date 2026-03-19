@@ -40,6 +40,9 @@ jobs:
           cache: npm
           registry-url: "https://registry.npmjs.org"
 
+      - name: Install dependencies
+        run: npm ci --include=dev
+
       - name: Validate workflow_dispatch ref safety
         if: github.event_name == 'workflow_dispatch'
         run: |
@@ -69,10 +72,10 @@ jobs:
           fi
 
       - name: Check formatting
-        run: npx prettier --check .
+        run: npm exec --no prettier --check .
 
       - name: Lint
-        run: npx eslint src/
+        run: npm exec --no eslint src/
 
       - name: Typecheck
         run: npm run typecheck
