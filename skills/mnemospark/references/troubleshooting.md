@@ -4,7 +4,7 @@
 
 1. Start with `--async` for upload/download.
 2. Capture `operation-id`.
-3. Query: `/mnemospark-cloud op-status --operation-id <id>`.
+3. Query: `/mnemospark_cloud op-status --operation-id <id>`.
 4. Correlate with `events.jsonl` and `proxy-events.jsonl`.
 
 ## One-step correlation debugger

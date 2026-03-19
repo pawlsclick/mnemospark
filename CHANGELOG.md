@@ -83,9 +83,9 @@ fix: cloud-command-handler-guard
 
 ### Changed
 
-- **mnemospark-cloud backup**: Success message now prints `object-id:`, `object-id-hash:`, and `object-size:` on separate lines; object-id-hash is shown without spaces.
-- **mnemospark-wallet**: Wallet and export headers use cloud emoji (☁️).
-- **mnemospark-wallet**: Address and (on export) private key are displayed without spaces.
+- **mnemospark_cloud backup**: Success message now prints `object-id:`, `object-id-hash:`, and `object-size:` on separate lines; object-id-hash is shown without spaces.
+- **mnemospark_wallet**: Wallet and export headers use cloud emoji (☁️).
+- **mnemospark_wallet**: Address and (on export) private key are displayed without spaces.
 - EIP-712 type mismatch fixed
 
 ## [0.1.9] - 2025-03-05
