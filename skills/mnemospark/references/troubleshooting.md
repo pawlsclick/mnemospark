@@ -2,10 +2,13 @@
 
 ## Async workflow checks
 
-1. Start with `--async` for upload/download.
-2. Capture `operation-id`.
-3. Query: `/mnemospark_cloud op-status --operation-id <id>`.
-4. Correlate with `events.jsonl` and `proxy-events.jsonl`.
+1. Start with `--async` for backup/upload/download.
+2. If explicit session lifecycle control is needed, add `--orchestrator subagent`.
+3. If timeout control is needed, add `--timeout-seconds <n>` with `--orchestrator subagent`.
+4. Capture `operation-id`.
+5. Query: `/mnemospark_cloud op-status --operation-id <id>`.
+6. If needed, request cancel: `/mnemospark_cloud op-status --operation-id <id> --cancel`.
+7. Correlate with `events.jsonl` and `proxy-events.jsonl`.
 
 ## One-step correlation debugger
 
@@ -25,6 +28,15 @@ If you omit `<operation-id>`, the latest operation from SQLite is used:
 
 - `Operation not found: <id>`
   - Check SQLite health or `MNEMOSPARK_DISABLE_SQLITE`.
+- `Cannot build storage object: invalid async flags`
+  - `--orchestrator`/`--timeout-seconds` require `--async`.
+  - `--timeout-seconds` requires `--orchestrator subagent`.
+- `error-code: ASYNC_DISPATCH_FAILED`
+  - Subagent dispatch could not start; inspect recent operation events.
+- `error-code: ASYNC_TIMEOUT`
+  - Operation exceeded timeout; increase `--timeout-seconds` or retry without timeout.
+- `error-code: ASYNC_CANCELLED`
+  - Operation was cancelled through `op-status --cancel`.
 - Name ambiguity for `--name`
   - Re-run with `--latest` or `--at <timestamp>`.
 - Repeated settle/upload mismatch

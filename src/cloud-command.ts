@@ -75,7 +75,9 @@ const REQUIRED_STORAGE_OBJECT =
   "--wallet-address and one of (--object-key | --name [--latest|--at])";
 const BOOLEAN_SELECTOR_FLAGS = new Set(["latest"]);
 const BOOLEAN_ASYNC_FLAGS = new Set(["async"]);
+const BOOLEAN_OP_STATUS_FLAGS = new Set(["cancel"]);
 const BOOLEAN_SELECTOR_AND_ASYNC_FLAGS = new Set(["latest", "async"]);
+const ORCHESTRATOR_MODES = new Set(["inline", "subagent"]);
 
 /**
  * Expands a leading ~ to the current user's home directory.
@@ -97,26 +99,51 @@ const CLOUD_HELP_TEXT = [
   "",
   "• `/mnemospark_cloud` or `/mnemospark_cloud help` — show this message",
   "",
-  "• `/mnemospark_cloud backup <file>` or `/mnemospark_cloud backup <directory> [--name <friendly-name>]`",
-  "  Required: <file> or <directory> (path to back up)",
+  "• `/mnemospark_cloud backup <file|directory> [--name <friendly-name>] [--async] [--orchestrator <inline|subagent>] [--timeout-seconds <n>]`",
+  "  Purpose: create a local tar+gzip backup object and index it for later upload.",
+  "  Required: <file|directory>",
   "",
   "• `/mnemospark_cloud price-storage --wallet-address <addr> --object-id <id> --object-id-hash <hash> --gb <gb> --provider <provider> --region <region>`",
+  "  Purpose: request a storage quote before upload.",
   "  Required: " + REQUIRED_PRICE_STORAGE,
   "",
-  "• `/mnemospark_cloud upload --quote-id <quote-id> --wallet-address <addr> --object-id <id> --object-id-hash <hash> [--name <friendly-name>] [--async]`",
+  "• `/mnemospark_cloud upload --quote-id <quote-id> --wallet-address <addr> --object-id <id> --object-id-hash <hash> [--name <friendly-name>] [--async] [--orchestrator <inline|subagent>] [--timeout-seconds <n>]`",
+  "  Purpose: upload an encrypted object using a valid quote-id.",
   "  Required: " + REQUIRED_UPLOAD,
   "",
   "• `/mnemospark_cloud ls --wallet-address <addr> [--object-key <object-key> | --name <friendly-name>] [--latest|--at <timestamp>]`",
+  "  Purpose: look up remote object metadata.",
   "  Required: " + REQUIRED_STORAGE_OBJECT,
   "",
-  "• `/mnemospark_cloud download --wallet-address <addr> [--object-key <object-key> | --name <friendly-name>] [--latest|--at <timestamp>] [--async]`",
+  "• `/mnemospark_cloud download --wallet-address <addr> [--object-key <object-key> | --name <friendly-name>] [--latest|--at <timestamp>] [--async] [--orchestrator <inline|subagent>] [--timeout-seconds <n>]`",
+  "  Purpose: fetch an object to local disk.",
   "  Required: " + REQUIRED_STORAGE_OBJECT,
   "",
   "• `/mnemospark_cloud delete --wallet-address <addr> [--object-key <object-key> | --name <friendly-name>] [--latest|--at <timestamp>]`",
+  "  Purpose: remove a remote object and local cron tracking when present.",
   "  Required: " + REQUIRED_STORAGE_OBJECT,
   "",
-  "• `/mnemospark_cloud op-status --operation-id <id>`",
+  "• `/mnemospark_cloud op-status --operation-id <id> [--cancel]`",
+  "  Purpose: inspect async operation status, or request cancellation for subagent runs.",
   "  Required: --operation-id",
+  "",
+  "Async orchestration flags (`backup`, `upload`, `download` only):",
+  "• `--async`",
+  "  Start operation in background and return quickly with operation-id.",
+  "• `--orchestrator <inline|subagent>`",
+  "  Choose async engine. Default when omitted is `inline`.",
+  "  Use `subagent` for explicit subagent session tracking and cancellation.",
+  "• `--timeout-seconds <n>`",
+  "  Optional per-operation timeout. Valid only with `--async --orchestrator subagent`.",
+  "  `n` must be a positive integer (seconds).",
+  "• `op-status --cancel`",
+  "  Cancel a subagent-orchestrated operation by operation-id (idempotent).",
+  "",
+  "Examples:",
+  "• `/mnemospark_cloud upload ... --async --orchestrator subagent`",
+  "• `/mnemospark_cloud download ... --async --orchestrator subagent --timeout-seconds 900`",
+  "• `/mnemospark_cloud op-status --operation-id <id>`",
+  "• `/mnemospark_cloud op-status --operation-id <id> --cancel`",
   "",
   "Backup creates a tar+gzip object in ~/.openclaw/mnemospark/backup and appends object metadata to ~/.openclaw/mnemospark/object.log. Upload appends storage rows and cron-tracking rows to object.log, and keeps job entries in ~/.openclaw/mnemospark/crontab.txt. All storage commands (price-storage, upload, ls, download, delete) require --wallet-address.",
 ].join("\n");
@@ -151,26 +178,89 @@ type NameSelector = { name: string; latest?: boolean; at?: string };
 type StorageObjectRequestInput = Omit<StorageObjectRequest, "object_key"> & {
   object_key?: string;
 };
+type OrchestratorMode = "inline" | "subagent";
+type AsyncOperationArgs = {
+  async?: boolean;
+  orchestrator?: OrchestratorMode;
+  timeoutSeconds?: number;
+};
+
+type MnemosparkSubagentTaskV1 = {
+  schema: "mnemospark.subagent-task.v1";
+  operationId: string;
+  traceId: string;
+  command: "upload" | "download" | "backup";
+  args: string;
+  timeoutSeconds?: number;
+  requestedBy: {
+    pluginCommand: "mnemospark_cloud";
+    chatId?: string;
+    senderId?: string;
+  };
+};
+
+type MnemosparkSubagentDispatchHooks = {
+  onRunning?: (sessionId: string) => Promise<void> | void;
+  onProgress?: (sessionId: string, message: string) => Promise<void> | void;
+  onCompleted?: (
+    sessionId: string,
+    result: { text: string; isError?: boolean },
+  ) => Promise<void> | void;
+  onFailed?: (
+    sessionId: string,
+    details: { code: string; message: string },
+  ) => Promise<void> | void;
+  onCancelled?: (sessionId: string, reason?: string) => Promise<void> | void;
+  onTimedOut?: (sessionId: string) => Promise<void> | void;
+};
+
+type MnemosparkSubagentDispatchInput = {
+  task: MnemosparkSubagentTaskV1;
+  timeoutSeconds?: number;
+  runTask: () => Promise<{ text: string; isError?: boolean }>;
+  hooks?: MnemosparkSubagentDispatchHooks;
+};
+
+type MnemosparkSubagentDispatchResult = {
+  sessionId: string;
+};
+
+type MnemosparkSubagentCancelResult = {
+  accepted: boolean;
+  alreadyTerminal?: boolean;
+};
+
+type MnemosparkSubagentOrchestrator = {
+  dispatch: (input: MnemosparkSubagentDispatchInput) => Promise<MnemosparkSubagentDispatchResult>;
+  cancel: (sessionId: string, reason?: string) => Promise<MnemosparkSubagentCancelResult>;
+};
 
 type ParsedCloudArgs =
   | { mode: "help" }
-  | { mode: "backup"; backupTarget: string; friendlyName?: string }
+  | ({ mode: "backup"; backupTarget: string; friendlyName?: string } & AsyncOperationArgs)
+  | { mode: "backup-invalid" }
+  | { mode: "backup-invalid-async" }
   | { mode: "price-storage"; priceStorageRequest: PriceStorageQuoteRequest }
   | { mode: "price-storage-invalid" }
-  | { mode: "upload"; uploadRequest: UploadCommandRequest; friendlyName?: string; async?: boolean }
+  | ({
+      mode: "upload";
+      uploadRequest: UploadCommandRequest;
+      friendlyName?: string;
+    } & AsyncOperationArgs)
   | { mode: "upload-invalid" }
+  | { mode: "upload-invalid-async" }
   | { mode: "ls"; storageObjectRequest: StorageObjectRequestInput; nameSelector?: NameSelector }
   | { mode: "ls-invalid" }
-  | {
+  | ({
       mode: "download";
       storageObjectRequest: StorageObjectRequestInput;
       nameSelector?: NameSelector;
-      async?: boolean;
-    }
+    } & AsyncOperationArgs)
   | { mode: "download-invalid" }
+  | { mode: "download-invalid-async" }
   | { mode: "delete"; storageObjectRequest: StorageObjectRequestInput; nameSelector?: NameSelector }
   | { mode: "delete-invalid" }
-  | { mode: "op-status"; operationId: string }
+  | { mode: "op-status"; operationId: string; cancel?: boolean }
   | { mode: "op-status-invalid" }
   | { mode: "unknown" };
 
@@ -212,6 +302,7 @@ type CreateCloudCommandOptions = {
     request: StorageObjectRequest,
     options?: ProxyStorageOptions,
   ) => Promise<StorageDeleteResponse>;
+  subagentOrchestrator?: MnemosparkSubagentOrchestrator;
   proxyStorageOptions?: ProxyStorageOptions;
   objectLogHomeDir?: string;
 };
@@ -329,9 +420,81 @@ function parseStorageObjectRequestInput(
   });
 }
 
-function stripAsyncFlag(args?: string): string {
+function parseOrchestratorMode(value?: string): OrchestratorMode | undefined | null {
+  if (!value) {
+    return undefined;
+  }
+  const normalized = value.trim().toLowerCase();
+  if (!normalized) {
+    return null;
+  }
+  if (!ORCHESTRATOR_MODES.has(normalized)) {
+    return null;
+  }
+  return normalized as OrchestratorMode;
+}
+
+function parseTimeoutSeconds(value?: string): number | undefined | null {
+  if (!value) {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  if (!/^\d+$/.test(trimmed)) {
+    return null;
+  }
+  const parsed = Number.parseInt(trimmed, 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return null;
+  }
+  return parsed;
+}
+
+function parseAsyncOperationArgs(flags: Record<string, string>): AsyncOperationArgs | null {
+  const asyncRequested = flags.async === "true";
+  const hasOrchestratorFlag = typeof flags.orchestrator === "string";
+  const hasTimeoutFlag = typeof flags["timeout-seconds"] === "string";
+
+  if (!asyncRequested && (hasOrchestratorFlag || hasTimeoutFlag)) {
+    return null;
+  }
+
+  const parsedOrchestrator = parseOrchestratorMode(flags.orchestrator);
+  if (parsedOrchestrator === null) {
+    return null;
+  }
+  const parsedTimeoutSeconds = parseTimeoutSeconds(flags["timeout-seconds"]);
+  if (parsedTimeoutSeconds === null) {
+    return null;
+  }
+  if (typeof parsedTimeoutSeconds === "number" && (parsedOrchestrator ?? "inline") !== "subagent") {
+    return null;
+  }
+
+  return {
+    async: asyncRequested,
+    orchestrator: parsedOrchestrator === undefined ? undefined : parsedOrchestrator,
+    timeoutSeconds: parsedTimeoutSeconds === undefined ? undefined : parsedTimeoutSeconds,
+  };
+}
+
+const INVALID_ASYNC_FLAGS_MESSAGE =
+  "invalid async flags. `--orchestrator`/`--timeout-seconds` require `--async`, and `--timeout-seconds` is only valid with `--orchestrator subagent`.";
+
+function stripAsyncControlFlags(args?: string): string {
   const tokens = tokenizeArgsRaw(args ?? "");
-  const filtered = tokens.filter((token) => token.toLowerCase() !== "--async");
+  const filtered: string[] = [];
+  for (let idx = 0; idx < tokens.length; idx += 1) {
+    const token = tokens[idx];
+    const lowerToken = token.toLowerCase();
+    if (lowerToken === "--async") {
+      continue;
+    }
+    if (lowerToken === "--orchestrator" || lowerToken === "--timeout-seconds") {
+      idx += 1;
+      continue;
+    }
+    filtered.push(token);
+  }
   return filtered.join(" ");
 }
 
@@ -358,8 +521,24 @@ function parseCloudArgs(args?: string): ParsedCloudArgs {
     if (!backupTarget) {
       return { mode: "unknown" };
     }
-    const flags = parseNamedFlagsTokens(tokens.slice(1));
-    return { mode: "backup", backupTarget, friendlyName: flags?.name?.trim() || undefined };
+    const remainingTokens = tokens.slice(1);
+    const flags =
+      remainingTokens.length === 0
+        ? ({} as Record<string, string>)
+        : parseNamedFlagsTokens(remainingTokens, BOOLEAN_ASYNC_FLAGS);
+    if (!flags) {
+      return { mode: "backup-invalid" };
+    }
+    const asyncArgs = parseAsyncOperationArgs(flags);
+    if (!asyncArgs) {
+      return { mode: "backup-invalid-async" };
+    }
+    return {
+      mode: "backup",
+      backupTarget,
+      friendlyName: flags.name?.trim() || undefined,
+      ...asyncArgs,
+    };
   }
 
   if (subcommand === "price-storage") {
@@ -387,6 +566,10 @@ function parseCloudArgs(args?: string): ParsedCloudArgs {
     if (!flags) {
       return { mode: "upload-invalid" };
     }
+    const asyncArgs = parseAsyncOperationArgs(flags);
+    if (!asyncArgs) {
+      return { mode: "upload-invalid-async" };
+    }
 
     const quoteId = flags["quote-id"]?.trim();
     const walletAddress = flags["wallet-address"]?.trim();
@@ -400,7 +583,7 @@ function parseCloudArgs(args?: string): ParsedCloudArgs {
     return {
       mode: "upload",
       friendlyName: flags.name?.trim() || undefined,
-      async: flags.async === "true",
+      ...asyncArgs,
       uploadRequest: {
         quote_id: quoteId,
         wallet_address: walletAddress,
@@ -431,6 +614,10 @@ function parseCloudArgs(args?: string): ParsedCloudArgs {
     if (!flags) {
       return { mode: "download-invalid" };
     }
+    const asyncArgs = parseAsyncOperationArgs(flags);
+    if (!asyncArgs) {
+      return { mode: "download-invalid-async" };
+    }
     const selector = parseObjectSelector(flags);
     if (!selector) {
       return { mode: "download-invalid" };
@@ -443,7 +630,7 @@ function parseCloudArgs(args?: string): ParsedCloudArgs {
       mode: "download",
       storageObjectRequest: request,
       nameSelector: selector.nameSelector,
-      async: flags.async === "true",
+      ...asyncArgs,
     };
   }
 
@@ -464,12 +651,12 @@ function parseCloudArgs(args?: string): ParsedCloudArgs {
   }
 
   if (subcommand === "op-status") {
-    const flags = parseNamedFlags(rest);
+    const flags = parseNamedFlags(rest, BOOLEAN_OP_STATUS_FLAGS);
     const operationId = flags?.["operation-id"]?.trim();
     if (!operationId) {
       return { mode: "op-status-invalid" };
     }
-    return { mode: "op-status", operationId };
+    return { mode: "op-status", operationId, cancel: flags?.cancel === "true" };
   }
 
   return { mode: "unknown" };
@@ -1284,9 +1471,125 @@ function formatStorageLsUserMessage(result: StorageLsResponse, requestedObjectKe
   return `${objectId} with ${requestedObjectKey} is ${result.size_bytes} in ${result.bucket}`;
 }
 
+function createInProcessSubagentOrchestrator(): MnemosparkSubagentOrchestrator {
+  type SessionState = {
+    terminal: boolean;
+    cancelRequested: boolean;
+    timeoutHandle?: NodeJS.Timeout;
+    hooks?: MnemosparkSubagentDispatchHooks;
+  };
+
+  const sessions = new Map<string, SessionState>();
+
+  const completeSession = async (
+    sessionId: string,
+    handler: (hooks?: MnemosparkSubagentDispatchHooks) => Promise<void> | void,
+  ): Promise<boolean> => {
+    const session = sessions.get(sessionId);
+    if (!session || session.terminal) {
+      return false;
+    }
+    session.terminal = true;
+    if (session.timeoutHandle) {
+      clearTimeout(session.timeoutHandle);
+    }
+    sessions.delete(sessionId);
+    await handler(session.hooks);
+    return true;
+  };
+
+  return {
+    dispatch: async (input) => {
+      const sessionId = `agent:mnemospark:subagent:${randomUUID()}`;
+      const state: SessionState = {
+        terminal: false,
+        cancelRequested: false,
+        hooks: input.hooks,
+      };
+      sessions.set(sessionId, state);
+
+      if (typeof input.timeoutSeconds === "number" && input.timeoutSeconds > 0) {
+        state.timeoutHandle = setTimeout(() => {
+          void completeSession(sessionId, async (hooks) => {
+            await hooks?.onTimedOut?.(sessionId);
+          });
+        }, input.timeoutSeconds * 1000);
+      }
+
+      setTimeout(() => {
+        void (async () => {
+          try {
+            await input.hooks?.onRunning?.(sessionId);
+            await input.hooks?.onProgress?.(sessionId, "subagent execution started");
+            const result = await input.runTask();
+            const session = sessions.get(sessionId);
+            if (!session || session.terminal) {
+              return;
+            }
+            if (session.cancelRequested) {
+              await completeSession(sessionId, async (hooks) => {
+                await hooks?.onCancelled?.(sessionId, "cancel requested");
+              });
+              return;
+            }
+            if (result.isError) {
+              await completeSession(sessionId, async (hooks) => {
+                await hooks?.onFailed?.(sessionId, {
+                  code: "ASYNC_FAILED",
+                  message: result.text,
+                });
+              });
+              return;
+            }
+            await completeSession(sessionId, async (hooks) => {
+              await hooks?.onCompleted?.(sessionId, result);
+            });
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            const session = sessions.get(sessionId);
+            if (!session || session.terminal) {
+              return;
+            }
+            if (session.cancelRequested) {
+              await completeSession(sessionId, async (hooks) => {
+                await hooks?.onCancelled?.(sessionId, "cancel requested");
+              });
+              return;
+            }
+            await completeSession(sessionId, async (hooks) => {
+              await hooks?.onFailed?.(sessionId, {
+                code: "ASYNC_EXCEPTION",
+                message,
+              });
+            });
+          }
+        })();
+      }, 0);
+
+      return { sessionId };
+    },
+    cancel: async (sessionId, reason) => {
+      const session = sessions.get(sessionId);
+      if (!session) {
+        return { accepted: false };
+      }
+      if (session.terminal) {
+        return { accepted: false, alreadyTerminal: true };
+      }
+      session.cancelRequested = true;
+      await completeSession(sessionId, async (hooks) => {
+        await hooks?.onCancelled?.(sessionId, reason ?? "cancel requested");
+      });
+      return { accepted: true };
+    },
+  };
+}
+
 export function createCloudCommand(
   options: CreateCloudCommandOptions = {},
 ): OpenClawPluginCommandDefinition {
+  const subagentOrchestrator =
+    options.subagentOrchestrator ?? createInProcessSubagentOrchestrator();
   return {
     name: "mnemospark_cloud",
     nativeNames: {
@@ -1318,6 +1621,7 @@ export function createCloudCommand(
           proxyQuoteOptions: options.proxyQuoteOptions,
           proxyUploadOptions: options.proxyUploadOptions,
           proxyUploadConfirmOptions: options.proxyUploadConfirmOptions,
+          subagentOrchestrator,
           proxyStorageOptions: options.proxyStorageOptions,
         });
       } catch (outerError) {
@@ -1353,6 +1657,7 @@ type RunCloudCommandHandlerOptions = {
   proxyQuoteOptions: CreateCloudCommandOptions["proxyQuoteOptions"];
   proxyUploadOptions: CreateCloudCommandOptions["proxyUploadOptions"];
   proxyUploadConfirmOptions: CreateCloudCommandOptions["proxyUploadConfirmOptions"];
+  subagentOrchestrator: MnemosparkSubagentOrchestrator;
   proxyStorageOptions: CreateCloudCommandOptions["proxyStorageOptions"];
 };
 
@@ -1525,6 +1830,69 @@ async function emitCloudEventBestEffort(
   }
 }
 
+type OperationEventContext = {
+  operationId: string;
+  traceId: string;
+  status: string;
+  walletAddress?: string | null;
+  objectId?: string | null;
+  objectKey?: string | null;
+  quoteId?: string | null;
+  orchestrator?: OrchestratorMode | null;
+  subagentSessionId?: string | null;
+  timeoutSeconds?: number | null;
+  errorCode?: string | null;
+  errorMessage?: string | null;
+  progressMessage?: string | null;
+};
+
+function toOperationEventPayload(
+  eventType: string,
+  context: OperationEventContext,
+): Record<string, unknown> {
+  return {
+    operation_id: context.operationId,
+    trace_id: context.traceId,
+    event_type: eventType,
+    status: context.status,
+    ts: new Date().toISOString(),
+    wallet_address: context.walletAddress ?? undefined,
+    object_id: context.objectId ?? undefined,
+    object_key: context.objectKey ?? undefined,
+    quote_id: context.quoteId ?? undefined,
+    orchestrator: context.orchestrator ?? undefined,
+    "subagent-session-id": context.subagentSessionId ?? undefined,
+    "timeout-seconds": context.timeoutSeconds ?? undefined,
+    "error-code": context.errorCode ?? undefined,
+    "error-message": context.errorMessage ?? undefined,
+    progress: context.progressMessage ?? undefined,
+  };
+}
+
+async function emitOperationEvent(
+  eventType: string,
+  context: OperationEventContext,
+  homeDir?: string,
+): Promise<void> {
+  const payload = toOperationEventPayload(eventType, context);
+  await Promise.all([
+    appendJsonlEvent("events.jsonl", payload, homeDir),
+    appendJsonlEvent("proxy-events.jsonl", payload, homeDir),
+  ]);
+}
+
+async function emitOperationEventBestEffort(
+  eventType: string,
+  context: OperationEventContext,
+  homeDir?: string,
+): Promise<void> {
+  try {
+    await emitOperationEvent(eventType, context, homeDir);
+  } catch {
+    // Operation event logging is best-effort only.
+  }
+}
+
 function buildRequestCorrelation(
   forcedOperationId?: string,
   forcedTraceId?: string,
@@ -1535,7 +1903,7 @@ function buildRequestCorrelation(
 }
 
 async function runCloudCommandHandler(
-  ctx: { args?: string },
+  ctx: { args?: string; channel?: string; senderId?: string },
   options: RunCloudCommandHandlerOptions,
   executionContext: RunCloudCommandExecutionContext = {},
 ): Promise<{ text: string; isError?: boolean }> {
@@ -1553,6 +1921,7 @@ async function runCloudCommandHandler(
   const requestStorageLs = options.requestStorageLsFn;
   const requestStorageDownload = options.requestStorageDownloadFn;
   const requestStorageDelete = options.requestStorageDeleteFn;
+  const subagentOrchestrator = options.subagentOrchestrator;
 
   if (parsed.mode === "help" || parsed.mode === "unknown") {
     return {
@@ -1568,9 +1937,30 @@ async function runCloudCommandHandler(
     };
   }
 
+  if (parsed.mode === "backup-invalid") {
+    return {
+      text: "Cannot build storage object",
+      isError: true,
+    };
+  }
+
+  if (parsed.mode === "backup-invalid-async") {
+    return {
+      text: `Cannot build storage object: ${INVALID_ASYNC_FLAGS_MESSAGE}`,
+      isError: true,
+    };
+  }
+
   if (parsed.mode === "upload-invalid") {
     return {
       text: `Cannot upload storage object: required arguments are ${REQUIRED_UPLOAD}.`,
+      isError: true,
+    };
+  }
+
+  if (parsed.mode === "upload-invalid-async") {
+    return {
+      text: `Cannot upload storage object: ${INVALID_ASYNC_FLAGS_MESSAGE}`,
       isError: true,
     };
   }
@@ -1585,6 +1975,13 @@ async function runCloudCommandHandler(
   if (parsed.mode === "download-invalid") {
     return {
       text: `Cannot download file: required arguments are ${REQUIRED_STORAGE_OBJECT}.`,
+      isError: true,
+    };
+  }
+
+  if (parsed.mode === "download-invalid-async") {
+    return {
+      text: `Cannot download file: ${INVALID_ASYNC_FLAGS_MESSAGE}`,
       isError: true,
     };
   }
@@ -1604,77 +2001,493 @@ async function runCloudCommandHandler(
   }
 
   const datastore = await createCloudDatastore(objectLogHomeDir);
+  const terminalOperationStatuses = new Set(["succeeded", "failed", "cancelled", "timed_out"]);
+  const isTerminalOperationStatus = (status: string): boolean =>
+    terminalOperationStatuses.has(status);
+  const formatOperationStatus = (operation: {
+    operation_id: string;
+    type: string;
+    status: string;
+    started_at: string | null;
+    finished_at: string | null;
+    orchestrator: string | null;
+    subagent_session_id: string | null;
+    timeout_seconds: number | null;
+    error_code: string | null;
+    error_message: string | null;
+  }): { text: string; isError: boolean } => ({
+    text: [
+      `operation-id: ${operation.operation_id}`,
+      `type: ${operation.type}`,
+      `status: ${operation.status}`,
+      `started-at: ${operation.started_at ?? "n/a"}`,
+      `finished-at: ${operation.finished_at ?? "n/a"}`,
+      operation.orchestrator ? `orchestrator: ${operation.orchestrator}` : null,
+      operation.subagent_session_id
+        ? `subagent-session-id: ${operation.subagent_session_id}`
+        : null,
+      operation.timeout_seconds ? `timeout-seconds: ${operation.timeout_seconds}` : null,
+      operation.error_code ? `error-code: ${operation.error_code}` : null,
+      operation.error_message ? `error-message: ${operation.error_message}` : null,
+    ]
+      .filter((v): v is string => Boolean(v))
+      .join("\n"),
+    isError:
+      operation.status === "failed" ||
+      operation.status === "cancelled" ||
+      operation.status === "timed_out",
+  });
 
   if (parsed.mode === "op-status") {
-    const operation = await datastore.findOperationById(parsed.operationId);
+    let operation = await datastore.findOperationById(parsed.operationId);
     if (!operation) {
       return {
         text: `Operation not found: ${parsed.operationId}`,
         isError: true,
       };
     }
-    return {
-      text: [
-        `operation-id: ${operation.operation_id}`,
-        `type: ${operation.type}`,
-        `status: ${operation.status}`,
-        `started-at: ${operation.started_at ?? "n/a"}`,
-        `finished-at: ${operation.finished_at ?? "n/a"}`,
-        operation.error_code ? `error-code: ${operation.error_code}` : null,
-        operation.error_message ? `error-message: ${operation.error_message}` : null,
-      ]
-        .filter((v): v is string => Boolean(v))
-        .join("\n"),
-      isError: operation.status === "failed",
-    };
+
+    if (parsed.cancel) {
+      if (operation.orchestrator !== "subagent" || !operation.subagent_session_id) {
+        return {
+          text: "Cancellation is only supported for subagent-orchestrated operations.",
+          isError: true,
+        };
+      }
+      if (!isTerminalOperationStatus(operation.status)) {
+        const traceId = operation.trace_id ?? randomUUID();
+        const cancelRequestedAt = new Date().toISOString();
+        await datastore.upsertOperation({
+          operation_id: operation.operation_id,
+          type: operation.type,
+          object_id: operation.object_id,
+          quote_id: operation.quote_id,
+          trace_id: traceId,
+          orchestrator: "subagent",
+          subagent_session_id: operation.subagent_session_id,
+          timeout_seconds: operation.timeout_seconds,
+          cancel_requested_at: cancelRequestedAt,
+          status: "running",
+          error_code: null,
+          error_message: null,
+        });
+        await emitOperationEventBestEffort(
+          "operation.cancel.requested",
+          {
+            operationId: operation.operation_id,
+            traceId,
+            status: "running",
+            objectId: operation.object_id,
+            quoteId: operation.quote_id,
+            orchestrator: "subagent",
+            subagentSessionId: operation.subagent_session_id,
+            timeoutSeconds: operation.timeout_seconds,
+          },
+          objectLogHomeDir,
+        );
+
+        const cancelResult = await subagentOrchestrator.cancel(
+          operation.subagent_session_id,
+          "cancel requested by op-status",
+        );
+        if (cancelResult.accepted || cancelResult.alreadyTerminal) {
+          const afterCancel = await datastore.findOperationById(parsed.operationId);
+          if (afterCancel && !isTerminalOperationStatus(afterCancel.status)) {
+            await datastore.upsertOperation({
+              operation_id: operation.operation_id,
+              type: operation.type,
+              object_id: operation.object_id,
+              quote_id: operation.quote_id,
+              trace_id: traceId,
+              orchestrator: "subagent",
+              subagent_session_id: operation.subagent_session_id,
+              timeout_seconds: operation.timeout_seconds,
+              cancel_requested_at: cancelRequestedAt,
+              status: "cancelled",
+              error_code: "ASYNC_CANCELLED",
+              error_message: "Operation cancelled by user request.",
+            });
+            await emitOperationEventBestEffort(
+              "operation.cancelled",
+              {
+                operationId: operation.operation_id,
+                traceId,
+                status: "cancelled",
+                objectId: operation.object_id,
+                quoteId: operation.quote_id,
+                orchestrator: "subagent",
+                subagentSessionId: operation.subagent_session_id,
+                timeoutSeconds: operation.timeout_seconds,
+                errorCode: "ASYNC_CANCELLED",
+                errorMessage: "Operation cancelled by user request.",
+              },
+              objectLogHomeDir,
+            );
+          }
+        }
+      }
+      operation = await datastore.findOperationById(parsed.operationId);
+      if (!operation) {
+        return {
+          text: `Operation not found: ${parsed.operationId}`,
+          isError: true,
+        };
+      }
+    }
+    return formatOperationStatus(operation);
   }
 
-  if ((parsed.mode === "upload" || parsed.mode === "download") && parsed.async) {
+  if (
+    (parsed.mode === "backup" || parsed.mode === "upload" || parsed.mode === "download") &&
+    parsed.async
+  ) {
     const asyncCorrelation = buildRequestCorrelation();
     const operationId = asyncCorrelation.operationId;
     const opType = parsed.mode;
     const opObject = parsed.mode === "upload" ? parsed.uploadRequest.object_id : null;
     const opQuote = parsed.mode === "upload" ? parsed.uploadRequest.quote_id : null;
+    const orchestratorMode = parsed.orchestrator ?? "inline";
+    const timeoutSeconds = orchestratorMode === "subagent" ? (parsed.timeoutSeconds ?? null) : null;
+    const eventContextBase: Omit<OperationEventContext, "status"> = {
+      operationId,
+      traceId: asyncCorrelation.traceId,
+      walletAddress:
+        parsed.mode === "upload"
+          ? parsed.uploadRequest.wallet_address
+          : parsed.mode === "download"
+            ? parsed.storageObjectRequest.wallet_address
+            : null,
+      objectId: opObject,
+      objectKey:
+        parsed.mode === "download" ? (parsed.storageObjectRequest.object_key ?? null) : null,
+      quoteId: opQuote,
+      orchestrator: orchestratorMode,
+      timeoutSeconds,
+    };
     await datastore.upsertOperation({
       operation_id: operationId,
       type: opType,
       object_id: opObject,
       quote_id: opQuote,
+      trace_id: asyncCorrelation.traceId,
+      orchestrator: orchestratorMode,
+      timeout_seconds: timeoutSeconds,
       status: "started",
       error_code: null,
       error_message: null,
     });
 
-    const syncArgs = stripAsyncFlag(ctx.args);
-    void runCloudCommandHandler({ args: syncArgs }, options, {
-      forcedOperationId: asyncCorrelation.operationId,
-      forcedTraceId: asyncCorrelation.traceId,
-    })
+    await emitOperationEventBestEffort(
+      "operation.dispatched",
+      { ...eventContextBase, status: "started" },
+      objectLogHomeDir,
+    );
+
+    const syncArgs = stripAsyncControlFlags(ctx.args);
+    if (orchestratorMode === "subagent") {
+      const subagentTask: MnemosparkSubagentTaskV1 = {
+        schema: "mnemospark.subagent-task.v1",
+        operationId,
+        traceId: asyncCorrelation.traceId,
+        command: parsed.mode,
+        args: syncArgs,
+        timeoutSeconds: parsed.timeoutSeconds,
+        requestedBy: {
+          pluginCommand: "mnemospark_cloud",
+          chatId: ctx.channel,
+          senderId: ctx.senderId,
+        },
+      };
+      try {
+        const dispatchResult = await subagentOrchestrator.dispatch({
+          task: subagentTask,
+          timeoutSeconds: parsed.timeoutSeconds,
+          runTask: async () =>
+            runCloudCommandHandler(
+              { args: syncArgs, channel: ctx.channel, senderId: ctx.senderId },
+              options,
+              {
+                forcedOperationId: asyncCorrelation.operationId,
+                forcedTraceId: asyncCorrelation.traceId,
+              },
+            ),
+          hooks: {
+            onRunning: async (sessionId) => {
+              await datastore.upsertOperation({
+                operation_id: operationId,
+                type: opType,
+                object_id: opObject,
+                quote_id: opQuote,
+                trace_id: asyncCorrelation.traceId,
+                orchestrator: "subagent",
+                subagent_session_id: sessionId,
+                timeout_seconds: timeoutSeconds,
+                status: "running",
+                error_code: null,
+                error_message: null,
+              });
+              await emitOperationEventBestEffort(
+                "operation.progress",
+                {
+                  ...eventContextBase,
+                  status: "running",
+                  subagentSessionId: sessionId,
+                  progressMessage: "subagent running",
+                },
+                objectLogHomeDir,
+              );
+            },
+            onProgress: async (sessionId, message) => {
+              await emitOperationEventBestEffort(
+                "operation.progress",
+                {
+                  ...eventContextBase,
+                  status: "running",
+                  subagentSessionId: sessionId,
+                  progressMessage: message,
+                },
+                objectLogHomeDir,
+              );
+            },
+            onCompleted: async (sessionId) => {
+              await datastore.upsertOperation({
+                operation_id: operationId,
+                type: opType,
+                object_id: opObject,
+                quote_id: opQuote,
+                trace_id: asyncCorrelation.traceId,
+                orchestrator: "subagent",
+                subagent_session_id: sessionId,
+                timeout_seconds: timeoutSeconds,
+                status: "succeeded",
+                error_code: null,
+                error_message: null,
+              });
+              await emitOperationEventBestEffort(
+                "operation.completed",
+                {
+                  ...eventContextBase,
+                  status: "succeeded",
+                  subagentSessionId: sessionId,
+                },
+                objectLogHomeDir,
+              );
+            },
+            onFailed: async (sessionId, details) => {
+              await datastore.upsertOperation({
+                operation_id: operationId,
+                type: opType,
+                object_id: opObject,
+                quote_id: opQuote,
+                trace_id: asyncCorrelation.traceId,
+                orchestrator: "subagent",
+                subagent_session_id: sessionId,
+                timeout_seconds: timeoutSeconds,
+                status: "failed",
+                error_code: details.code,
+                error_message: details.message,
+              });
+              await emitOperationEventBestEffort(
+                "operation.completed",
+                {
+                  ...eventContextBase,
+                  status: "failed",
+                  subagentSessionId: sessionId,
+                  errorCode: details.code,
+                  errorMessage: details.message,
+                },
+                objectLogHomeDir,
+              );
+            },
+            onCancelled: async (sessionId, reason) => {
+              await datastore.upsertOperation({
+                operation_id: operationId,
+                type: opType,
+                object_id: opObject,
+                quote_id: opQuote,
+                trace_id: asyncCorrelation.traceId,
+                orchestrator: "subagent",
+                subagent_session_id: sessionId,
+                timeout_seconds: timeoutSeconds,
+                cancel_requested_at: new Date().toISOString(),
+                status: "cancelled",
+                error_code: "ASYNC_CANCELLED",
+                error_message: reason ?? "Operation cancelled.",
+              });
+              await emitOperationEventBestEffort(
+                "operation.cancelled",
+                {
+                  ...eventContextBase,
+                  status: "cancelled",
+                  subagentSessionId: sessionId,
+                  errorCode: "ASYNC_CANCELLED",
+                  errorMessage: reason ?? "Operation cancelled.",
+                },
+                objectLogHomeDir,
+              );
+            },
+            onTimedOut: async (sessionId) => {
+              await datastore.upsertOperation({
+                operation_id: operationId,
+                type: opType,
+                object_id: opObject,
+                quote_id: opQuote,
+                trace_id: asyncCorrelation.traceId,
+                orchestrator: "subagent",
+                subagent_session_id: sessionId,
+                timeout_seconds: timeoutSeconds,
+                status: "timed_out",
+                error_code: "ASYNC_TIMEOUT",
+                error_message: "Operation timed out.",
+              });
+              await emitOperationEventBestEffort(
+                "operation.timed_out",
+                {
+                  ...eventContextBase,
+                  status: "timed_out",
+                  subagentSessionId: sessionId,
+                  errorCode: "ASYNC_TIMEOUT",
+                  errorMessage: "Operation timed out.",
+                },
+                objectLogHomeDir,
+              );
+            },
+          },
+        });
+
+        const operationAfterDispatch = await datastore.findOperationById(operationId);
+        if (operationAfterDispatch?.subagent_session_id !== dispatchResult.sessionId) {
+          await datastore.upsertOperation({
+            operation_id: operationId,
+            type: opType,
+            object_id: opObject,
+            quote_id: opQuote,
+            trace_id: asyncCorrelation.traceId,
+            orchestrator: "subagent",
+            subagent_session_id: dispatchResult.sessionId,
+            timeout_seconds: timeoutSeconds,
+            status: operationAfterDispatch?.status ?? "started",
+            error_code: operationAfterDispatch?.error_code ?? null,
+            error_message: operationAfterDispatch?.error_message ?? null,
+          });
+        }
+
+        return {
+          text: [
+            `Operation started in background. operation-id: ${operationId}`,
+            `orchestrator: subagent`,
+            `subagent-session-id: ${dispatchResult.sessionId}`,
+            timeoutSeconds ? `timeout-seconds: ${timeoutSeconds}` : null,
+            `Use /mnemospark_cloud op-status --operation-id ${operationId}`,
+          ]
+            .filter((line): line is string => Boolean(line))
+            .join("\n"),
+        };
+      } catch (dispatchError) {
+        const dispatchMessage =
+          dispatchError instanceof Error ? dispatchError.message : String(dispatchError);
+        await datastore.upsertOperation({
+          operation_id: operationId,
+          type: opType,
+          object_id: opObject,
+          quote_id: opQuote,
+          trace_id: asyncCorrelation.traceId,
+          orchestrator: "subagent",
+          timeout_seconds: timeoutSeconds,
+          status: "failed",
+          error_code: "ASYNC_DISPATCH_FAILED",
+          error_message: dispatchMessage,
+        });
+        await emitOperationEventBestEffort(
+          "operation.completed",
+          {
+            ...eventContextBase,
+            status: "failed",
+            errorCode: "ASYNC_DISPATCH_FAILED",
+            errorMessage: dispatchMessage,
+          },
+          objectLogHomeDir,
+        );
+        return {
+          text: `Cannot dispatch subagent operation: ${dispatchMessage}\noperation-id: ${operationId}`,
+          isError: true,
+        };
+      }
+    }
+
+    await datastore.upsertOperation({
+      operation_id: operationId,
+      type: opType,
+      object_id: opObject,
+      quote_id: opQuote,
+      trace_id: asyncCorrelation.traceId,
+      orchestrator: "inline",
+      status: "running",
+      error_code: null,
+      error_message: null,
+    });
+    void runCloudCommandHandler(
+      { args: syncArgs, channel: ctx.channel, senderId: ctx.senderId },
+      options,
+      {
+        forcedOperationId: asyncCorrelation.operationId,
+        forcedTraceId: asyncCorrelation.traceId,
+      },
+    )
       .then(async (result) => {
         await datastore.upsertOperation({
           operation_id: operationId,
           type: opType,
           object_id: opObject,
           quote_id: opQuote,
+          trace_id: asyncCorrelation.traceId,
+          orchestrator: "inline",
           status: result.isError ? "failed" : "succeeded",
           error_code: result.isError ? "ASYNC_FAILED" : null,
           error_message: result.isError ? result.text : null,
         });
+        await emitOperationEventBestEffort(
+          "operation.completed",
+          {
+            ...eventContextBase,
+            status: result.isError ? "failed" : "succeeded",
+            errorCode: result.isError ? "ASYNC_FAILED" : null,
+            errorMessage: result.isError ? result.text : null,
+          },
+          objectLogHomeDir,
+        );
       })
       .catch(async (err) => {
+        const errorMessage = err instanceof Error ? err.message : String(err);
         await datastore.upsertOperation({
           operation_id: operationId,
           type: opType,
           object_id: opObject,
           quote_id: opQuote,
+          trace_id: asyncCorrelation.traceId,
+          orchestrator: "inline",
           status: "failed",
           error_code: "ASYNC_EXCEPTION",
-          error_message: err instanceof Error ? err.message : String(err),
+          error_message: errorMessage,
         });
+        await emitOperationEventBestEffort(
+          "operation.completed",
+          {
+            ...eventContextBase,
+            status: "failed",
+            errorCode: "ASYNC_EXCEPTION",
+            errorMessage,
+          },
+          objectLogHomeDir,
+        );
       });
 
     return {
-      text: `Operation started in background. operation-id: ${operationId}\nUse /mnemospark_cloud op-status --operation-id ${operationId}`,
+      text: [
+        `Operation started in background. operation-id: ${operationId}`,
+        `orchestrator: inline`,
+        `Use /mnemospark_cloud op-status --operation-id ${operationId}`,
+      ].join("\n"),
     };
   }
 
@@ -2411,4 +3224,10 @@ async function runCloudCommandHandler(
   };
 }
 
-export type { BackupObjectOptions, BackupObjectResult, CreateCloudCommandOptions, ParsedCloudArgs };
+export type {
+  BackupObjectOptions,
+  BackupObjectResult,
+  CreateCloudCommandOptions,
+  MnemosparkSubagentTaskV1,
+  ParsedCloudArgs,
+};

@@ -7,6 +7,7 @@ import { privateKeyToAccount } from "viem/accounts";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { buildBackupObject, createCloudCommand, expandTilde } from "./cloud-command.js";
+import type { StorageDownloadProxyResponse } from "./cloud-storage.js";
 import { PaymentCache } from "./payment-cache.js";
 
 const sandboxDirs: string[] = [];
@@ -960,6 +961,30 @@ describe("cloud command", () => {
     );
   });
 
+  it("returns invalid async-flag guidance for upload", async () => {
+    const command = createCloudCommand();
+
+    const result = await command.handler({
+      channel: "test",
+      isAuthorizedSender: true,
+      args: [
+        "upload",
+        "--quote-id quote-1",
+        "--wallet-address 0x1234abcd",
+        "--object-id obj-1",
+        "--object-id-hash hash-1",
+        "--orchestrator subagent",
+      ].join(" "),
+      commandBody: "upload",
+      config: {},
+    });
+
+    expect(result.isError).toBe(true);
+    expect(result.text).toBe(
+      "Cannot upload storage object: invalid async flags. `--orchestrator`/`--timeout-seconds` require `--async`, and `--timeout-seconds` is only valid with `--orchestrator subagent`.",
+    );
+  });
+
   it("handles /mnemospark cloud ls and prints object metadata message", async () => {
     let capturedRequest: Record<string, unknown> | undefined;
     let capturedCorrelation: { operationId?: string; traceId?: string } | undefined;
@@ -1215,6 +1240,23 @@ describe("cloud command", () => {
     expect(result.text).toBe("Cannot download file");
   });
 
+  it("returns invalid async-flag guidance for download", async () => {
+    const command = createCloudCommand();
+
+    const result = await command.handler({
+      channel: "test",
+      isAuthorizedSender: true,
+      args: "download --wallet-address 0x1234abcd --object-key backup/archive.tar.gz --timeout-seconds 5",
+      commandBody: "download",
+      config: {},
+    });
+
+    expect(result.isError).toBe(true);
+    expect(result.text).toBe(
+      "Cannot download file: invalid async flags. `--orchestrator`/`--timeout-seconds` require `--async`, and `--timeout-seconds` is only valid with `--orchestrator subagent`.",
+    );
+  });
+
   it("supports async upload with operation id", async () => {
     const { homeDir } = await createSandbox();
     const command = createCloudCommand({ objectLogHomeDir: homeDir });
@@ -1263,6 +1305,359 @@ describe("cloud command", () => {
       expect(status.text).toContain(`operation-id: ${match?.[1]}`);
       expect(status.text).toContain("status:");
     }
+  });
+
+  it("supports subagent orchestration metadata and lifecycle events", async () => {
+    const { homeDir } = await createSandbox();
+    const command = createCloudCommand({
+      objectLogHomeDir: homeDir,
+      requestStorageDownloadFn: async () => ({
+        success: true,
+        key: "backup/archive.tar.gz",
+        file_path: "/tmp/backup/archive.tar.gz",
+      }),
+    });
+
+    const started = await command.handler({
+      channel: "test",
+      isAuthorizedSender: true,
+      args: [
+        "download",
+        "--wallet-address 0x1234abcd",
+        "--object-key backup/archive.tar.gz",
+        "--async",
+        "--orchestrator subagent",
+        "--timeout-seconds 5",
+      ].join(" "),
+      commandBody: "download",
+      config: {},
+    });
+
+    expect(started.isError).toBeUndefined();
+    expect(started.text).toContain("operation-id:");
+    expect(started.text).toContain("orchestrator: subagent");
+    expect(started.text).toContain("subagent-session-id:");
+    expect(started.text).toContain("timeout-seconds: 5");
+
+    const operationId = started.text?.match(/operation-id: ([0-9a-f-]+)/i)?.[1];
+    expect(operationId).toBeTruthy();
+
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    const status = await command.handler({
+      channel: "test",
+      isAuthorizedSender: true,
+      args: `op-status --operation-id ${operationId}`,
+      commandBody: "op-status",
+      config: {},
+    });
+
+    if (status.text?.startsWith("Operation not found:")) {
+      // node:sqlite may be unavailable in CI; verify fallback still references operation id.
+      expect(status.text).toContain(operationId ?? "");
+    } else {
+      expect(status.text).toContain(`operation-id: ${operationId}`);
+      expect(status.text).toContain("orchestrator: subagent");
+      expect(status.text).toContain("subagent-session-id:");
+      expect(status.text).toContain("timeout-seconds: 5");
+      expect(status.text).toContain("status: succeeded");
+    }
+
+    const eventsPath = join(homeDir, ".openclaw", "mnemospark", "events.jsonl");
+    const proxyEventsPath = join(homeDir, ".openclaw", "mnemospark", "proxy-events.jsonl");
+    const events = (await readFile(eventsPath, "utf-8"))
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    const proxyEvents = (await readFile(proxyEventsPath, "utf-8"))
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+
+    const opEvents = events.filter((event) => event.operation_id === operationId);
+    expect(opEvents.some((event) => event.event_type === "operation.dispatched")).toBe(true);
+    expect(opEvents.some((event) => event.event_type === "operation.progress")).toBe(true);
+    expect(opEvents.some((event) => event.event_type === "operation.completed")).toBe(true);
+    for (const event of opEvents) {
+      expect(typeof event.operation_id).toBe("string");
+      expect(typeof event.trace_id).toBe("string");
+      expect(typeof event.event_type).toBe("string");
+      expect(typeof event.status).toBe("string");
+      expect(typeof event.ts).toBe("string");
+    }
+
+    const proxyOpEvents = proxyEvents.filter((event) => event.operation_id === operationId);
+    expect(proxyOpEvents.length).toBeGreaterThan(0);
+  });
+
+  it("labels backup subagent tasks as backup", async () => {
+    const { homeDir } = await createSandbox();
+    let subagentCommand: string | undefined;
+    const command = createCloudCommand({
+      objectLogHomeDir: homeDir,
+      subagentOrchestrator: {
+        dispatch: async (input) => {
+          subagentCommand = input.task.command;
+          return { sessionId: "session-backup-command" };
+        },
+        cancel: async () => ({ accepted: false }),
+      },
+    });
+
+    const result = await command.handler({
+      channel: "test",
+      isAuthorizedSender: true,
+      args: "backup /tmp/source --async --orchestrator subagent",
+      commandBody: "backup",
+      config: {},
+    });
+
+    expect(result.isError).toBeUndefined();
+    expect(result.text).toContain("operation-id:");
+    expect(subagentCommand).toBe("backup");
+  });
+
+  it("does not regress operation status after subagent dispatch resolves", async () => {
+    const { homeDir } = await createSandbox();
+    const command = createCloudCommand({
+      objectLogHomeDir: homeDir,
+      subagentOrchestrator: {
+        dispatch: async (input) => {
+          const sessionId = "session-sync-hooks";
+          await input.hooks?.onRunning?.(sessionId);
+          await input.hooks?.onCompleted?.(sessionId, { text: "ok" });
+          return { sessionId };
+        },
+        cancel: async () => ({ accepted: false }),
+      },
+    });
+
+    const started = await command.handler({
+      channel: "test",
+      isAuthorizedSender: true,
+      args: [
+        "download",
+        "--wallet-address 0x1234abcd",
+        "--object-key backup/archive.tar.gz",
+        "--async",
+        "--orchestrator subagent",
+      ].join(" "),
+      commandBody: "download",
+      config: {},
+    });
+    const operationId = started.text?.match(/operation-id: ([0-9a-f-]+)/i)?.[1];
+    expect(operationId).toBeTruthy();
+
+    const status = await command.handler({
+      channel: "test",
+      isAuthorizedSender: true,
+      args: `op-status --operation-id ${operationId}`,
+      commandBody: "op-status",
+      config: {},
+    });
+
+    if (status.text?.startsWith("Operation not found:")) {
+      // node:sqlite may be unavailable in CI; verify fallback still references operation id.
+      expect(status.text).toContain(operationId ?? "");
+    } else {
+      expect(status.text).toContain("status: succeeded");
+      expect(status.text).toContain("subagent-session-id: session-sync-hooks");
+    }
+
+    const eventsPath = join(homeDir, ".openclaw", "mnemospark", "events.jsonl");
+    const events = (await readFile(eventsPath, "utf-8"))
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as Record<string, unknown>)
+      .filter((event) => event.operation_id === operationId);
+    expect(events.some((event) => event.event_type === "operation.completed")).toBe(true);
+  });
+
+  it("records dispatch failures for subagent orchestration", async () => {
+    const { homeDir } = await createSandbox();
+    const command = createCloudCommand({
+      objectLogHomeDir: homeDir,
+      subagentOrchestrator: {
+        dispatch: async () => {
+          throw new Error("subagent spawn denied");
+        },
+        cancel: async () => ({ accepted: false }),
+      },
+    });
+
+    const result = await command.handler({
+      channel: "test",
+      isAuthorizedSender: true,
+      args: [
+        "download",
+        "--wallet-address 0x1234abcd",
+        "--object-key backup/archive.tar.gz",
+        "--async",
+        "--orchestrator subagent",
+      ].join(" "),
+      commandBody: "download",
+      config: {},
+    });
+
+    expect(result.isError).toBe(true);
+    expect(result.text).toContain("Cannot dispatch subagent operation: subagent spawn denied");
+    const operationId = result.text?.match(/operation-id: ([0-9a-f-]+)/i)?.[1];
+    expect(operationId).toBeTruthy();
+
+    const status = await command.handler({
+      channel: "test",
+      isAuthorizedSender: true,
+      args: `op-status --operation-id ${operationId}`,
+      commandBody: "op-status",
+      config: {},
+    });
+    if (status.text?.startsWith("Operation not found:")) {
+      // node:sqlite may be unavailable in CI; verify fallback still references operation id.
+      expect(status.text).toContain(operationId ?? "");
+    } else {
+      expect(status.text).toContain("status: failed");
+      expect(status.text).toContain("error-code: ASYNC_DISPATCH_FAILED");
+    }
+
+    const eventsPath = join(homeDir, ".openclaw", "mnemospark", "events.jsonl");
+    const events = (await readFile(eventsPath, "utf-8"))
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as Record<string, unknown>)
+      .filter((event) => event.operation_id === operationId);
+    expect(events.some((event) => event.event_type === "operation.completed")).toBe(true);
+    expect(
+      events.some(
+        (event) =>
+          event.event_type === "operation.completed" &&
+          event["error-code"] === "ASYNC_DISPATCH_FAILED",
+      ),
+    ).toBe(true);
+  });
+
+  it("supports idempotent cancel for subagent operations", async () => {
+    const { homeDir } = await createSandbox();
+    const command = createCloudCommand({
+      objectLogHomeDir: homeDir,
+      requestStorageDownloadFn: async () =>
+        new Promise<StorageDownloadProxyResponse>(() => {
+          // Intentionally unresolved so cancel drives terminal state.
+        }),
+    });
+
+    const started = await command.handler({
+      channel: "test",
+      isAuthorizedSender: true,
+      args: [
+        "download",
+        "--wallet-address 0x1234abcd",
+        "--object-key backup/archive.tar.gz",
+        "--async",
+        "--orchestrator subagent",
+      ].join(" "),
+      commandBody: "download",
+      config: {},
+    });
+    const operationId = started.text?.match(/operation-id: ([0-9a-f-]+)/i)?.[1];
+    expect(operationId).toBeTruthy();
+
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    const cancelled = await command.handler({
+      channel: "test",
+      isAuthorizedSender: true,
+      args: `op-status --operation-id ${operationId} --cancel`,
+      commandBody: "op-status",
+      config: {},
+    });
+    if (cancelled.text?.startsWith("Operation not found:")) {
+      // node:sqlite may be unavailable in CI; verify fallback still references operation id.
+      expect(cancelled.text).toContain(operationId ?? "");
+    } else {
+      expect(cancelled.text).toContain("status: cancelled");
+      expect(cancelled.text).toContain("error-code: ASYNC_CANCELLED");
+    }
+
+    const cancelledAgain = await command.handler({
+      channel: "test",
+      isAuthorizedSender: true,
+      args: `op-status --operation-id ${operationId} --cancel`,
+      commandBody: "op-status",
+      config: {},
+    });
+    if (cancelledAgain.text?.startsWith("Operation not found:")) {
+      expect(cancelledAgain.text).toContain(operationId ?? "");
+    } else {
+      expect(cancelledAgain.text).toContain("status: cancelled");
+    }
+    expect(cancelledAgain.isError).toBe(true);
+
+    const eventsPath = join(homeDir, ".openclaw", "mnemospark", "events.jsonl");
+    const events = (await readFile(eventsPath, "utf-8"))
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as Record<string, unknown>)
+      .filter((event) => event.operation_id === operationId);
+    if (cancelled.text?.startsWith("Operation not found:")) {
+      // When SQLite is unavailable, op-status cannot resolve operation rows for cancel requests.
+      // In that mode, validate that async dispatch/progress events were still emitted.
+      expect(events.some((event) => event.event_type === "operation.dispatched")).toBe(true);
+      expect(events.some((event) => event.event_type === "operation.progress")).toBe(true);
+    } else {
+      expect(events.some((event) => event.event_type === "operation.cancel.requested")).toBe(true);
+      expect(events.some((event) => event.event_type === "operation.cancelled")).toBe(true);
+    }
+  });
+
+  it("marks timed out subagent operations with timeout error", async () => {
+    const { homeDir } = await createSandbox();
+    const command = createCloudCommand({
+      objectLogHomeDir: homeDir,
+      requestStorageDownloadFn: async () =>
+        new Promise<StorageDownloadProxyResponse>(() => {
+          // Intentionally unresolved so timeout drives terminal state.
+        }),
+    });
+
+    const started = await command.handler({
+      channel: "test",
+      isAuthorizedSender: true,
+      args: [
+        "download",
+        "--wallet-address 0x1234abcd",
+        "--object-key backup/archive.tar.gz",
+        "--async",
+        "--orchestrator subagent",
+        "--timeout-seconds 1",
+      ].join(" "),
+      commandBody: "download",
+      config: {},
+    });
+    const operationId = started.text?.match(/operation-id: ([0-9a-f-]+)/i)?.[1];
+    expect(operationId).toBeTruthy();
+
+    await new Promise((resolve) => setTimeout(resolve, 1200));
+    const status = await command.handler({
+      channel: "test",
+      isAuthorizedSender: true,
+      args: `op-status --operation-id ${operationId}`,
+      commandBody: "op-status",
+      config: {},
+    });
+
+    if (status.text?.startsWith("Operation not found:")) {
+      // node:sqlite may be unavailable in CI; verify fallback still references operation id.
+      expect(status.text).toContain(operationId ?? "");
+    } else {
+      expect(status.text).toContain("status: timed_out");
+      expect(status.text).toContain("error-code: ASYNC_TIMEOUT");
+    }
+
+    const eventsPath = join(homeDir, ".openclaw", "mnemospark", "events.jsonl");
+    const events = (await readFile(eventsPath, "utf-8"))
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as Record<string, unknown>)
+      .filter((event) => event.operation_id === operationId);
+    expect(events.some((event) => event.event_type === "operation.timed_out")).toBe(true);
   });
 
   it("returns Cannot delete file when /mnemospark cloud delete fails", async () => {
