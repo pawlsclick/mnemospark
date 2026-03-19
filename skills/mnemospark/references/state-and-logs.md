@@ -33,6 +33,46 @@ Cross-stream troubleshooting should correlate by:
 - `object_id`
 - `object_key`
 
+## Operation lifecycle status values
+
+`operations.status` values used by async orchestration:
+
+- `started`
+- `running`
+- `succeeded`
+- `failed`
+- `cancelled`
+- `timed_out`
+
+Common async terminal error codes:
+
+- `ASYNC_FAILED`
+- `ASYNC_EXCEPTION`
+- `ASYNC_CANCELLED`
+- `ASYNC_TIMEOUT`
+- `ASYNC_DISPATCH_FAILED`
+
+## Orchestration metadata in operations
+
+For async runs, `operations` may include:
+
+- `trace_id`
+- `orchestrator` (`inline` or `subagent`)
+- `subagent_session_id`
+- `timeout_seconds`
+- `cancel_requested_at`
+
+## Operation lifecycle JSONL events
+
+Operation lifecycle events emitted to `events.jsonl` and `proxy-events.jsonl`:
+
+- `operation.dispatched`
+- `operation.progress`
+- `operation.cancel.requested`
+- `operation.cancelled`
+- `operation.timed_out`
+- `operation.completed`
+
 ## Quick correlation command
 
 ```bash
