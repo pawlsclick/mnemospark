@@ -245,7 +245,10 @@ export async function createCloudDatastore(homeDir?: string): Promise<CloudDatas
     try {
       await ensureReady();
       return fn();
-    } catch {
+    } catch (error) {
+      if (process.env.MNEMOSPARK_SQLITE_STRICT === "1") {
+        throw error;
+      }
       return fallback;
     }
   };
