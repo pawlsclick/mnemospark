@@ -131,6 +131,10 @@ function nowIso(): string {
   return new Date().toISOString();
 }
 
+function normalizeWalletAddress(value: string): string {
+  return value.trim().toLowerCase();
+}
+
 export async function createCloudDatastore(homeDir?: string): Promise<CloudDatastore> {
   const dbPath = resolveDbPath(homeDir);
   type DbLike = {
@@ -248,6 +252,21 @@ export async function createCloudDatastore(homeDir?: string): Promise<CloudDatas
       CREATE INDEX IF NOT EXISTS idx_friendly_names_created_at ON friendly_names(created_at);
     `);
 
+    // Keep wallet_address canonical across tables for reliable matching/indexing.
+    nextDb.exec(`
+      UPDATE objects
+      SET wallet_address = lower(trim(wallet_address))
+      WHERE wallet_address <> lower(trim(wallet_address));
+
+      UPDATE payments
+      SET wallet_address = lower(trim(wallet_address))
+      WHERE wallet_address <> lower(trim(wallet_address));
+
+      UPDATE friendly_names
+      SET wallet_address = lower(trim(wallet_address))
+      WHERE wallet_address <> lower(trim(wallet_address));
+    `);
+
     const addOperationsColumn = (columnName: string, sqlType: string): void => {
       try {
         nextDb.exec(`ALTER TABLE operations ADD COLUMN ${columnName} ${sqlType}`);
@@ -291,6 +310,7 @@ export async function createCloudDatastore(homeDir?: string): Promise<CloudDatas
     ensureReady,
     upsertObject: async (row) => {
       await safe(() => {
+        const normalizedWalletAddress = normalizeWalletAddress(row.wallet_address);
         const ts = nowIso();
         db!
           .prepare(
@@ -310,7 +330,7 @@ export async function createCloudDatastore(homeDir?: string): Promise<CloudDatas
           .run(
             row.object_id,
             row.object_key,
-            row.wallet_address,
+            normalizedWalletAddress,
             row.quote_id,
             row.provider,
             row.bucket_name,
@@ -349,6 +369,7 @@ export async function createCloudDatastore(homeDir?: string): Promise<CloudDatas
       }, null),
     upsertPayment: async (row) => {
       await safe(() => {
+        const normalizedWalletAddress = normalizeWalletAddress(row.wallet_address);
         const ts = nowIso();
         db!
           .prepare(
@@ -365,7 +386,7 @@ export async function createCloudDatastore(homeDir?: string): Promise<CloudDatas
           )
           .run(
             row.quote_id,
-            row.wallet_address,
+            normalizedWalletAddress,
             row.trans_id,
             row.amount,
             row.network,
@@ -528,6 +549,7 @@ export async function createCloudDatastore(homeDir?: string): Promise<CloudDatas
       }, null),
     upsertFriendlyName: async (row) => {
       await safe(() => {
+        const normalizedWalletAddress = normalizeWalletAddress(row.wallet_address);
         const ts = nowIso();
         db!
           .prepare(
@@ -540,7 +562,7 @@ export async function createCloudDatastore(homeDir?: string): Promise<CloudDatas
             row.object_id,
             row.object_key,
             row.quote_id,
-            row.wallet_address,
+            normalizedWalletAddress,
             ts,
             ts,
             row.is_active ?? 1,
@@ -549,6 +571,7 @@ export async function createCloudDatastore(homeDir?: string): Promise<CloudDatas
     },
     resolveFriendlyName: async (params) =>
       safe(() => {
+        const normalizedWalletAddress = normalizeWalletAddress(params.walletAddress);
         const atIso = params.at ? new Date(params.at).toISOString() : null;
         const row =
           params.latest || !atIso
@@ -560,7 +583,7 @@ export async function createCloudDatastore(homeDir?: string): Promise<CloudDatas
                  ORDER BY created_at DESC
                  LIMIT 1`,
                 )
-                .get(params.walletAddress, params.friendlyName) as
+                .get(normalizedWalletAddress, params.friendlyName) as
                 | {
                     friendly_name_id: string;
                     friendly_name: string;
@@ -579,7 +602,7 @@ export async function createCloudDatastore(homeDir?: string): Promise<CloudDatas
                  ORDER BY created_at DESC
                  LIMIT 1`,
                 )
-                .get(params.walletAddress, params.friendlyName, atIso) as
+                .get(normalizedWalletAddress, params.friendlyName, atIso) as
                 | {
                     friendly_name_id: string;
                     friendly_name: string;
@@ -604,13 +627,14 @@ export async function createCloudDatastore(homeDir?: string): Promise<CloudDatas
       }, null),
     countFriendlyNameMatches: async (walletAddress, friendlyName) =>
       safe(() => {
+        const normalizedWalletAddress = normalizeWalletAddress(walletAddress);
         const row = db!
           .prepare(
             `SELECT COUNT(1) AS cnt
              FROM friendly_names
              WHERE wallet_address = ? AND friendly_name = ? AND is_active = 1`,
           )
-          .get(walletAddress, friendlyName) as { cnt: number } | undefined;
+          .get(normalizedWalletAddress, friendlyName) as { cnt: number } | undefined;
         return Number(row?.cnt ?? 0);
       }, 0),
   };
