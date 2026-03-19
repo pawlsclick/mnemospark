@@ -72,10 +72,10 @@ jobs:
           fi
 
       - name: Check formatting
-        run: npm exec --no prettier --check .
+        run: npm exec --no -- prettier --check .
 
       - name: Lint
-        run: npm exec --no eslint src/
+        run: npm exec --no -- eslint src/
 
       - name: Typecheck
         run: npm run typecheck
