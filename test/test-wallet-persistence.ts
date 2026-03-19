@@ -71,7 +71,7 @@ async function removeFileIfExists(path: string): Promise<void> {
 
 describe("Wallet Persistence (systemd-free)", () => {
   before(async () => {
-    testHomeDir = await mkdtemp(join(tmpdir(), "mnemospark-wallet-persist-"));
+    testHomeDir = await mkdtemp(join(tmpdir(), "mnemospark_wallet-persist-"));
     process.env.HOME = testHomeDir;
     await mkdir(join(testHomeDir, ".openclaw"), { recursive: true });
 

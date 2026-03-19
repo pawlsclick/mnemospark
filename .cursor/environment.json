@@ -1,5 +1,5 @@
 {
-  "name": "mnemospark-cloud-agent",
+  "name": "mnemospark_cloud-agent",
   "install": "bash .cursor/scripts/preinstall-mnemospark-deps.sh",
   "start": "bash .cursor/scripts/preinstall-mnemospark-deps.sh"
 }

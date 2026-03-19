@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.1](https://github.com/pawlsclick/mnemospark/compare/v0.2.0...v0.2.1) (2026-03-19)
+
+### Bug Fixes
+
+- **publish:** install dev deps explicitly and use local tooling for lint/format ([#48](https://github.com/pawlsclick/mnemospark/issues/48)) ([7e464d3](https://github.com/pawlsclick/mnemospark/commit/7e464d392e45edff9d000df1e0b2a9d1192b829a))
+- **sqlite:** load node:sqlite via runtime require to prevent bundle rewrite ([#50](https://github.com/pawlsclick/mnemospark/issues/50)) ([d71ba50](https://github.com/pawlsclick/mnemospark/commit/d71ba507de204ae21e24290710d2001d7355b882))
+
+## [0.2.0](https://github.com/pawlsclick/mnemospark/compare/v0.1.22...v0.2.0) (2026-03-19)
+
+### Features
+
+- add subagent orchestration interfaces for async cloud operations ([#45](https://github.com/pawlsclick/mnemospark/issues/45)) ([951c527](https://github.com/pawlsclick/mnemospark/commit/951c527afd0411065a7bb761591d070dae87f8f2))
+
 ## [0.1.22](https://github.com/pawlsclick/mnemospark/compare/v0.1.21...v0.1.22) (2026-03-17)
 
 ### Bug Fixes
@@ -83,9 +96,9 @@ fix: cloud-command-handler-guard
 
 ### Changed
 
-- **mnemospark-cloud backup**: Success message now prints `object-id:`, `object-id-hash:`, and `object-size:` on separate lines; object-id-hash is shown without spaces.
-- **mnemospark-wallet**: Wallet and export headers use cloud emoji (☁️).
-- **mnemospark-wallet**: Address and (on export) private key are displayed without spaces.
+- **mnemospark_cloud backup**: Success message now prints `object-id:`, `object-id-hash:`, and `object-size:` on separate lines; object-id-hash is shown without spaces.
+- **mnemospark_wallet**: Wallet and export headers use cloud emoji (☁️).
+- **mnemospark_wallet**: Address and (on export) private key are displayed without spaces.
 - EIP-712 type mismatch fixed
 
 ## [0.1.9] - 2025-03-05

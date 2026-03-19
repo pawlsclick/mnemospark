@@ -120,8 +120,8 @@ info("=== Command Registration ===");
 
 const commandsByName = Object.fromEntries(registeredCommands.map((c) => [c.name, c]));
 const expectedCommands = [
-  { name: "mnemospark-wallet", descIncludes: "wallet" },
-  { name: "mnemospark-cloud", descIncludes: "cloud" },
+  { name: "mnemospark_wallet", descIncludes: "wallet" },
+  { name: "mnemospark_cloud", descIncludes: "cloud" },
 ];
 
 for (const { name, descIncludes } of expectedCommands) {
@@ -173,7 +173,7 @@ if (!proxyService) {
 // ---------------------------------------------------------------------------
 info("=== /mnemospark cloud handler tests ===");
 
-const cloudCmd = commandsByName["mnemospark-cloud"];
+const cloudCmd = commandsByName["mnemospark_cloud"];
 if (cloudCmd) {
   // 5a. cloud help (empty args)
   {
@@ -301,7 +301,7 @@ if (cloudCmd) {
 // ---------------------------------------------------------------------------
 info("=== /mnemospark wallet handler tests ===");
 
-const walletCmd = commandsByName["mnemospark-wallet"];
+const walletCmd = commandsByName["mnemospark_wallet"];
 if (walletCmd) {
   // 6a. wallet status (default)
   {

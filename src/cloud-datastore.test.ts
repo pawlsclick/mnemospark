@@ -199,4 +199,53 @@ describe("cloud datastore", () => {
     const missing = await datastore.findCronByObjectKey("obj-key-1");
     expect(missing).toBeNull();
   });
+
+  it("stores operation orchestration metadata and terminal states", async () => {
+    const datastore = await createCloudDatastore(homeDir);
+
+    if (!sqliteAvailable) {
+      expect(await datastore.findOperationById("op-1")).toBeNull();
+      return;
+    }
+
+    await datastore.upsertOperation({
+      operation_id: "op-1",
+      type: "download",
+      object_id: "obj-1",
+      quote_id: "q-1",
+      trace_id: "trace-1",
+      orchestrator: "subagent",
+      subagent_session_id: "agent:mnemospark:subagent:test",
+      timeout_seconds: 300,
+      status: "started",
+      error_code: null,
+      error_message: null,
+    });
+
+    await datastore.upsertOperation({
+      operation_id: "op-1",
+      type: "download",
+      object_id: "obj-1",
+      quote_id: "q-1",
+      trace_id: "trace-1",
+      orchestrator: "subagent",
+      subagent_session_id: "agent:mnemospark:subagent:test",
+      timeout_seconds: 300,
+      cancel_requested_at: new Date().toISOString(),
+      status: "cancelled",
+      error_code: "ASYNC_CANCELLED",
+      error_message: "cancelled",
+    });
+
+    const operation = await datastore.findOperationById("op-1");
+    expect(operation).not.toBeNull();
+    expect(operation?.trace_id).toBe("trace-1");
+    expect(operation?.orchestrator).toBe("subagent");
+    expect(operation?.subagent_session_id).toBe("agent:mnemospark:subagent:test");
+    expect(operation?.timeout_seconds).toBe(300);
+    expect(operation?.status).toBe("cancelled");
+    expect(operation?.error_code).toBe("ASYNC_CANCELLED");
+    expect(operation?.started_at).toBeTruthy();
+    expect(operation?.finished_at).toBeTruthy();
+  });
 });

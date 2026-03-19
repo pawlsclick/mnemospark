@@ -1,10 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { mkdir } from "node:fs/promises";
+import { createRequire } from "node:module";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
 const DB_SUBPATH = join(".openclaw", "mnemospark", "state.db");
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
+const require = createRequire(import.meta.url);
 
 export type StorageObjectRow = {
   object_id: string;
@@ -43,6 +45,11 @@ export type OperationRow = {
   type: string;
   object_id: string | null;
   quote_id: string | null;
+  trace_id?: string | null;
+  orchestrator?: string | null;
+  subagent_session_id?: string | null;
+  timeout_seconds?: number | null;
+  cancel_requested_at?: string | null;
   status: string;
   error_code: string | null;
   error_message: string | null;
@@ -91,6 +98,13 @@ export type CloudDatastore = {
   findOperationById: (operationId: string) => Promise<{
     operation_id: string;
     type: string;
+    object_id: string | null;
+    quote_id: string | null;
+    trace_id: string | null;
+    orchestrator: string | null;
+    subagent_session_id: string | null;
+    timeout_seconds: number | null;
+    cancel_requested_at: string | null;
     status: string;
     error_code: string | null;
     error_message: string | null;
@@ -136,15 +150,18 @@ export async function createCloudDatastore(homeDir?: string): Promise<CloudDatas
     }
 
     await mkdir(dirname(dbPath), { recursive: true });
-    const sqliteMod = (await import("node:sqlite")) as {
+
+    // Use runtime require("node:sqlite") to prevent bundlers from rewriting
+    // the built-in specifier to "sqlite" in dist output.
+    const sqliteMod = require("node:sqlite") as {
       DatabaseSync?: new (path: string) => DbLike;
     };
-    const DatabaseSync = sqliteMod.DatabaseSync;
-    if (!DatabaseSync) {
+    const DatabaseSyncCtor = sqliteMod.DatabaseSync;
+    if (!DatabaseSyncCtor) {
       throw new Error("node:sqlite DatabaseSync is unavailable");
     }
 
-    const nextDb = new DatabaseSync(dbPath);
+    const nextDb = new DatabaseSyncCtor(dbPath);
     nextDb.exec("PRAGMA journal_mode=WAL;");
     nextDb.exec("PRAGMA foreign_keys=ON;");
 
@@ -231,6 +248,22 @@ export async function createCloudDatastore(homeDir?: string): Promise<CloudDatas
       CREATE INDEX IF NOT EXISTS idx_friendly_names_created_at ON friendly_names(created_at);
     `);
 
+    const addOperationsColumn = (columnName: string, sqlType: string): void => {
+      try {
+        nextDb.exec(`ALTER TABLE operations ADD COLUMN ${columnName} ${sqlType}`);
+      } catch (error) {
+        const message = error instanceof Error ? error.message.toLowerCase() : String(error);
+        if (!message.includes("duplicate column name")) {
+          throw error;
+        }
+      }
+    };
+    addOperationsColumn("trace_id", "TEXT");
+    addOperationsColumn("orchestrator", "TEXT");
+    addOperationsColumn("subagent_session_id", "TEXT");
+    addOperationsColumn("timeout_seconds", "INTEGER");
+    addOperationsColumn("cancel_requested_at", "TEXT");
+
     nextDb
       .prepare(
         `INSERT INTO schema_migrations(version, applied_at)
@@ -245,7 +278,10 @@ export async function createCloudDatastore(homeDir?: string): Promise<CloudDatas
     try {
       await ensureReady();
       return fn();
-    } catch {
+    } catch (error) {
+      if (process.env.MNEMOSPARK_SQLITE_STRICT === "1") {
+        throw error;
+      }
       return fallback;
     }
   };
@@ -387,14 +423,20 @@ export async function createCloudDatastore(homeDir?: string): Promise<CloudDatas
     upsertOperation: async (row) => {
       await safe(() => {
         const ts = nowIso();
+        const terminalStatuses = new Set(["succeeded", "failed", "cancelled", "timed_out"]);
         db!
           .prepare(
-            `INSERT INTO operations(operation_id, type, object_id, quote_id, status, error_code, error_message, started_at, finished_at, created_at, updated_at)
-           VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            `INSERT INTO operations(operation_id, type, object_id, quote_id, trace_id, orchestrator, subagent_session_id, timeout_seconds, cancel_requested_at, status, error_code, error_message, started_at, finished_at, created_at, updated_at)
+           VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(operation_id) DO UPDATE SET
              type=excluded.type,
              object_id=COALESCE(excluded.object_id, operations.object_id),
-             quote_id=excluded.quote_id,
+             quote_id=COALESCE(excluded.quote_id, operations.quote_id),
+             trace_id=COALESCE(excluded.trace_id, operations.trace_id),
+             orchestrator=COALESCE(excluded.orchestrator, operations.orchestrator),
+             subagent_session_id=COALESCE(excluded.subagent_session_id, operations.subagent_session_id),
+             timeout_seconds=COALESCE(excluded.timeout_seconds, operations.timeout_seconds),
+             cancel_requested_at=COALESCE(excluded.cancel_requested_at, operations.cancel_requested_at),
              status=excluded.status,
              error_code=excluded.error_code,
              error_message=excluded.error_message,
@@ -407,11 +449,16 @@ export async function createCloudDatastore(homeDir?: string): Promise<CloudDatas
             row.type,
             row.object_id,
             row.quote_id,
+            row.trace_id ?? null,
+            row.orchestrator ?? null,
+            row.subagent_session_id ?? null,
+            row.timeout_seconds ?? null,
+            row.cancel_requested_at ?? null,
             row.status,
             row.error_code,
             row.error_message,
             row.status === "started" ? ts : null,
-            row.status === "succeeded" || row.status === "failed" ? ts : null,
+            terminalStatuses.has(row.status) ? ts : null,
             ts,
             ts,
           );
@@ -421,7 +468,7 @@ export async function createCloudDatastore(homeDir?: string): Promise<CloudDatas
       safe(() => {
         const row = db!
           .prepare(
-            `SELECT operation_id, type, status, error_code, error_message, started_at, finished_at, updated_at
+            `SELECT operation_id, type, object_id, quote_id, trace_id, orchestrator, subagent_session_id, timeout_seconds, cancel_requested_at, status, error_code, error_message, started_at, finished_at, updated_at
              FROM operations
              WHERE operation_id = ?
              LIMIT 1`,
@@ -430,6 +477,13 @@ export async function createCloudDatastore(homeDir?: string): Promise<CloudDatas
           | {
               operation_id: string;
               type: string;
+              object_id: string | null;
+              quote_id: string | null;
+              trace_id: string | null;
+              orchestrator: string | null;
+              subagent_session_id: string | null;
+              timeout_seconds: number | null;
+              cancel_requested_at: string | null;
               status: string;
               error_code: string | null;
               error_message: string | null;

@@ -3,19 +3,42 @@ name: Publish
 on:
   release:
     types: [published]
+  push:
+    tags:
+      - "v*"
   workflow_dispatch:
+    inputs:
+      publish_ref:
+        description: "Git ref to publish (tag like v0.2.0, or release branch)"
+        required: false
+        default: ""
 
 permissions:
   contents: read
   id-token: write
 
+concurrency:
+  group: publish-${{ inputs.publish_ref || github.event.release.tag_name || github.ref_name }}
+  cancel-in-progress: false
+
 jobs:
   publish:
     runs-on: ubuntu-latest
     steps:
+      - name: Resolve publish ref
+        id: ref
+        run: |
+          if [ "${{ github.event_name }}" = "release" ]; then
+            echo "value=${{ github.event.release.tag_name }}" >> "$GITHUB_OUTPUT"
+          elif [ -n "${{ inputs.publish_ref }}" ]; then
+            echo "value=${{ inputs.publish_ref }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "value=${{ github.ref }}" >> "$GITHUB_OUTPUT"
+          fi
+
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.release.tag_name || github.ref }}
+          ref: ${{ steps.ref.outputs.value }}
 
       - name: Set up Node.js 20
         uses: actions/setup-node@v4
@@ -25,23 +48,41 @@ jobs:
           registry-url: "https://registry.npmjs.org"
 
       - name: Install dependencies
-        run: npm ci
+        run: npm ci --include=dev
+
+      - name: Validate workflow_dispatch ref safety
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          if [ -z "${{ inputs.publish_ref }}" ]; then
+            echo "workflow_dispatch requires input 'publish_ref' (use a release tag like v0.2.0)."
+            exit 1
+          fi
 
       - name: Verify tag matches package.json version
-        if: github.event_name == 'release'
+        if: startsWith(steps.ref.outputs.value, 'refs/tags/') || startsWith(steps.ref.outputs.value, 'v')
         run: |
-          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          TAG_RAW="${{ steps.ref.outputs.value }}"
+          TAG_NAME="${TAG_RAW#refs/tags/}"
+          TAG_VERSION="${TAG_NAME#v}"
           PKG_VERSION=$(node -p "require('./package.json').version")
           if [ "$TAG_VERSION" != "$PKG_VERSION" ]; then
             echo "Tag version ($TAG_VERSION) does not match package.json version ($PKG_VERSION)"
             exit 1
           fi
 
+      - name: Prevent republishing an existing npm version
+        run: |
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          if npm view "mnemospark@${PKG_VERSION}" version >/dev/null 2>&1; then
+            echo "mnemospark@${PKG_VERSION} is already published on npm; refusing to republish."
+            exit 1
+          fi
+
       - name: Check formatting
-        run: npx prettier --check .
+        run: npm exec --no prettier --check .
 
       - name: Lint
-        run: npx eslint src/
+        run: npm exec --no eslint src/
 
       - name: Typecheck
         run: npm run typecheck
