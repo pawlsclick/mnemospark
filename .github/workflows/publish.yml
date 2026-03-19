@@ -17,6 +17,10 @@ permissions:
   contents: read
   id-token: write
 
+concurrency:
+  group: publish-${{ inputs.publish_ref || github.event.release.tag_name || github.ref_name }}
+  cancel-in-progress: true
+
 jobs:
   publish:
     runs-on: ubuntu-latest
