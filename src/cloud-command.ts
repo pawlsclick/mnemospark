@@ -1134,17 +1134,46 @@ async function uploadPresignedObjectIfNeeded(
     headers.set("content-type", "application/octet-stream");
   }
 
-  const response = await fetchImpl(uploadResponse.upload_url, {
+  const putBody = new Uint8Array(encryptedContent);
+  const firstAttempt = await fetchImpl(uploadResponse.upload_url, {
     method: "PUT",
     headers,
-    body: new Uint8Array(encryptedContent),
+    body: putBody,
+    redirect: "manual",
   });
-  if (!response.ok) {
-    const details = (await response.text()).trim();
-    throw new Error(
-      `Presigned upload failed with status ${response.status}${details ? `: ${details}` : ""}`,
-    );
+
+  if (firstAttempt.ok) {
+    return;
   }
+
+  // Some S3 presigned PUT URLs can return a temporary redirect (307/308)
+  // when the request is sent to a non-regional endpoint. Retry once against
+  // the Location target with the same signed query parameters.
+  if (
+    (firstAttempt.status === 307 || firstAttempt.status === 308) &&
+    firstAttempt.headers.has("location")
+  ) {
+    const location = firstAttempt.headers.get("location")?.trim();
+    if (location) {
+      const redirectedAttempt = await fetchImpl(location, {
+        method: "PUT",
+        headers,
+        body: putBody,
+      });
+      if (redirectedAttempt.ok) {
+        return;
+      }
+      const redirectedDetails = (await redirectedAttempt.text()).trim();
+      throw new Error(
+        `Presigned upload failed after redirect with status ${redirectedAttempt.status}${redirectedDetails ? `: ${redirectedDetails}` : ""}`,
+      );
+    }
+  }
+
+  const details = (await firstAttempt.text()).trim();
+  throw new Error(
+    `Presigned upload failed with status ${firstAttempt.status}${details ? `: ${details}` : ""}`,
+  );
 }
 
 async function appendStorageUploadLog(
@@ -1332,11 +1361,74 @@ type RunCloudCommandExecutionContext = {
   forcedTraceId?: string;
 };
 
+async function resolveFriendlyNameFromManifest(
+  params: {
+    walletAddress: string;
+    friendlyName: string;
+    latest?: boolean;
+    at?: string;
+  },
+  homeDir?: string,
+): Promise<{ objectKey: string | null; matchCount: number }> {
+  const manifestPath = join(homeDir ?? homedir(), ".openclaw", "mnemospark", "manifest.jsonl");
+
+  let manifestRaw: string;
+  try {
+    manifestRaw = await readFile(manifestPath, "utf-8");
+  } catch {
+    return { objectKey: null, matchCount: 0 };
+  }
+
+  const wallet = params.walletAddress.trim();
+  const name = params.friendlyName.trim();
+  const atMs = params.at ? Date.parse(params.at) : Number.NaN;
+  const hasAt = Number.isFinite(atMs);
+
+  const rows = manifestRaw
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      try {
+        return JSON.parse(line) as {
+          friendly_name?: string;
+          wallet_address?: string;
+          object_key?: string;
+          created_at?: string;
+        };
+      } catch {
+        return null;
+      }
+    })
+    .filter((row): row is NonNullable<typeof row> => Boolean(row))
+    .filter((row) => {
+      if (!row.object_key || !row.friendly_name || !row.wallet_address || !row.created_at)
+        return false;
+      if (row.friendly_name !== name) return false;
+      if (row.wallet_address.trim() !== wallet) return false;
+      if (params.latest || !hasAt) return true;
+      const createdAtMs = Date.parse(row.created_at);
+      return Number.isFinite(createdAtMs) && createdAtMs <= atMs;
+    })
+    .sort((a, b) => Date.parse(b.created_at ?? "") - Date.parse(a.created_at ?? ""));
+
+  if (rows.length === 0) {
+    return { objectKey: null, matchCount: 0 };
+  }
+
+  if (!params.latest && !hasAt && rows.length > 1) {
+    return { objectKey: null, matchCount: rows.length };
+  }
+
+  return { objectKey: rows[0].object_key ?? null, matchCount: rows.length };
+}
+
 async function resolveNameSelectorIfNeeded(
   datastore: Awaited<ReturnType<typeof createCloudDatastore>>,
   request: StorageObjectRequestInput,
   selector?: NameSelector,
-): Promise<{ request?: StorageObjectRequest; error?: string }> {
+  homeDir?: string,
+): Promise<{ request?: StorageObjectRequest; error?: string; degradedWarning?: string }> {
   if (!selector) {
     const parsedRequest = parseStorageObjectRequest(request);
     if (!parsedRequest) {
@@ -1344,30 +1436,64 @@ async function resolveNameSelectorIfNeeded(
     }
     return { request: parsedRequest };
   }
+  let sqliteUnavailable = false;
+  try {
+    await datastore.ensureReady();
+  } catch {
+    sqliteUnavailable = true;
+  }
   const matches = await datastore.countFriendlyNameMatches(request.wallet_address, selector.name);
   if (matches > 1 && !selector.latest && !selector.at) {
     return {
       error: `Multiple objects match --name ${selector.name}. Add --latest or --at <timestamp>.`,
     };
   }
+
   const resolved = await datastore.resolveFriendlyName({
     walletAddress: request.wallet_address,
     friendlyName: selector.name,
     latest: selector.latest,
     at: selector.at,
   });
-  if (!resolved || !resolved.objectKey) {
+
+  let resolvedObjectKey = resolved?.objectKey ?? null;
+  let degradedWarning: string | undefined;
+  if (!resolvedObjectKey && sqliteUnavailable) {
+    const manifestResolved = await resolveFriendlyNameFromManifest(
+      {
+        walletAddress: request.wallet_address,
+        friendlyName: selector.name,
+        latest: selector.latest,
+        at: selector.at,
+      },
+      homeDir,
+    );
+    if (manifestResolved.matchCount > 1 && !selector.latest && !selector.at) {
+      return {
+        error: `Multiple objects match --name ${selector.name}. Add --latest or --at <timestamp>.`,
+      };
+    }
+    resolvedObjectKey = manifestResolved.objectKey;
+    if (resolvedObjectKey) {
+      degradedWarning =
+        "SQLite friendly-name index unavailable; resolved --name via manifest.jsonl fallback.";
+    }
+  }
+
+  if (!resolvedObjectKey) {
     return { error: `No object found for --name ${selector.name}.` };
   }
+
   const parsedRequest = parseStorageObjectRequest({
     ...request,
-    object_key: resolved.objectKey,
+    object_key: resolvedObjectKey,
   });
   if (!parsedRequest) {
     return { error: "Cannot resolve storage object request." };
   }
   return {
     request: parsedRequest,
+    degradedWarning,
   };
 }
 
@@ -1860,18 +1986,56 @@ async function runCloudCommandHandler(
         status: "active",
       });
       if (parsed.friendlyName?.trim()) {
+        const normalizedFriendlyName = parsed.friendlyName.trim();
         await datastore.upsertFriendlyName({
-          friendly_name: parsed.friendlyName.trim(),
+          friendly_name: normalizedFriendlyName,
           object_id: finalizedUploadResponse.object_id,
           object_key: finalizedUploadResponse.object_key,
           quote_id: finalizedUploadResponse.quote_id,
           wallet_address: finalizedUploadResponse.addr,
         });
+
+        let friendlyNameVerified = false;
+        try {
+          const readBack = await datastore.resolveFriendlyName({
+            walletAddress: finalizedUploadResponse.addr,
+            friendlyName: normalizedFriendlyName,
+            latest: true,
+          });
+          friendlyNameVerified =
+            Boolean(readBack?.objectKey) &&
+            readBack?.objectKey === finalizedUploadResponse.object_key;
+        } catch {
+          friendlyNameVerified = false;
+        }
+
+        if (!friendlyNameVerified) {
+          const warning =
+            "SQLite friendly-name write verification failed; manifest fallback may be required for --name lookups.";
+          await emitCloudEventBestEffort(
+            "friendly_name.write_verification_failed",
+            {
+              operation_id: uploadCorrelation.operationId,
+              trace_id: uploadCorrelation.traceId,
+              wallet_address: finalizedUploadResponse.addr,
+              object_id: finalizedUploadResponse.object_id,
+              object_key: finalizedUploadResponse.object_key,
+              quote_id: finalizedUploadResponse.quote_id,
+              friendly_name: normalizedFriendlyName,
+              warning,
+            },
+            objectLogHomeDir,
+          );
+          if (process.env.MNEMOSPARK_SQLITE_STRICT === "1") {
+            throw new Error(warning);
+          }
+        }
+
         try {
           await appendJsonlEvent(
             "manifest.jsonl",
             {
-              friendly_name: parsed.friendlyName.trim(),
+              friendly_name: normalizedFriendlyName,
               object_id: finalizedUploadResponse.object_id,
               object_key: finalizedUploadResponse.object_key,
               quote_id: finalizedUploadResponse.quote_id,
@@ -1928,11 +2092,24 @@ async function runCloudCommandHandler(
       datastore,
       parsed.storageObjectRequest,
       parsed.nameSelector,
+      objectLogHomeDir,
     );
     if (resolved.error || !resolved.request) {
       return { text: resolved.error ?? "Cannot resolve storage object request.", isError: true };
     }
     const resolvedRequest = resolved.request;
+
+    if (resolved.degradedWarning) {
+      await emitCloudEventBestEffort(
+        "name_resolution.degraded",
+        {
+          wallet_address: resolvedRequest.wallet_address,
+          object_key: resolvedRequest.object_key,
+          warning: resolved.degradedWarning,
+        },
+        objectLogHomeDir,
+      );
+    }
 
     const correlation = buildRequestCorrelation();
     const operationId = correlation.operationId;
@@ -1975,8 +2152,9 @@ async function runCloudCommandHandler(
         },
         objectLogHomeDir,
       );
+      const lsText = formatStorageLsUserMessage(lsResult, resolvedRequest.object_key);
       return {
-        text: formatStorageLsUserMessage(lsResult, resolvedRequest.object_key),
+        text: resolved.degradedWarning ? `${resolved.degradedWarning}\n${lsText}` : lsText,
       };
     } catch {
       await datastore.upsertOperation({
@@ -2011,11 +2189,24 @@ async function runCloudCommandHandler(
       datastore,
       parsed.storageObjectRequest,
       parsed.nameSelector,
+      objectLogHomeDir,
     );
     if (resolved.error || !resolved.request) {
       return { text: resolved.error ?? "Cannot resolve storage object request.", isError: true };
     }
     const resolvedRequest = resolved.request;
+
+    if (resolved.degradedWarning) {
+      await emitCloudEventBestEffort(
+        "name_resolution.degraded",
+        {
+          wallet_address: resolvedRequest.wallet_address,
+          object_key: resolvedRequest.object_key,
+          warning: resolved.degradedWarning,
+        },
+        objectLogHomeDir,
+      );
+    }
 
     const correlation = buildRequestCorrelation(
       executionContext.forcedOperationId,
@@ -2061,8 +2252,11 @@ async function runCloudCommandHandler(
         },
         objectLogHomeDir,
       );
+      const downloadText = `File ${resolvedRequest.object_key} downloaded to ${downloadResult.file_path}`;
       return {
-        text: `File ${resolvedRequest.object_key} downloaded to ${downloadResult.file_path}`,
+        text: resolved.degradedWarning
+          ? `${resolved.degradedWarning}\n${downloadText}`
+          : downloadText,
       };
     } catch {
       await datastore.upsertOperation({
@@ -2097,11 +2291,23 @@ async function runCloudCommandHandler(
       datastore,
       parsed.storageObjectRequest,
       parsed.nameSelector,
+      objectLogHomeDir,
     );
     if (resolved.error || !resolved.request) {
       return { text: resolved.error ?? "Cannot resolve storage object request.", isError: true };
     }
     const resolvedRequest = resolved.request;
+    if (resolved.degradedWarning) {
+      await emitCloudEventBestEffort(
+        "name_resolution.degraded",
+        {
+          wallet_address: resolvedRequest.wallet_address,
+          object_key: resolvedRequest.object_key,
+          warning: resolved.degradedWarning,
+        },
+        objectLogHomeDir,
+      );
+    }
     const correlation = buildRequestCorrelation();
     const operationId = correlation.operationId;
 
@@ -2189,12 +2395,13 @@ async function runCloudCommandHandler(
       },
       objectLogHomeDir,
     );
+    const deleteText = formatStorageDeleteUserMessage(
+      resolvedRequest.object_key,
+      cronEntry?.cronId ?? null,
+      cronDeleted,
+    );
     return {
-      text: formatStorageDeleteUserMessage(
-        resolvedRequest.object_key,
-        cronEntry?.cronId ?? null,
-        cronDeleted,
-      ),
+      text: resolved.degradedWarning ? `${resolved.degradedWarning}\n${deleteText}` : deleteText,
     };
   }
 
