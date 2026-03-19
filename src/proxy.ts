@@ -381,7 +381,7 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
       console.error(`[mnemospark] Response stream error: ${err.message}`);
     });
 
-    // Mnemospark backend proxy endpoint for /mnemospark-cloud price-storage command.
+    // Mnemospark backend proxy endpoint for /mnemospark_cloud price-storage command.
     if (req.method === "POST" && matchesProxyPath(req.url, PRICE_STORAGE_PROXY_PATH)) {
       const correlation = createProxyCorrelation(req.headers);
       logProxyEvent("info", "proxy_price_storage_received");
@@ -395,7 +395,7 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
           emitProxyTerminalFromStatus(correlation, 400, { reason: "invalid_json" });
           sendJson(res, 400, {
             error: "Bad request",
-            message: "Invalid JSON body for /mnemospark-cloud price-storage",
+            message: "Invalid JSON body for /mnemospark_cloud price-storage",
           });
           return;
         }
@@ -469,7 +469,7 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
         });
         sendJson(res, 502, {
           error: "proxy_error",
-          message: `Failed to forward /mnemospark-cloud price-storage: ${err instanceof Error ? err.message : String(err)}`,
+          message: `Failed to forward /mnemospark_cloud price-storage: ${err instanceof Error ? err.message : String(err)}`,
         });
       }
       return;
@@ -636,7 +636,7 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
       return;
     }
 
-    // Mnemospark backend proxy endpoint for /mnemospark-cloud upload command.
+    // Mnemospark backend proxy endpoint for /mnemospark_cloud upload command.
     if (req.method === "POST" && matchesProxyPath(req.url, UPLOAD_PROXY_PATH)) {
       const correlation = createProxyCorrelation(req.headers);
       logProxyEvent("info", "proxy_upload_received");
@@ -650,7 +650,7 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
           emitProxyTerminalFromStatus(correlation, 400, { reason: "invalid_json" });
           sendJson(res, 400, {
             error: "Bad request",
-            message: "Invalid JSON body for /mnemospark-cloud upload",
+            message: "Invalid JSON body for /mnemospark_cloud upload",
           });
           return;
         }
@@ -723,7 +723,7 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
             error: "insufficient_balance",
             message: `Insufficient USDC balance. Current: ${sufficiency.info.balanceUSD}, Required: ${requiredUSD}`,
             wallet: requestPayload.wallet_address,
-            help: `Fund wallet ${requestPayload.wallet_address} on Base before running /mnemospark-cloud upload`,
+            help: `Fund wallet ${requestPayload.wallet_address} on Base before running /mnemospark_cloud upload`,
           });
           return;
         }
@@ -837,13 +837,13 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
         });
         sendJson(res, 502, {
           error: "proxy_error",
-          message: `Failed to forward /mnemospark-cloud upload: ${err instanceof Error ? err.message : String(err)}`,
+          message: `Failed to forward /mnemospark_cloud upload: ${err instanceof Error ? err.message : String(err)}`,
         });
       }
       return;
     }
 
-    // Mnemospark backend proxy endpoint for /mnemospark-cloud upload confirm command.
+    // Mnemospark backend proxy endpoint for /mnemospark_cloud upload confirm command.
     if (req.method === "POST" && matchesProxyPath(req.url, UPLOAD_CONFIRM_PROXY_PATH)) {
       const correlation = createProxyCorrelation(req.headers);
       logProxyEvent("info", "proxy_upload_confirm_received");
@@ -857,7 +857,7 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
           emitProxyTerminalFromStatus(correlation, 400, { reason: "invalid_json" });
           sendJson(res, 400, {
             error: "Bad request",
-            message: "Invalid JSON body for /mnemospark-cloud upload/confirm",
+            message: "Invalid JSON body for /mnemospark_cloud upload/confirm",
           });
           return;
         }
@@ -945,13 +945,13 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
         });
         sendJson(res, 502, {
           error: "proxy_error",
-          message: `Failed to forward /mnemospark-cloud upload/confirm: ${err instanceof Error ? err.message : String(err)}`,
+          message: `Failed to forward /mnemospark_cloud upload/confirm: ${err instanceof Error ? err.message : String(err)}`,
         });
       }
       return;
     }
 
-    // Mnemospark backend proxy endpoint for /mnemospark-cloud ls command.
+    // Mnemospark backend proxy endpoint for /mnemospark_cloud ls command.
     if (req.method === "POST" && matchesProxyPath(req.url, STORAGE_LS_PROXY_PATH)) {
       const correlation = createProxyCorrelation(req.headers);
       logProxyEvent("info", "proxy_ls_received");
@@ -965,7 +965,7 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
           emitProxyTerminalFromStatus(correlation, 400, { reason: "invalid_json" });
           sendJson(res, 400, {
             error: "Bad request",
-            message: "Invalid JSON body for /mnemospark-cloud ls",
+            message: "Invalid JSON body for /mnemospark_cloud ls",
           });
           return;
         }
@@ -1045,13 +1045,13 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
         });
         sendJson(res, 502, {
           error: "proxy_error",
-          message: `Failed to forward /mnemospark-cloud ls: ${err instanceof Error ? err.message : String(err)}`,
+          message: `Failed to forward /mnemospark_cloud ls: ${err instanceof Error ? err.message : String(err)}`,
         });
       }
       return;
     }
 
-    // Mnemospark backend proxy endpoint for /mnemospark-cloud download command.
+    // Mnemospark backend proxy endpoint for /mnemospark_cloud download command.
     if (req.method === "POST" && matchesProxyPath(req.url, STORAGE_DOWNLOAD_PROXY_PATH)) {
       const correlation = createProxyCorrelation(req.headers);
       logProxyEvent("info", "proxy_download_received");
@@ -1067,7 +1067,7 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
           emitProxyTerminalFromStatus(correlation, 400, { reason: "invalid_json" });
           sendJson(res, 400, {
             error: "Bad request",
-            message: "Invalid JSON body for /mnemospark-cloud download",
+            message: "Invalid JSON body for /mnemospark_cloud download",
           });
           return;
         }
@@ -1174,13 +1174,13 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
         });
         sendJson(res, 502, {
           error: "proxy_error",
-          message: `Failed to forward /mnemospark-cloud download: ${err instanceof Error ? err.message : String(err)}`,
+          message: `Failed to forward /mnemospark_cloud download: ${err instanceof Error ? err.message : String(err)}`,
         });
       }
       return;
     }
 
-    // Mnemospark backend proxy endpoint for /mnemospark-cloud delete command.
+    // Mnemospark backend proxy endpoint for /mnemospark_cloud delete command.
     if (req.method === "POST" && matchesProxyPath(req.url, STORAGE_DELETE_PROXY_PATH)) {
       const correlation = createProxyCorrelation(req.headers);
       logProxyEvent("info", "proxy_delete_received");
@@ -1194,7 +1194,7 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
           emitProxyTerminalFromStatus(correlation, 400, { reason: "invalid_json" });
           sendJson(res, 400, {
             error: "Bad request",
-            message: "Invalid JSON body for /mnemospark-cloud delete",
+            message: "Invalid JSON body for /mnemospark_cloud delete",
           });
           return;
         }
@@ -1278,7 +1278,7 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
         });
         sendJson(res, 502, {
           error: "proxy_error",
-          message: `Failed to forward /mnemospark-cloud delete: ${err instanceof Error ? err.message : String(err)}`,
+          message: `Failed to forward /mnemospark_cloud delete: ${err instanceof Error ? err.message : String(err)}`,
         });
       }
       return;

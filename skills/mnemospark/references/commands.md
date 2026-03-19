@@ -1,6 +1,6 @@
 # mnemospark Commands Reference
 
-## `/mnemospark-cloud`
+## `/mnemospark_cloud`
 
 ### Backup
 

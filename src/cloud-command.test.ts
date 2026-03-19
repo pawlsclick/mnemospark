@@ -21,7 +21,7 @@ afterEach(async () => {
 });
 
 async function createSandbox() {
-  const root = await mkdtemp(join(tmpdir(), "mnemospark-cloud-backup-"));
+  const root = await mkdtemp(join(tmpdir(), "mnemospark_cloud-backup-"));
   sandboxDirs.push(root);
   const homeDir = join(root, "home");
   const tmpBackupDir = join(root, "tmp");
@@ -84,10 +84,10 @@ describe("cloud command", () => {
       throw new Error("Expected cloud help text");
     }
 
-    expect(result.text).toContain("/mnemospark-cloud ls --wallet-address <addr>");
+    expect(result.text).toContain("/mnemospark_cloud ls --wallet-address <addr>");
     expect(result.text).toContain("[--object-key <object-key> | --name <friendly-name>]");
-    expect(result.text).toContain("/mnemospark-cloud download --wallet-address <addr>");
-    expect(result.text).toContain("/mnemospark-cloud delete --wallet-address <addr>");
+    expect(result.text).toContain("/mnemospark_cloud download --wallet-address <addr>");
+    expect(result.text).toContain("/mnemospark_cloud delete --wallet-address <addr>");
     expect(result.text).not.toContain("<s3-key>");
     expect(result.text).not.toContain("s3-key");
   });
@@ -298,7 +298,7 @@ describe("cloud command", () => {
     expect(result.isError).not.toBe(true);
     expect(result.text).toContain("Your storage quote `quote-abc123` is valid for 1 hour");
     expect(result.text).toContain(
-      "If you accept this quote run the command /mnemospark-cloud upload",
+      "If you accept this quote run the command /mnemospark_cloud upload",
     );
     expect(result.text).toContain("--object-id-hash `hash-001`");
 

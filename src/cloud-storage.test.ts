@@ -152,7 +152,7 @@ describe("cloud storage transport", () => {
   });
 
   it("downloads file via presigned URL and writes to disk", async () => {
-    const outputDir = await mkdtemp(join(tmpdir(), "mnemospark-cloud-storage-"));
+    const outputDir = await mkdtemp(join(tmpdir(), "mnemospark_cloud-storage-"));
     sandboxDirs.push(outputDir);
 
     let fetchedPresignedUrl = "";
@@ -191,9 +191,9 @@ describe("cloud storage transport", () => {
   });
 
   it("decrypts presigned download bytes when wrapped DEK metadata is present", async () => {
-    const outputDir = await mkdtemp(join(tmpdir(), "mnemospark-cloud-storage-decrypt-"));
+    const outputDir = await mkdtemp(join(tmpdir(), "mnemospark_cloud-storage-decrypt-"));
     sandboxDirs.push(outputDir);
-    const homeDir = await mkdtemp(join(tmpdir(), "mnemospark-cloud-storage-home-"));
+    const homeDir = await mkdtemp(join(tmpdir(), "mnemospark_cloud-storage-home-"));
     sandboxDirs.push(homeDir);
 
     const keyPath = resolveWalletKekPath(SAMPLE_REQUEST.wallet_address, homeDir);
@@ -248,7 +248,7 @@ describe("cloud storage transport", () => {
   });
 
   it("writes inline base64 download payload to disk", async () => {
-    const outputDir = await mkdtemp(join(tmpdir(), "mnemospark-cloud-storage-inline-"));
+    const outputDir = await mkdtemp(join(tmpdir(), "mnemospark_cloud-storage-inline-"));
     sandboxDirs.push(outputDir);
 
     const inlinePayload = Buffer.from("inline payload bytes", "utf-8").toString("base64");
