@@ -1403,7 +1403,7 @@ async function resolveFriendlyNameFromManifest(
         return false;
       if (row.friendly_name !== name) return false;
       if (row.wallet_address.trim().toLowerCase() !== wallet) return false;
-      if (!hasAt) return true;
+      if (params.latest || !hasAt) return true;
       const createdAtMs = Date.parse(row.created_at);
       return Number.isFinite(createdAtMs) && createdAtMs <= atMs;
     })
