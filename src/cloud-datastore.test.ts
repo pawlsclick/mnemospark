@@ -141,7 +141,7 @@ describe("cloud datastore", () => {
       object_id: "obj-1",
       object_key: "key-1",
       quote_id: "q-1",
-      wallet_address: "0xabc",
+      wallet_address: "0xAbC",
     });
     await new Promise((r) => setTimeout(r, 2));
     await datastore.upsertFriendlyName({
@@ -149,13 +149,13 @@ describe("cloud datastore", () => {
       object_id: "obj-2",
       object_key: "key-2",
       quote_id: "q-2",
-      wallet_address: "0xabc",
+      wallet_address: "0xaBc",
     });
 
     expect(await datastore.countFriendlyNameMatches("0xabc", "project-alpha")).toBe(2);
 
     const latest = await datastore.resolveFriendlyName({
-      walletAddress: "0xabc",
+      walletAddress: "0xABC",
       friendlyName: "project-alpha",
       latest: true,
     });

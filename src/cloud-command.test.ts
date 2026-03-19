@@ -7,6 +7,7 @@ import { privateKeyToAccount } from "viem/accounts";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { buildBackupObject, createCloudCommand, expandTilde } from "./cloud-command.js";
+import { createCloudDatastore } from "./cloud-datastore.js";
 import type { StorageDownloadProxyResponse } from "./cloud-storage.js";
 import { PaymentCache } from "./payment-cache.js";
 
@@ -1020,6 +1021,64 @@ describe("cloud command", () => {
     expect(capturedCorrelation?.traceId).toBeTruthy();
     expect(result.isError).not.toBe(true);
     expect(result.text).toBe("obj-001 with backup/archive.tar.gz is 1536 in wallet-bucket-001");
+  });
+
+  it("resolves --name with --wallet_address alias and mixed-case wallet values", async () => {
+    const { homeDir } = await createSandbox();
+    try {
+      await import("node:sqlite");
+    } catch {
+      // node:sqlite may be unavailable in some environments; skip SQLite-specific assertion.
+      return;
+    }
+
+    const datastore = await createCloudDatastore(homeDir);
+    await datastore.ensureReady();
+    await datastore.upsertFriendlyName({
+      friendly_name: "myfile.txt",
+      object_id: "obj-friendly-1",
+      object_key: "backup/myfile.txt.tar.gz.enc",
+      quote_id: "quote-friendly-1",
+      wallet_address: "0x24bb8b93fbc0b87e4b0303aa1f71c51941726424",
+    });
+
+    let capturedRequest: Record<string, unknown> | undefined;
+    const command = createCloudCommand({
+      objectLogHomeDir: homeDir,
+      requestStorageLsFn: async (request) => {
+        capturedRequest = request as Record<string, unknown>;
+        return {
+          success: true,
+          key: "backup/myfile.txt.tar.gz.enc",
+          size_bytes: 1024,
+          bucket: "wallet-bucket-001",
+          object_id: "obj-friendly-1",
+        };
+      },
+    });
+
+    const result = await command.handler({
+      channel: "test",
+      isAuthorizedSender: true,
+      args: [
+        "ls",
+        "--wallet_address 0x24bB8B93fbC0B87e4b0303aA1F71C51941726424",
+        '--name "myfile.txt"',
+        "--latest",
+      ].join(" "),
+      commandBody: "ls",
+      config: {},
+    });
+
+    expect(result.isError).not.toBe(true);
+    expect(capturedRequest).toEqual({
+      wallet_address: "0x24bB8B93fbC0B87e4b0303aA1F71C51941726424",
+      object_key: "backup/myfile.txt.tar.gz.enc",
+      location: undefined,
+    });
+    expect(result.text).toBe(
+      "obj-friendly-1 with backup/myfile.txt.tar.gz.enc is 1024 in wallet-bucket-001",
+    );
   });
 
   it("handles /mnemospark cloud download and prints success message", async () => {

@@ -359,7 +359,7 @@ function parseNamedFlagsTokens(
     if (!keyToken.startsWith("--")) {
       return null;
     }
-    const key = keyToken.slice(2).toLowerCase();
+    const key = keyToken.slice(2).toLowerCase().replace(/_/g, "-");
     const value = tokens[i + 1];
     if (!value || value.startsWith("--")) {
       if (booleanFlags.has(key)) {
@@ -1684,7 +1684,7 @@ async function resolveFriendlyNameFromManifest(
     return { objectKey: null, matchCount: 0 };
   }
 
-  const wallet = params.walletAddress.trim();
+  const wallet = params.walletAddress.trim().toLowerCase();
   const name = params.friendlyName.trim();
   const atMs = params.at ? Date.parse(params.at) : Number.NaN;
   const hasAt = Number.isFinite(atMs);
@@ -1710,7 +1710,7 @@ async function resolveFriendlyNameFromManifest(
       if (!row.object_key || !row.friendly_name || !row.wallet_address || !row.created_at)
         return false;
       if (row.friendly_name !== name) return false;
-      if (row.wallet_address.trim() !== wallet) return false;
+      if (row.wallet_address.trim().toLowerCase() !== wallet) return false;
       if (params.latest || !hasAt) return true;
       const createdAtMs = Date.parse(row.created_at);
       return Number.isFinite(createdAtMs) && createdAtMs <= atMs;
