@@ -1433,6 +1433,12 @@ async function resolveNameSelectorIfNeeded(
     }
     return { request: parsedRequest };
   }
+  let sqliteUnavailable = false;
+  try {
+    await datastore.ensureReady();
+  } catch {
+    sqliteUnavailable = true;
+  }
   const matches = await datastore.countFriendlyNameMatches(request.wallet_address, selector.name);
   if (matches > 1 && !selector.latest && !selector.at) {
     return {
@@ -1449,7 +1455,7 @@ async function resolveNameSelectorIfNeeded(
 
   let resolvedObjectKey = resolved?.objectKey ?? null;
   let degradedWarning: string | undefined;
-  if (!resolvedObjectKey) {
+  if (!resolvedObjectKey && sqliteUnavailable) {
     const manifestResolved = await resolveFriendlyNameFromManifest(
       {
         walletAddress: request.wallet_address,
