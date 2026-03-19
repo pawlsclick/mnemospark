@@ -7,10 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.2.0](https://github.com/pawlsclick/mnemospark/compare/v0.1.22...v0.2.0) (2026-03-19)
 
-
 ### Features
 
-* add subagent orchestration interfaces for async cloud operations ([#45](https://github.com/pawlsclick/mnemospark/issues/45)) ([951c527](https://github.com/pawlsclick/mnemospark/commit/951c527afd0411065a7bb761591d070dae87f8f2))
+- add subagent orchestration interfaces for async cloud operations ([#45](https://github.com/pawlsclick/mnemospark/issues/45)) ([951c527](https://github.com/pawlsclick/mnemospark/commit/951c527afd0411065a7bb761591d070dae87f8f2))
 
 ## [0.1.22](https://github.com/pawlsclick/mnemospark/compare/v0.1.21...v0.1.22) (2026-03-17)
 
