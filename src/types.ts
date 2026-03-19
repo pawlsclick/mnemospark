@@ -156,6 +156,9 @@ export type PluginCommandHandler = (
 
 export type OpenClawPluginCommandDefinition = {
   name: string;
+  nativeNames?: Partial<Record<string, string>> & {
+    default?: string;
+  };
   description: string;
   acceptsArgs?: boolean;
   requireAuth?: boolean;

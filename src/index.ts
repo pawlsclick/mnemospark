@@ -102,6 +102,9 @@ async function startProxyInBackground(api: OpenClawPluginApi): Promise<void> {
 async function createWalletCommand(): Promise<OpenClawPluginCommandDefinition> {
   return {
     name: "mnemospark-wallet",
+    nativeNames: {
+      default: "mnemospark_wallet",
+    },
     description: "Show mnemospark wallet info or export private key for backup",
     acceptsArgs: true,
     requireAuth: true,

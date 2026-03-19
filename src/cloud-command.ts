@@ -1260,6 +1260,9 @@ export function createCloudCommand(
 ): OpenClawPluginCommandDefinition {
   return {
     name: "mnemospark-cloud",
+    nativeNames: {
+      default: "mnemospark_cloud",
+    },
     description: "Manage mnemospark cloud storage workflow commands",
     acceptsArgs: true,
     requireAuth: true,
