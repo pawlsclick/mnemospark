@@ -961,6 +961,30 @@ describe("cloud command", () => {
     );
   });
 
+  it("returns invalid async-flag guidance for upload", async () => {
+    const command = createCloudCommand();
+
+    const result = await command.handler({
+      channel: "test",
+      isAuthorizedSender: true,
+      args: [
+        "upload",
+        "--quote-id quote-1",
+        "--wallet-address 0x1234abcd",
+        "--object-id obj-1",
+        "--object-id-hash hash-1",
+        "--orchestrator subagent",
+      ].join(" "),
+      commandBody: "upload",
+      config: {},
+    });
+
+    expect(result.isError).toBe(true);
+    expect(result.text).toBe(
+      "Cannot upload storage object: invalid async flags. `--orchestrator`/`--timeout-seconds` require `--async`, and `--timeout-seconds` is only valid with `--orchestrator subagent`.",
+    );
+  });
+
   it("handles /mnemospark cloud ls and prints object metadata message", async () => {
     let capturedRequest: Record<string, unknown> | undefined;
     let capturedCorrelation: { operationId?: string; traceId?: string } | undefined;
@@ -1216,6 +1240,23 @@ describe("cloud command", () => {
     expect(result.text).toBe("Cannot download file");
   });
 
+  it("returns invalid async-flag guidance for download", async () => {
+    const command = createCloudCommand();
+
+    const result = await command.handler({
+      channel: "test",
+      isAuthorizedSender: true,
+      args: "download --wallet-address 0x1234abcd --object-key backup/archive.tar.gz --timeout-seconds 5",
+      commandBody: "download",
+      config: {},
+    });
+
+    expect(result.isError).toBe(true);
+    expect(result.text).toBe(
+      "Cannot download file: invalid async flags. `--orchestrator`/`--timeout-seconds` require `--async`, and `--timeout-seconds` is only valid with `--orchestrator subagent`.",
+    );
+  });
+
   it("supports async upload with operation id", async () => {
     const { homeDir } = await createSandbox();
     const command = createCloudCommand({ objectLogHomeDir: homeDir });
@@ -1346,6 +1387,76 @@ describe("cloud command", () => {
 
     const proxyOpEvents = proxyEvents.filter((event) => event.operation_id === operationId);
     expect(proxyOpEvents.length).toBeGreaterThan(0);
+  });
+
+  it("labels backup subagent tasks as backup", async () => {
+    const { homeDir } = await createSandbox();
+    let subagentCommand: string | undefined;
+    const command = createCloudCommand({
+      objectLogHomeDir: homeDir,
+      subagentOrchestrator: {
+        dispatch: async (input) => {
+          subagentCommand = input.task.command;
+          return { sessionId: "session-backup-command" };
+        },
+        cancel: async () => ({ accepted: false }),
+      },
+    });
+
+    const result = await command.handler({
+      channel: "test",
+      isAuthorizedSender: true,
+      args: "backup /tmp/source --async --orchestrator subagent",
+      commandBody: "backup",
+      config: {},
+    });
+
+    expect(result.isError).toBeUndefined();
+    expect(result.text).toContain("operation-id:");
+    expect(subagentCommand).toBe("backup");
+  });
+
+  it("does not regress operation status after subagent dispatch resolves", async () => {
+    const { homeDir } = await createSandbox();
+    const command = createCloudCommand({
+      objectLogHomeDir: homeDir,
+      subagentOrchestrator: {
+        dispatch: async (input) => {
+          const sessionId = "session-sync-hooks";
+          await input.hooks?.onRunning?.(sessionId);
+          await input.hooks?.onCompleted?.(sessionId, { text: "ok" });
+          return { sessionId };
+        },
+        cancel: async () => ({ accepted: false }),
+      },
+    });
+
+    const started = await command.handler({
+      channel: "test",
+      isAuthorizedSender: true,
+      args: [
+        "download",
+        "--wallet-address 0x1234abcd",
+        "--object-key backup/archive.tar.gz",
+        "--async",
+        "--orchestrator subagent",
+      ].join(" "),
+      commandBody: "download",
+      config: {},
+    });
+    const operationId = started.text?.match(/operation-id: ([0-9a-f-]+)/i)?.[1];
+    expect(operationId).toBeTruthy();
+
+    const status = await command.handler({
+      channel: "test",
+      isAuthorizedSender: true,
+      args: `op-status --operation-id ${operationId}`,
+      commandBody: "op-status",
+      config: {},
+    });
+
+    expect(status.text).toContain("status: succeeded");
+    expect(status.text).toContain("subagent-session-id: session-sync-hooks");
   });
 
   it("records dispatch failures for subagent orchestration", async () => {
