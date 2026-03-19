@@ -189,7 +189,7 @@ type MnemosparkSubagentTaskV1 = {
   schema: "mnemospark.subagent-task.v1";
   operationId: string;
   traceId: string;
-  command: "upload" | "download" | "restore";
+  command: "upload" | "download" | "backup";
   args: string;
   timeoutSeconds?: number;
   requestedBy: {
@@ -247,6 +247,7 @@ type ParsedCloudArgs =
       friendlyName?: string;
     } & AsyncOperationArgs)
   | { mode: "upload-invalid" }
+  | { mode: "upload-invalid-async" }
   | { mode: "ls"; storageObjectRequest: StorageObjectRequestInput; nameSelector?: NameSelector }
   | { mode: "ls-invalid" }
   | ({
@@ -255,6 +256,7 @@ type ParsedCloudArgs =
       nameSelector?: NameSelector;
     } & AsyncOperationArgs)
   | { mode: "download-invalid" }
+  | { mode: "download-invalid-async" }
   | { mode: "delete"; storageObjectRequest: StorageObjectRequestInput; nameSelector?: NameSelector }
   | { mode: "delete-invalid" }
   | { mode: "op-status"; operationId: string; cancel?: boolean }
@@ -474,6 +476,9 @@ function parseAsyncOperationArgs(flags: Record<string, string>): AsyncOperationA
   };
 }
 
+const INVALID_ASYNC_FLAGS_MESSAGE =
+  "invalid async flags. `--orchestrator`/`--timeout-seconds` require `--async`, and `--timeout-seconds` is only valid with `--orchestrator subagent`.";
+
 function stripAsyncControlFlags(args?: string): string {
   const tokens = tokenizeArgsRaw(args ?? "");
   const filtered: string[] = [];
@@ -562,7 +567,7 @@ function parseCloudArgs(args?: string): ParsedCloudArgs {
     }
     const asyncArgs = parseAsyncOperationArgs(flags);
     if (!asyncArgs) {
-      return { mode: "upload-invalid" };
+      return { mode: "upload-invalid-async" };
     }
 
     const quoteId = flags["quote-id"]?.trim();
@@ -610,7 +615,7 @@ function parseCloudArgs(args?: string): ParsedCloudArgs {
     }
     const asyncArgs = parseAsyncOperationArgs(flags);
     if (!asyncArgs) {
-      return { mode: "download-invalid" };
+      return { mode: "download-invalid-async" };
     }
     const selector = parseObjectSelector(flags);
     if (!selector) {
@@ -1933,7 +1938,7 @@ async function runCloudCommandHandler(
 
   if (parsed.mode === "backup-invalid") {
     return {
-      text: "Cannot build storage object: invalid async flags. `--orchestrator`/`--timeout-seconds` require `--async`, and `--timeout-seconds` is only valid with `--orchestrator subagent`.",
+      text: `Cannot build storage object: ${INVALID_ASYNC_FLAGS_MESSAGE}`,
       isError: true,
     };
   }
@@ -1941,6 +1946,13 @@ async function runCloudCommandHandler(
   if (parsed.mode === "upload-invalid") {
     return {
       text: `Cannot upload storage object: required arguments are ${REQUIRED_UPLOAD}.`,
+      isError: true,
+    };
+  }
+
+  if (parsed.mode === "upload-invalid-async") {
+    return {
+      text: `Cannot upload storage object: ${INVALID_ASYNC_FLAGS_MESSAGE}`,
       isError: true,
     };
   }
@@ -1955,6 +1967,13 @@ async function runCloudCommandHandler(
   if (parsed.mode === "download-invalid") {
     return {
       text: `Cannot download file: required arguments are ${REQUIRED_STORAGE_OBJECT}.`,
+      isError: true,
+    };
+  }
+
+  if (parsed.mode === "download-invalid-async") {
+    return {
+      text: `Cannot download file: ${INVALID_ASYNC_FLAGS_MESSAGE}`,
       isError: true,
     };
   }
@@ -2162,7 +2181,7 @@ async function runCloudCommandHandler(
         schema: "mnemospark.subagent-task.v1",
         operationId,
         traceId: asyncCorrelation.traceId,
-        command: parsed.mode === "backup" ? "restore" : parsed.mode,
+        command: parsed.mode,
         args: syncArgs,
         timeoutSeconds: parsed.timeoutSeconds,
         requestedBy: {
@@ -2328,19 +2347,22 @@ async function runCloudCommandHandler(
           },
         });
 
-        await datastore.upsertOperation({
-          operation_id: operationId,
-          type: opType,
-          object_id: opObject,
-          quote_id: opQuote,
-          trace_id: asyncCorrelation.traceId,
-          orchestrator: "subagent",
-          subagent_session_id: dispatchResult.sessionId,
-          timeout_seconds: timeoutSeconds,
-          status: "started",
-          error_code: null,
-          error_message: null,
-        });
+        const operationAfterDispatch = await datastore.findOperationById(operationId);
+        if (operationAfterDispatch?.subagent_session_id !== dispatchResult.sessionId) {
+          await datastore.upsertOperation({
+            operation_id: operationId,
+            type: opType,
+            object_id: opObject,
+            quote_id: opQuote,
+            trace_id: asyncCorrelation.traceId,
+            orchestrator: "subagent",
+            subagent_session_id: dispatchResult.sessionId,
+            timeout_seconds: timeoutSeconds,
+            status: operationAfterDispatch?.status ?? "started",
+            error_code: operationAfterDispatch?.error_code ?? null,
+            error_message: operationAfterDispatch?.error_message ?? null,
+          });
+        }
 
         return {
           text: [
