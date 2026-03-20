@@ -56,4 +56,3 @@ jobs:
 
       - name: Install check (plugin load)
         run: npm run test:install-check
-
