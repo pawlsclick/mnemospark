@@ -40,3 +40,18 @@ jobs:
 
       - name: Install check (plugin load)
         run: npm run test:install-check
+
+  - name: Verify manifest version matches package.json
+    run: |
+      PKG_VERSION=$(node -p "require('./package.json').version")
+      MANIFEST_VERSION=$(node -p "require('./.release-please-manifest.json')['.']")
+      if [ "$PKG_VERSION" != "$MANIFEST_VERSION" ]; then
+        echo "Version drift detected:"
+        echo "  package.json:                  $PKG_VERSION"
+        echo "  .release-please-manifest.json: $MANIFEST_VERSION"
+        echo ""
+        echo "Keep these in sync. Either merge via release-please (preferred) or"
+        echo "manually update .release-please-manifest.json when bumping package.json."
+        exit 1
+      fi
+      echo "Manifest version matches package.json: $PKG_VERSION ✓"
