@@ -20,6 +20,13 @@
 - Purpose: upload encrypted object for a valid quote.
 - `--timeout-seconds <n>` only applies when `--async --orchestrator subagent`.
 
+### Payment settle (scheduled / manual)
+
+`payment-settle --quote-id <quote-id> --wallet-address <addr> [--object-id <id>] [--object-key <key>] [--storage-price <n>]`
+
+- Purpose: call the same proxy + x402 payment settlement path as upload (for monthly cron lines stored after upload).
+- Required: `--quote-id`, `--wallet-address` (configured private key must match the address).
+
 ### List
 
 `ls --wallet-address <addr> [--object-key <object-key> | --name <friendly-name>] [--latest|--at <timestamp>]`

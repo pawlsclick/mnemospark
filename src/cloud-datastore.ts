@@ -94,6 +94,8 @@ export type CloudDatastore = {
   upsertCronJob: (row: CronJobRow) => Promise<void>;
   removeCronJob: (cronId: string) => Promise<boolean>;
   findCronByObjectKey: (objectKey: string) => Promise<{ cronId: string; objectId: string } | null>;
+  findCronByQuoteId: (quoteId: string) => Promise<CronJobRow | null>;
+  findPaymentByQuoteId: (quoteId: string) => Promise<PaymentRow | null>;
   upsertOperation: (row: OperationRow) => Promise<void>;
   findOperationById: (operationId: string) => Promise<{
     operation_id: string;
@@ -168,6 +170,8 @@ export async function createCloudDatastore(homeDir?: string): Promise<CloudDatas
     const nextDb = new DatabaseSyncCtor(dbPath);
     nextDb.exec("PRAGMA journal_mode=WAL;");
     nextDb.exec("PRAGMA foreign_keys=ON;");
+    // Multiple DatabaseSync handles may open the same file (e.g. tests + handler); wait on locks.
+    nextDb.exec("PRAGMA busy_timeout=5000;");
 
     nextDb.exec(`
       CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -217,6 +221,7 @@ export async function createCloudDatastore(homeDir?: string): Promise<CloudDatas
         updated_at TEXT NOT NULL
       );
       CREATE INDEX IF NOT EXISTS idx_cron_jobs_object_key ON cron_jobs(object_key);
+      CREATE INDEX IF NOT EXISTS idx_cron_jobs_quote_id ON cron_jobs(quote_id);
 
       CREATE TABLE IF NOT EXISTS operations (
         operation_id TEXT PRIMARY KEY,
@@ -440,6 +445,64 @@ export async function createCloudDatastore(homeDir?: string): Promise<CloudDatas
           .get(objectKey) as { cron_id: string; object_id: string } | undefined;
         if (!row) return null;
         return { cronId: row.cron_id, objectId: row.object_id };
+      }, null),
+    findCronByQuoteId: async (quoteId) =>
+      safe(() => {
+        const row = db!
+          .prepare(
+            `SELECT cron_id, object_id, object_key, quote_id, schedule, command, status
+             FROM cron_jobs WHERE quote_id = ? ORDER BY updated_at DESC LIMIT 1`,
+          )
+          .get(quoteId) as
+          | {
+              cron_id: string;
+              object_id: string;
+              object_key: string;
+              quote_id: string;
+              schedule: string;
+              command: string;
+              status: string;
+            }
+          | undefined;
+        if (!row) return null;
+        return {
+          cron_id: row.cron_id,
+          object_id: row.object_id,
+          object_key: row.object_key,
+          quote_id: row.quote_id,
+          schedule: row.schedule,
+          command: row.command,
+          status: row.status,
+        };
+      }, null),
+    findPaymentByQuoteId: async (quoteId) =>
+      safe(() => {
+        const row = db!
+          .prepare(
+            `SELECT quote_id, wallet_address, trans_id, amount, network, status, settled_at
+             FROM payments WHERE quote_id = ? LIMIT 1`,
+          )
+          .get(quoteId) as
+          | {
+              quote_id: string;
+              wallet_address: string;
+              trans_id: string | null;
+              amount: number;
+              network: string | null;
+              status: string;
+              settled_at: string | null;
+            }
+          | undefined;
+        if (!row) return null;
+        return {
+          quote_id: row.quote_id,
+          wallet_address: row.wallet_address,
+          trans_id: row.trans_id,
+          amount: row.amount,
+          network: row.network,
+          status: row.status,
+          settled_at: row.settled_at,
+        };
       }, null),
     upsertOperation: async (row) => {
       await safe(() => {
