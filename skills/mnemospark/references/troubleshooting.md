@@ -8,7 +8,7 @@
 4. Capture `operation-id`.
 5. Query: `/mnemospark_cloud op-status --operation-id <id>`.
 6. If needed, request cancel: `/mnemospark_cloud op-status --operation-id <id> --cancel`.
-7. Correlate with `events.jsonl` and `proxy-events.jsonl`.
+7. Correlate with `~/.openclaw/mnemospark/events.jsonl` (filter on `operation_id`, `trace_id`, and `source`).
 
 ## One-step correlation debugger
 
@@ -39,8 +39,10 @@ If you omit `<operation-id>`, the latest operation from SQLite is used:
   - Operation was cancelled through `op-status --cancel`.
 - Name ambiguity for `--name`
   - Re-run with `--latest` or `--at <timestamp>`.
+- `quote-id not found in local SQLite`
+  - Run `/mnemospark_cloud price-storage` again; quotes expire on the server after about one hour.
 - Repeated settle/upload mismatch
-  - Inspect `proxy-events.jsonl` `payment.settle` and `storage.call` events for matching `operation_id`.
+  - In `events.jsonl`, inspect `payment.settle` and `storage.call` lines (`source: "proxy"`) and command-side events for matching `operation_id`.
 
 ## Operator fallback
 

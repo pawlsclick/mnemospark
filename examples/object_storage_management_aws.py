@@ -22,7 +22,6 @@ For ls/download/delete, --object-key is the S3 object key.
 
 import argparse
 import base64
-import csv
 import hashlib
 import json
 import logging
@@ -31,7 +30,7 @@ import re
 import secrets
 import sys
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 import boto3
@@ -55,7 +54,7 @@ BUCKET_IP_PATTERN = re.compile(r"^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$")
 
 LOG_GROUP = "/mnemospark/object-storage"
 KEY_STORE_DIR = os.path.expanduser("~/.openclaw/mnemospark/keys")
-OBJECT_LOG_PATH = os.path.expanduser("~/.openclaw/mnemospark/object.log")
+EVENTS_JSONL_PATH = os.path.expanduser("~/.openclaw/mnemospark/events.jsonl")
 WALLET_HASH_LEN = 16  # short hash for bucket name (mnemospark- = 11, so 11+16=27 <= 63)
 
 # AES-GCM: 12-byte nonce, 16-byte tag
@@ -182,20 +181,23 @@ def format_size(size_bytes: int) -> str:
     return f"{size_bytes} TiB"
 
 
-def append_upload_log(bucket: str, key: str, region: str) -> None:
-    """Append one CSV line to ~/.openclaw/mnemospark/object.log. Does not raise."""
+def append_example_upload_event(bucket: str, key: str, region: str) -> None:
+    """Append one JSON line to ~/.openclaw/mnemospark/events.jsonl. Does not raise."""
     try:
-        log_path = Path(OBJECT_LOG_PATH)
+        log_path = Path(EVENTS_JSONL_PATH)
         log_path.parent.mkdir(parents=True, exist_ok=True)
-        dt_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        file_exists = log_path.exists()
-        with open(log_path, "a", newline="", encoding="utf-8") as f:
-            writer = csv.writer(f)
-            if not file_exists:
-                writer.writerow(["datetime", "bucket", "key", "region"])
-            writer.writerow([dt_str, bucket, key, region])
+        record = {
+            "ts": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            "event_type": "example.s3_upload",
+            "source": "example",
+            "bucket": bucket,
+            "object_key": key,
+            "region": region,
+        }
+        with open(log_path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(record, separators=(",", ":")) + "\n")
     except Exception:
-        logging.getLogger(__name__).exception("Failed to write object.log")
+        logging.getLogger(__name__).exception("Failed to append events.jsonl")
 
 
 def upload_object(
@@ -233,7 +235,7 @@ def upload_object(
             Body=ciphertext,
             Metadata={"wrapped-dek": wrapped_dek_b64},
         )
-        append_upload_log(bucket_name_str, object_key, location)
+        append_example_upload_event(bucket_name_str, object_key, location)
         return {
             "success": True,
             "bucket": bucket_name_str,

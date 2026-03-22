@@ -12,16 +12,15 @@
 - `operations`
 - `friendly_names`
 
-## Observability streams
+## Observability
 
-- Client events: `~/.openclaw/mnemospark/events.jsonl`
-- Friendly-name manifest: `~/.openclaw/mnemospark/manifest.jsonl`
-- Proxy events: `~/.openclaw/mnemospark/proxy-events.jsonl`
+- **Unified JSONL:** `~/.openclaw/mnemospark/events.jsonl` — command handler, async operation lifecycle, client-side `payment.settle` observations, and HTTP proxy traffic share this file. Use the `source` field to distinguish writers:
+  - `command` — CLI / plugin paths (including `payment.settle` lines that mirror proxy semantics for local troubleshooting)
+  - `proxy` — mnemospark HTTP proxy
 
-## Legacy compatibility paths
+## Scheduler bookkeeping
 
-- `~/.openclaw/mnemospark/object.log`
-- `~/.openclaw/mnemospark/crontab.txt`
+- `~/.openclaw/mnemospark/crontab.txt` — JSON lines describing scheduled storage payment jobs (for your system scheduler)
 
 ## Correlation fields
 
@@ -62,17 +61,18 @@ For async runs, `operations` may include:
 - `timeout_seconds`
 - `cancel_requested_at`
 
-## Payment settle (client) JSONL events
+## Payment settle JSONL events
 
-Emitted to `events.jsonl` and `proxy-events.jsonl` when `/mnemospark_cloud payment-settle` runs (dual-write for operator grep parity with proxy `payment.settle` lines):
+When `/mnemospark_cloud payment-settle` runs:
 
-- `payment-settle.started` → `events.jsonl` (status `running`)
-- `payment-settle.completed` → `events.jsonl` (status `succeeded` or `failed`, includes `http_status` when known)
-- `payment.settle` with `status` `start` / `result` → `proxy-events.jsonl` (`details.source`: `client`)
+- `payment-settle.started` / `payment-settle.completed` → `events.jsonl` with `source: "command"` (structured command events)
+- `payment.settle` with `status` `start` / `result` → same `events.jsonl` file, `source: "command"`, with `details.client_observation: true` where applicable
+
+The HTTP proxy emits `payment.settle` into the same file with `source: "proxy"`.
 
 ## Operation lifecycle JSONL events
 
-Operation lifecycle events emitted to `events.jsonl` and `proxy-events.jsonl`:
+Emitted to `events.jsonl` with `source: "command"`:
 
 - `operation.dispatched`
 - `operation.progress`
@@ -86,3 +86,7 @@ Operation lifecycle events emitted to `events.jsonl` and `proxy-events.jsonl`:
 ```bash
 ./skills/mnemospark/scripts/debug-operation.sh <operation-id>
 ```
+
+## Migration note
+
+Older releases wrote `object.log`, `manifest.jsonl`, and `proxy-events.jsonl`. Current mnemospark no longer reads those paths; use SQLite plus `events.jsonl` only.

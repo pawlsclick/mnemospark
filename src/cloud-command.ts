@@ -51,14 +51,13 @@ import {
 import type { OpenClawPluginCommandDefinition } from "./types.js";
 import { createPaymentFetch, type PaymentFetchResult } from "./x402.js";
 import { isValidWalletPrivateKey } from "./wallet-key.js";
-import { createCloudDatastore } from "./cloud-datastore.js";
+import { createCloudDatastore, type QuoteLookup } from "./cloud-datastore.js";
 import { appendJsonlEvent } from "./cloud-jsonl.js";
 import type { RequestCorrelation } from "./cloud-correlation.js";
 
 const SUPPORTED_BACKUP_PLATFORMS = new Set<NodeJS.Platform>(["darwin", "linux"]);
 const BACKUP_DIR_SUBPATH = join(".openclaw", "mnemospark", "backup");
 const DEFAULT_BACKUP_DIR = join(homedir(), BACKUP_DIR_SUBPATH);
-const OBJECT_LOG_SUBPATH = join(".openclaw", "mnemospark", "object.log");
 const CRON_TABLE_SUBPATH = join(".openclaw", "mnemospark", "crontab.txt");
 const BLOCKRUN_WALLET_KEY_SUBPATH = join(".openclaw", "blockrun", "wallet.key");
 const MNEMOSPARK_WALLET_KEY_SUBPATH = join(".openclaw", "mnemospark", "wallet", "wallet.key");
@@ -69,8 +68,14 @@ const PAYMENT_DELETE_DEADLINE_DAYS = 32;
 // means days 1 and 31, so in 31-day months it fires twice one day apart (e.g. Jan 31, Feb 1).
 // Use 1st of each month so the job runs once per month.
 const PAYMENT_CRON_SCHEDULE = "0 0 1 * *";
-const CRON_LOG_ROW_PREFIX = "cron";
 const TAR_OVERHEAD_BYTES = 10 * 1024 * 1024; // Conservative headroom for tar metadata.
+
+const QUOTE_VALIDITY_USER_NOTE =
+  "Quotes are valid for one hour. Please run price-storage again if you need a new quote.";
+const MNEMOSPARK_SUPPORT_EMAIL = "pluggedin@mnemospark.ai";
+
+const CLOUD_HELP_FOOTER_STATE =
+  "Local state: mnemospark records quotes, objects, payments, cron jobs, friendly names, and operation metadata in ~/.openclaw/mnemospark/state.db (SQLite). For troubleshooting and correlation, commands and the HTTP proxy append structured JSON lines to ~/.openclaw/mnemospark/events.jsonl. Monthly storage billing jobs are listed in ~/.openclaw/mnemospark/crontab.txt for your system scheduler.";
 
 const REQUIRED_PRICE_STORAGE =
   "--wallet-address, --object-id, --object-id-hash, --gb, --provider, --region";
@@ -109,12 +114,14 @@ export function expandTilde(path: string): string {
 }
 
 const CLOUD_HELP_TEXT = [
-  "☁️ **mnemospark Cloud Commands**",
+  "☁️ **mnemospark - Wallet and go.** 💙",
+  "",
+  "**Cloud Commands**",
   "",
   "• `/mnemospark_cloud` or `/mnemospark_cloud help` — show this message",
   "",
   "• `/mnemospark_cloud backup <file|directory> [--name <friendly-name>] [--async] [--orchestrator <inline|subagent>] [--timeout-seconds <n>]`",
-  "  Purpose: create a local tar+gzip backup object and index it for later upload.",
+  "  Purpose: create a local tar+gzip archive under ~/.openclaw/mnemospark/backup and record metadata in SQLite for later price-storage and upload.",
   "  Required: <file|directory>",
   "",
   "• `/mnemospark_cloud price-storage --wallet-address <addr> --object-id <id> --object-id-hash <hash> --gb <gb> --provider <provider> --region <region>`",
@@ -163,7 +170,9 @@ const CLOUD_HELP_TEXT = [
   "• `/mnemospark_cloud op-status --operation-id <id>`",
   "• `/mnemospark_cloud op-status --operation-id <id> --cancel`",
   "",
-  "Backup creates a tar+gzip object in ~/.openclaw/mnemospark/backup and appends object metadata to ~/.openclaw/mnemospark/object.log. Upload appends storage rows and cron-tracking rows to object.log, and keeps job entries in ~/.openclaw/mnemospark/crontab.txt. Commands price-storage, upload, ls, download, delete, and payment-settle require --wallet-address.",
+  CLOUD_HELP_FOOTER_STATE,
+  "",
+  "Commands price-storage, upload, ls, download, delete, and payment-settle require --wallet-address.",
 ].join("\n");
 
 type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
@@ -197,7 +206,6 @@ type BackupObjectResult = {
   objectIdHash: string;
   objectSizeGb: string;
   archivePath: string;
-  objectLogPath: string;
 };
 
 type NameSelector = { name: string; latest?: boolean; at?: string };
@@ -338,7 +346,7 @@ type CreateCloudCommandOptions = {
   ) => Promise<StorageDeleteResponse>;
   subagentOrchestrator?: MnemosparkSubagentOrchestrator;
   proxyStorageOptions?: ProxyStorageOptions;
-  objectLogHomeDir?: string;
+  mnemosparkHomeDir?: string;
 };
 
 class UnsupportedBackupPlatformError extends Error {
@@ -771,19 +779,8 @@ function parseCloudArgs(args?: string): ParsedCloudArgs {
   return { mode: "unknown" };
 }
 
-function resolveObjectLogPath(homeDir?: string): string {
-  return join(homeDir ?? homedir(), OBJECT_LOG_SUBPATH);
-}
-
 function resolveCronTablePath(homeDir?: string): string {
   return join(homeDir ?? homedir(), CRON_TABLE_SUBPATH);
-}
-
-async function appendObjectLogLine(line: string, homeDir?: string): Promise<string> {
-  const objectLogPath = resolveObjectLogPath(homeDir);
-  await mkdir(dirname(objectLogPath), { recursive: true });
-  await appendFile(objectLogPath, `${line}\n`, "utf-8");
-  return objectLogPath;
 }
 
 async function calculateInputSizeBytes(targetPath: string): Promise<number> {
@@ -900,53 +897,17 @@ export async function buildBackupObject(
     const objectIdHash = await sha256File(archivePath);
     const objectSizeGb = toGbString(archiveStats.size);
 
-    const objectLogPath = await appendObjectLogLine(
-      `${objectId},${objectIdHash},${objectSizeGb}`,
-      options.homeDir,
-    );
-
     return {
       objectId,
       objectIdHash,
       objectSizeGb,
       archivePath,
-      objectLogPath,
     };
   } catch (error) {
     await rm(archivePath, { force: true }).catch(() => undefined);
     throw error;
   }
 }
-
-async function appendPriceStorageQuoteLog(
-  quote: PriceStorageQuoteResponse,
-  homeDir?: string,
-): Promise<string> {
-  return appendObjectLogLine(
-    [
-      quote.timestamp,
-      quote.quote_id,
-      quote.storage_price.toString(),
-      quote.addr,
-      quote.object_id,
-      quote.object_id_hash,
-      quote.object_size_gb.toString(),
-      quote.provider,
-      quote.location,
-    ].join(","),
-    homeDir,
-  );
-}
-
-type LoggedPriceStorageQuote = {
-  quoteId: string;
-  storagePrice: number;
-  walletAddress: string;
-  objectId: string;
-  objectIdHash: string;
-  provider: string;
-  location: string;
-};
 
 type StoragePaymentCronJob = {
   cronId: string;
@@ -961,12 +922,6 @@ type StoragePaymentCronJob = {
   provider: string;
   bucketName: string;
   location: string;
-};
-
-type LoggedStoragePaymentCron = {
-  cronId: string;
-  objectId: string;
-  objectKey: string;
 };
 
 function formatTimestamp(date: Date): string {
@@ -984,62 +939,6 @@ function formatTimestamp(date: Date): string {
     ":",
     pad(date.getSeconds()),
   ].join("");
-}
-
-function parseLoggedPriceStorageQuote(line: string): LoggedPriceStorageQuote | null {
-  const parts = line.split(",");
-  if (parts.length < 9) {
-    return null;
-  }
-
-  const quoteId = parts[1]?.trim() ?? "";
-  const storagePriceRaw = parts[2]?.trim() ?? "";
-  const walletAddress = parts[3]?.trim() ?? "";
-  const objectId = parts[4]?.trim() ?? "";
-  const objectIdHash = parts[5]?.trim() ?? "";
-  const provider = parts[7]?.trim() ?? "";
-  const location = parts[8]?.trim() ?? "";
-  const storagePrice = Number.parseFloat(storagePriceRaw);
-
-  if (!quoteId || !walletAddress || !objectId || !objectIdHash || !provider || !location) {
-    return null;
-  }
-  if (!Number.isFinite(storagePrice) || storagePrice <= 0) {
-    return null;
-  }
-
-  return {
-    quoteId,
-    storagePrice,
-    walletAddress,
-    objectId,
-    objectIdHash,
-    provider,
-    location,
-  };
-}
-
-function parseLoggedStoragePaymentCron(line: string): LoggedStoragePaymentCron | null {
-  const parts = line.split(",");
-  if (parts.length < 5) {
-    return null;
-  }
-  if ((parts[0]?.trim() ?? "").toLowerCase() !== CRON_LOG_ROW_PREFIX) {
-    return null;
-  }
-
-  const cronId = parts[2]?.trim() ?? "";
-  const objectId = parts[3]?.trim() ?? "";
-  const objectKey = parts[4]?.trim() ?? "";
-  if (!cronId || !objectId || !objectKey) {
-    return null;
-  }
-
-  return {
-    cronId,
-    objectId,
-    objectKey,
-  };
 }
 
 function parseStoragePaymentCronJobLine(line: string): StoragePaymentCronJob | null {
@@ -1107,59 +1006,33 @@ function parseStoragePaymentCronJobLine(line: string): StoragePaymentCronJob | n
   };
 }
 
-async function findLoggedPriceStorageQuote(
-  quoteId: string,
-  homeDir?: string,
-): Promise<LoggedPriceStorageQuote | null> {
-  const objectLogPath = resolveObjectLogPath(homeDir);
-
-  let content: string;
-  try {
-    content = await readFile(objectLogPath, "utf-8");
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return null;
-    }
-    throw error;
-  }
-
-  const lines = content
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0);
-  for (let idx = lines.length - 1; idx >= 0; idx -= 1) {
-    const parsed = parseLoggedPriceStorageQuote(lines[idx]);
-    if (parsed && parsed.quoteId === quoteId) {
-      return parsed;
-    }
-  }
-  return null;
-}
-
-async function findLoggedStoragePaymentCronByObjectKey(
+/** Latest matching cron job line in crontab.txt for an object key (scan from end of file). */
+async function findCronJobInCrontabByObjectKey(
   objectKey: string,
   homeDir?: string,
-): Promise<LoggedStoragePaymentCron | null> {
-  const objectLogPath = resolveObjectLogPath(homeDir);
-
+): Promise<{ cronId: string; objectId: string; objectKey: string } | null> {
+  const cronTablePath = resolveCronTablePath(homeDir);
   let content: string;
   try {
-    content = await readFile(objectLogPath, "utf-8");
+    content = await readFile(cronTablePath, "utf-8");
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
       return null;
     }
     throw error;
   }
-
   const lines = content
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter((line) => line.length > 0);
   for (let idx = lines.length - 1; idx >= 0; idx -= 1) {
-    const parsed = parseLoggedStoragePaymentCron(lines[idx]);
+    const parsed = parseStoragePaymentCronJobLine(lines[idx]);
     if (parsed && parsed.objectKey === objectKey) {
-      return parsed;
+      return {
+        cronId: parsed.cronId,
+        objectId: parsed.objectId,
+        objectKey: parsed.objectKey,
+      };
     }
   }
   return null;
@@ -1190,24 +1063,6 @@ function buildStoragePaymentCronCommand(job: {
     "--storage-price",
     quoteCronArgument(job.storagePrice),
   ].join(" ");
-}
-
-async function appendStoragePaymentCronLog(
-  cronJob: StoragePaymentCronJob,
-  homeDir?: string,
-): Promise<string> {
-  return appendObjectLogLine(
-    [
-      CRON_LOG_ROW_PREFIX,
-      cronJob.createdAt,
-      cronJob.cronId,
-      cronJob.objectId,
-      cronJob.objectKey,
-      cronJob.quoteId,
-      cronJob.storagePrice.toString(),
-    ].join(","),
-    homeDir,
-  );
 }
 
 async function appendStoragePaymentCronJob(
@@ -1290,7 +1145,6 @@ async function createStoragePaymentCronJob(
   };
 
   await appendStoragePaymentCronJob(cronJob, homeDir);
-  await appendStoragePaymentCronLog(cronJob, homeDir);
   return cronJob;
 }
 
@@ -1473,29 +1327,6 @@ async function uploadPresignedObjectIfNeeded(
   );
 }
 
-async function appendStorageUploadLog(
-  upload: StorageUploadResponse,
-  homeDir?: string,
-  nowDateFn: () => Date = () => new Date(),
-): Promise<string> {
-  return appendObjectLogLine(
-    [
-      formatTimestamp(nowDateFn()),
-      upload.quote_id,
-      upload.addr,
-      upload.addr_hash ?? "",
-      upload.trans_id ?? "",
-      upload.storage_price?.toString() ?? "",
-      upload.object_id,
-      upload.object_key,
-      upload.provider,
-      upload.bucket_name,
-      upload.location,
-    ].join(","),
-    homeDir,
-  );
-}
-
 async function maybeCleanupLocalBackupArchive(archivePath: string): Promise<void> {
   const flag = process.env.MNEMOSPARK_DELETE_BACKUP_AFTER_UPLOAD;
   if (!flag) {
@@ -1513,10 +1344,18 @@ async function maybeCleanupLocalBackupArchive(archivePath: string): Promise<void
 }
 
 function formatStorageUploadUserMessage(upload: StorageUploadResponse, cronJobId: string): string {
+  const lsLine = `/mnemospark_cloud ls --wallet-address \`${upload.addr}\``;
   return [
     `Your file \`${upload.object_id}\` with key \`${upload.object_key}\` has been stored using \`${upload.provider}\` in \`${upload.bucket_name}\` \`${upload.location}\``,
-    `A cron job \`${cronJobId}\` has been configured to send payment monthly (on the 1st) for storage services. If payment is not sent, your \`${upload.object_id}\` will be deleted after the **${PAYMENT_DELETE_DEADLINE_DAYS}-day deadline** (${PAYMENT_REMINDER_INTERVAL_DAYS}-day billing interval + 2-day grace period).`,
+    "",
+    `A cron job \`${cronJobId}\` has been configured to send payment monthly (on the 1st) for storage services. If payment is not sent, your \`${upload.object_id}\` will be deleted after the ${PAYMENT_DELETE_DEADLINE_DAYS}-day deadline (${PAYMENT_REMINDER_INTERVAL_DAYS}-day billing interval + 2-day grace period).`,
+    "",
+    "To view your cloud storage run the command:",
+    "",
+    lsLine,
+    "",
     "Thank you for using mnemospark!",
+    `Reach out if you need anything: ${MNEMOSPARK_SUPPORT_EMAIL}`,
   ].join("\n");
 }
 
@@ -1591,9 +1430,51 @@ function extractLsErrorMessage(error: unknown): string | null {
 }
 
 function formatPriceStorageUserMessage(quote: PriceStorageQuoteResponse): string {
+  const uploadLine = `/mnemospark_cloud upload --quote-id \`${quote.quote_id}\` --wallet-address \`${quote.addr}\` --object-id \`${quote.object_id}\` --object-id-hash \`${quote.object_id_hash}\``;
   return [
-    `Your storage quote \`${quote.quote_id}\` is valid for 1 hour, the storage price is \`${quote.storage_price}\` for \`${quote.object_id}\` with file size of \`${quote.object_size_gb}\` in \`${quote.provider}\` \`${quote.location}\``,
-    `If you accept this quote run the command /mnemospark_cloud upload --quote-id \`${quote.quote_id}\` --wallet-address \`${quote.addr}\` --object-id \`${quote.object_id}\` --object-id-hash \`${quote.object_id_hash}\``,
+    `Your storage quote \`${quote.quote_id}\`: storage price \`${quote.storage_price}\` for \`${quote.object_id}\` with file size \`${quote.object_size_gb}\` in \`${quote.provider}\` \`${quote.location}\`.`,
+    "",
+    "If you accept this quote, run:",
+    "",
+    uploadLine,
+    "",
+    QUOTE_VALIDITY_USER_NOTE,
+  ].join("\n");
+}
+
+function quoteLookupMatchesPriceStorageResponse(
+  lookup: QuoteLookup,
+  quote: PriceStorageQuoteResponse,
+): boolean {
+  return (
+    lookup.quoteId === quote.quote_id &&
+    lookup.walletAddress.trim().toLowerCase() === quote.addr.trim().toLowerCase() &&
+    lookup.objectId === quote.object_id &&
+    lookup.objectIdHash.toLowerCase() === quote.object_id_hash.toLowerCase() &&
+    lookup.provider === quote.provider &&
+    lookup.location === quote.location
+  );
+}
+
+function formatBackupSuccessUserMessage(result: BackupObjectResult): string {
+  const hash = result.objectIdHash.replace(/\s/g, "");
+  const priceStorageLine = `/mnemospark_cloud price-storage --wallet-address <wallet-address> --object-id \`${result.objectId}\` --object-id-hash \`${hash}\` --gb \`${result.objectSizeGb}\` --provider <provider> --region <region>`;
+  return [
+    `Backup archive: \`${result.archivePath}\``,
+    "",
+    `object-id: ${result.objectId}`,
+    `object-id-hash: ${hash}`,
+    `object-size: ${result.objectSizeGb}`,
+    "",
+    "Next, request a storage quote. Replace `<wallet-address>`, `<provider>`, and `<region>` (one line):",
+    "",
+    priceStorageLine,
+    "",
+    "Region examples (merge into the command above):",
+    "North America: `--provider aws --region us-east-1`",
+    "Europe: `--provider aws --region eu-north-1`",
+    "South America: `--provider aws --region sa-east-1`",
+    "Asia Pacific: `--provider aws --region ap-northeast-1`",
   ].join("\n");
 }
 
@@ -1744,7 +1625,7 @@ export function createCloudCommand(
           requestStorageDeleteFn: options.requestStorageDeleteFn ?? requestStorageDeleteViaProxy,
           requestPaymentSettleViaProxyFn:
             options.requestPaymentSettleViaProxyFn ?? requestPaymentSettleViaProxy,
-          objectLogHomeDir: options.objectLogHomeDir ?? options.backupOptions?.homeDir,
+          mnemosparkHomeDir: options.mnemosparkHomeDir ?? options.backupOptions?.homeDir,
           backupOptions: options.backupOptions,
           proxyQuoteOptions: options.proxyQuoteOptions,
           proxyUploadOptions: options.proxyUploadOptions,
@@ -1784,7 +1665,7 @@ type RunCloudCommandHandlerOptions = {
   requestPaymentSettleViaProxyFn: NonNullable<
     CreateCloudCommandOptions["requestPaymentSettleViaProxyFn"]
   >;
-  objectLogHomeDir: string | undefined;
+  mnemosparkHomeDir: string | undefined;
   backupOptions: CreateCloudCommandOptions["backupOptions"];
   proxyQuoteOptions: CreateCloudCommandOptions["proxyQuoteOptions"];
   proxyUploadOptions: CreateCloudCommandOptions["proxyUploadOptions"];
@@ -1799,73 +1680,10 @@ type RunCloudCommandExecutionContext = {
   forcedTraceId?: string;
 };
 
-async function resolveFriendlyNameFromManifest(
-  params: {
-    walletAddress: string;
-    friendlyName: string;
-    latest?: boolean;
-    at?: string;
-  },
-  homeDir?: string,
-): Promise<{ objectKey: string | null; matchCount: number }> {
-  const manifestPath = join(homeDir ?? homedir(), ".openclaw", "mnemospark", "manifest.jsonl");
-
-  let manifestRaw: string;
-  try {
-    manifestRaw = await readFile(manifestPath, "utf-8");
-  } catch {
-    return { objectKey: null, matchCount: 0 };
-  }
-
-  const wallet = params.walletAddress.trim().toLowerCase();
-  const name = params.friendlyName.trim();
-  const atMs = params.at ? Date.parse(params.at) : Number.NaN;
-  const hasAt = Number.isFinite(atMs);
-
-  const rows = manifestRaw
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .map((line) => {
-      try {
-        return JSON.parse(line) as {
-          friendly_name?: string;
-          wallet_address?: string;
-          object_key?: string;
-          created_at?: string;
-        };
-      } catch {
-        return null;
-      }
-    })
-    .filter((row): row is NonNullable<typeof row> => Boolean(row))
-    .filter((row) => {
-      if (!row.object_key || !row.friendly_name || !row.wallet_address || !row.created_at)
-        return false;
-      if (row.friendly_name !== name) return false;
-      if (row.wallet_address.trim().toLowerCase() !== wallet) return false;
-      if (params.latest || !hasAt) return true;
-      const createdAtMs = Date.parse(row.created_at);
-      return Number.isFinite(createdAtMs) && createdAtMs <= atMs;
-    })
-    .sort((a, b) => Date.parse(b.created_at ?? "") - Date.parse(a.created_at ?? ""));
-
-  if (rows.length === 0) {
-    return { objectKey: null, matchCount: 0 };
-  }
-
-  if (!params.latest && !hasAt && rows.length > 1) {
-    return { objectKey: null, matchCount: rows.length };
-  }
-
-  return { objectKey: rows[0].object_key ?? null, matchCount: rows.length };
-}
-
 async function resolveNameSelectorIfNeeded(
   datastore: Awaited<ReturnType<typeof createCloudDatastore>>,
   request: StorageObjectRequestInput,
   selector?: NameSelector,
-  homeDir?: string,
 ): Promise<{
   request?: StorageObjectRequest | StorageLsRequest;
   error?: string;
@@ -1894,11 +1712,13 @@ async function resolveNameSelectorIfNeeded(
     }
     return { request: parsedRequest };
   }
-  let sqliteUnavailable = false;
   try {
     await datastore.ensureReady();
   } catch {
-    sqliteUnavailable = true;
+    return {
+      error:
+        "Cannot resolve --name: local SQLite (~/.openclaw/mnemospark/state.db) is unavailable. Use --object-key or restore SQLite access.",
+    };
   }
   const matches = await datastore.countFriendlyNameMatches(request.wallet_address, selector.name);
   if (matches > 1 && !selector.latest && !selector.at) {
@@ -1914,29 +1734,7 @@ async function resolveNameSelectorIfNeeded(
     at: selector.at,
   });
 
-  let resolvedObjectKey = resolved?.objectKey ?? null;
-  let degradedWarning: string | undefined;
-  if (!resolvedObjectKey && sqliteUnavailable) {
-    const manifestResolved = await resolveFriendlyNameFromManifest(
-      {
-        walletAddress: request.wallet_address,
-        friendlyName: selector.name,
-        latest: selector.latest,
-        at: selector.at,
-      },
-      homeDir,
-    );
-    if (manifestResolved.matchCount > 1 && !selector.latest && !selector.at) {
-      return {
-        error: `Multiple objects match --name ${selector.name}. Add --latest or --at <timestamp>.`,
-      };
-    }
-    resolvedObjectKey = manifestResolved.objectKey;
-    if (resolvedObjectKey) {
-      degradedWarning =
-        "SQLite friendly-name index unavailable; resolved --name via manifest.jsonl fallback.";
-    }
-  }
+  const resolvedObjectKey = resolved?.objectKey ?? null;
 
   if (!resolvedObjectKey) {
     return { error: `No object found for --name ${selector.name}.` };
@@ -1949,10 +1747,7 @@ async function resolveNameSelectorIfNeeded(
   if (!parsedRequest) {
     return { error: "Cannot resolve storage object request." };
   }
-  return {
-    request: parsedRequest,
-    degradedWarning,
-  };
+  return { request: parsedRequest };
 }
 
 function toStorageObjectRequestOrError(
@@ -1985,6 +1780,7 @@ async function emitCloudEvent(
       ...details,
       ts: new Date().toISOString(),
       event_type: eventType,
+      source: "command",
     },
     homeDir,
   );
@@ -2027,6 +1823,7 @@ function toOperationEventPayload(
     trace_id: context.traceId,
     event_type: eventType,
     status: context.status,
+    source: "command",
     ts: new Date().toISOString(),
     wallet_address: context.walletAddress ?? undefined,
     object_id: context.objectId ?? undefined,
@@ -2047,10 +1844,7 @@ async function emitOperationEvent(
   homeDir?: string,
 ): Promise<void> {
   const payload = toOperationEventPayload(eventType, context);
-  await Promise.all([
-    appendJsonlEvent("events.jsonl", payload, homeDir),
-    appendJsonlEvent("proxy-events.jsonl", payload, homeDir),
-  ]);
+  await appendJsonlEvent("events.jsonl", payload, homeDir);
 }
 
 async function emitOperationEventBestEffort(
@@ -2092,7 +1886,6 @@ async function resolveAmountForPaymentSettle(
   quoteId: string,
   storagePriceFromFlag: number | undefined,
   datastore: Awaited<ReturnType<typeof createCloudDatastore>>,
-  homeDir?: string,
 ): Promise<number> {
   if (storagePriceFromFlag !== undefined && Number.isFinite(storagePriceFromFlag)) {
     return storagePriceFromFlag;
@@ -2100,10 +1893,6 @@ async function resolveAmountForPaymentSettle(
   const quoteLookup = await datastore.findQuoteById(quoteId);
   if (quoteLookup && Number.isFinite(quoteLookup.storagePrice)) {
     return quoteLookup.storagePrice;
-  }
-  const logged = await findLoggedPriceStorageQuote(quoteId, homeDir);
-  if (logged && Number.isFinite(logged.storagePrice)) {
-    return logged.storagePrice;
   }
   const payment = await datastore.findPaymentByQuoteId(quoteId);
   if (payment && Number.isFinite(payment.amount)) {
@@ -2152,18 +1941,19 @@ async function emitPaymentSettleClientObservationBestEffort(params: {
         homeDir,
       );
       await appendJsonlEvent(
-        "proxy-events.jsonl",
+        "events.jsonl",
         {
           ts,
           event_type: "payment.settle",
           status: "start",
+          source: "command",
           trace_id: correlation.traceId,
           operation_id: correlation.operationId,
           quote_id: quoteId,
           wallet_address: walletAddress,
           object_id: objectId ?? null,
           object_key: objectKey ?? null,
-          details: { source: "client" },
+          details: { client_observation: true },
         },
         homeDir,
       );
@@ -2186,18 +1976,20 @@ async function emitPaymentSettleClientObservationBestEffort(params: {
       homeDir,
     );
     await appendJsonlEvent(
-      "proxy-events.jsonl",
+      "events.jsonl",
       {
         ts,
         event_type: "payment.settle",
         status: "result",
+        source: "command",
         trace_id: correlation.traceId,
         operation_id: correlation.operationId,
         quote_id: quoteId,
         wallet_address: walletAddress,
         object_id: objectId ?? null,
         object_key: objectKey ?? null,
-        details: { http_status: httpStatus ?? null, source: "client" },
+        http_status: httpStatus ?? null,
+        details: { client_observation: true },
       },
       homeDir,
     );
@@ -2212,7 +2004,7 @@ async function runCloudCommandHandler(
   executionContext: RunCloudCommandExecutionContext = {},
 ): Promise<{ text: string; isError?: boolean }> {
   const parsed = parseCloudArgs(ctx.args);
-  const objectLogHomeDir = options.objectLogHomeDir;
+  const mnemosparkHomeDir = options.mnemosparkHomeDir;
   const backupBuilder = options.buildBackupObjectFn;
   const requestPriceStorageQuote = options.requestPriceStorageQuoteFn;
   const requestStorageUpload = options.requestStorageUploadFn;
@@ -2312,7 +2104,7 @@ async function runCloudCommandHandler(
     };
   }
 
-  const datastore = await createCloudDatastore(objectLogHomeDir);
+  const datastore = await createCloudDatastore(mnemosparkHomeDir);
   const terminalOperationStatuses = new Set(["succeeded", "failed", "cancelled", "timed_out"]);
   const isTerminalOperationStatus = (status: string): boolean =>
     terminalOperationStatuses.has(status);
@@ -2395,7 +2187,7 @@ async function runCloudCommandHandler(
             subagentSessionId: operation.subagent_session_id,
             timeoutSeconds: operation.timeout_seconds,
           },
-          objectLogHomeDir,
+          mnemosparkHomeDir,
         );
 
         const cancelResult = await subagentOrchestrator.cancel(
@@ -2433,7 +2225,7 @@ async function runCloudCommandHandler(
                 errorCode: "ASYNC_CANCELLED",
                 errorMessage: "Operation cancelled by user request.",
               },
-              objectLogHomeDir,
+              mnemosparkHomeDir,
             );
           }
         }
@@ -2453,7 +2245,7 @@ async function runCloudCommandHandler(
     const req = parsed.paymentSettleRequest;
     let walletKey: `0x${string}`;
     try {
-      walletKey = await resolveWalletKey(objectLogHomeDir);
+      walletKey = await resolveWalletKey(mnemosparkHomeDir);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       return { text: message.trim() || "Cannot resolve wallet key.", isError: true };
@@ -2478,7 +2270,7 @@ async function runCloudCommandHandler(
       walletAddress: req.wallet_address,
       objectId,
       objectKey,
-      homeDir: objectLogHomeDir,
+      homeDir: mnemosparkHomeDir,
     });
 
     let settleResult: BackendSettleForwardResult;
@@ -2493,7 +2285,6 @@ async function runCloudCommandHandler(
         req.quote_id,
         req.storage_price,
         datastore,
-        objectLogHomeDir,
       );
       await datastore.upsertPayment({
         quote_id: req.quote_id,
@@ -2517,17 +2308,12 @@ async function runCloudCommandHandler(
         objectId,
         objectKey,
         outcomeStatus: "failed",
-        homeDir: objectLogHomeDir,
+        homeDir: mnemosparkHomeDir,
       });
       return { text: `Payment settle failed: ${msg}`, isError: true };
     }
 
-    const amount = await resolveAmountForPaymentSettle(
-      req.quote_id,
-      req.storage_price,
-      datastore,
-      objectLogHomeDir,
-    );
+    const amount = await resolveAmountForPaymentSettle(req.quote_id, req.storage_price, datastore);
     const transId =
       settleResult.status === 200
         ? parseTransIdFromPaymentSettleBody(settleResult.bodyText ?? "")
@@ -2556,7 +2342,7 @@ async function runCloudCommandHandler(
         objectKey,
         httpStatus: settleResult.status,
         outcomeStatus: "succeeded",
-        homeDir: objectLogHomeDir,
+        homeDir: mnemosparkHomeDir,
       });
       return {
         text: transId
@@ -2587,7 +2373,7 @@ async function runCloudCommandHandler(
       objectKey,
       httpStatus: settleResult.status,
       outcomeStatus: "failed",
-      homeDir: objectLogHomeDir,
+      homeDir: mnemosparkHomeDir,
     });
 
     const bodySnippet = settleResult.bodyText?.trim();
@@ -2644,7 +2430,7 @@ async function runCloudCommandHandler(
     await emitOperationEventBestEffort(
       "operation.dispatched",
       { ...eventContextBase, status: "started" },
-      objectLogHomeDir,
+      mnemosparkHomeDir,
     );
 
     const syncArgs = stripAsyncControlFlags(ctx.args);
@@ -2698,7 +2484,7 @@ async function runCloudCommandHandler(
                   subagentSessionId: sessionId,
                   progressMessage: "subagent running",
                 },
-                objectLogHomeDir,
+                mnemosparkHomeDir,
               );
             },
             onProgress: async (sessionId, message) => {
@@ -2710,7 +2496,7 @@ async function runCloudCommandHandler(
                   subagentSessionId: sessionId,
                   progressMessage: message,
                 },
-                objectLogHomeDir,
+                mnemosparkHomeDir,
               );
             },
             onCompleted: async (sessionId) => {
@@ -2734,7 +2520,7 @@ async function runCloudCommandHandler(
                   status: "succeeded",
                   subagentSessionId: sessionId,
                 },
-                objectLogHomeDir,
+                mnemosparkHomeDir,
               );
             },
             onFailed: async (sessionId, details) => {
@@ -2760,7 +2546,7 @@ async function runCloudCommandHandler(
                   errorCode: details.code,
                   errorMessage: details.message,
                 },
-                objectLogHomeDir,
+                mnemosparkHomeDir,
               );
             },
             onCancelled: async (sessionId, reason) => {
@@ -2787,7 +2573,7 @@ async function runCloudCommandHandler(
                   errorCode: "ASYNC_CANCELLED",
                   errorMessage: reason ?? "Operation cancelled.",
                 },
-                objectLogHomeDir,
+                mnemosparkHomeDir,
               );
             },
             onTimedOut: async (sessionId) => {
@@ -2813,7 +2599,7 @@ async function runCloudCommandHandler(
                   errorCode: "ASYNC_TIMEOUT",
                   errorMessage: "Operation timed out.",
                 },
-                objectLogHomeDir,
+                mnemosparkHomeDir,
               );
             },
           },
@@ -2870,7 +2656,7 @@ async function runCloudCommandHandler(
             errorCode: "ASYNC_DISPATCH_FAILED",
             errorMessage: dispatchMessage,
           },
-          objectLogHomeDir,
+          mnemosparkHomeDir,
         );
         return {
           text: `Cannot dispatch subagent operation: ${dispatchMessage}\noperation-id: ${operationId}`,
@@ -2918,7 +2704,7 @@ async function runCloudCommandHandler(
             errorCode: result.isError ? "ASYNC_FAILED" : null,
             errorMessage: result.isError ? result.text : null,
           },
-          objectLogHomeDir,
+          mnemosparkHomeDir,
         );
       })
       .catch(async (err) => {
@@ -2942,7 +2728,7 @@ async function runCloudCommandHandler(
             errorCode: "ASYNC_EXCEPTION",
             errorMessage,
           },
-          objectLogHomeDir,
+          mnemosparkHomeDir,
         );
       });
 
@@ -2964,9 +2750,14 @@ async function runCloudCommandHandler(
           operation_id: randomUUID(),
           object_id: result.objectId,
           status: "succeeded",
-          details: { friendly_name: parsed.friendlyName ?? basename(parsed.backupTarget) },
+          details: {
+            friendly_name: parsed.friendlyName ?? basename(parsed.backupTarget),
+            archive_path: result.archivePath,
+            object_id_hash: result.objectIdHash.replace(/\s/g, ""),
+            object_size_gb: result.objectSizeGb,
+          },
         },
-        objectLogHomeDir,
+        mnemosparkHomeDir,
       );
       await datastore.upsertObject({
         object_id: result.objectId,
@@ -2990,11 +2781,7 @@ async function runCloudCommandHandler(
         });
       }
       return {
-        text: [
-          `object-id: ${result.objectId}`,
-          `object-id-hash: ${result.objectIdHash.replace(/\s/g, "")}`,
-          `object-size: ${result.objectSizeGb}`,
-        ].join("\n"),
+        text: formatBackupSuccessUserMessage(result),
       };
     } catch (err) {
       if (err instanceof UnsupportedBackupPlatformError) {
@@ -3017,7 +2804,7 @@ async function runCloudCommandHandler(
         ...options.proxyQuoteOptions,
         correlation,
       });
-      await appendPriceStorageQuoteLog(quote, objectLogHomeDir);
+      await datastore.ensureReady();
       await datastore.upsertObject({
         object_id: quote.object_id,
         object_key: null,
@@ -3037,6 +2824,13 @@ async function runCloudCommandHandler(
         network: null,
         status: "quoted",
       });
+      const verified = await datastore.findQuoteById(quote.quote_id);
+      if (!verified || !quoteLookupMatchesPriceStorageResponse(verified, quote)) {
+        return {
+          text: "Cannot price storage: quote was not saved to local SQLite (~/.openclaw/mnemospark/state.db). Check disk permissions or MNEMOSPARK_DISABLE_SQLITE.",
+          isError: true,
+        };
+      }
       await emitCloudEventBestEffort(
         "price-storage.completed",
         {
@@ -3047,7 +2841,7 @@ async function runCloudCommandHandler(
           quote_id: quote.quote_id,
           status: "succeeded",
         },
-        objectLogHomeDir,
+        mnemosparkHomeDir,
       );
       return {
         text: formatPriceStorageUserMessage(quote),
@@ -3062,7 +2856,7 @@ async function runCloudCommandHandler(
           object_id: parsed.priceStorageRequest.object_id,
           status: "failed",
         },
-        objectLogHomeDir,
+        mnemosparkHomeDir,
       );
       const message =
         err instanceof Error ? err.message : typeof err === "string" ? err : String(err);
@@ -3079,12 +2873,10 @@ async function runCloudCommandHandler(
       executionContext.forcedTraceId,
     );
     try {
-      const loggedQuote =
-        (await datastore.findQuoteById(parsed.uploadRequest.quote_id)) ??
-        (await findLoggedPriceStorageQuote(parsed.uploadRequest.quote_id, objectLogHomeDir));
+      const loggedQuote = await datastore.findQuoteById(parsed.uploadRequest.quote_id);
       if (!loggedQuote) {
         return {
-          text: "Cannot upload storage object: quote-id not found in object.log. Run /mnemospark_cloud price-storage first.",
+          text: "Cannot upload storage object: quote-id not found in local SQLite. Run /mnemospark_cloud price-storage first (quotes expire after about one hour on the server).",
           isError: true,
         };
       }
@@ -3129,7 +2921,7 @@ async function runCloudCommandHandler(
         };
       }
 
-      const walletKey = await resolveWalletKey(objectLogHomeDir);
+      const walletKey = await resolveWalletKey(mnemosparkHomeDir);
       const walletAccount = privateKeyToAccount(walletKey);
       if (
         walletAccount.address.toLowerCase() !== parsed.uploadRequest.wallet_address.toLowerCase()
@@ -3143,7 +2935,7 @@ async function runCloudCommandHandler(
       const preparedPayload = await prepareUploadPayload(
         archivePath,
         parsed.uploadRequest.wallet_address,
-        objectLogHomeDir,
+        mnemosparkHomeDir,
       );
       const idempotencyKey = uploadCorrelation.operationId;
       const shouldSettleBeforeUpload = requestStorageUpload !== requestStorageUploadViaProxy;
@@ -3220,7 +3012,6 @@ async function runCloudCommandHandler(
         }
       }
 
-      await appendStorageUploadLog(finalizedUploadResponse, objectLogHomeDir, nowDateFn);
       const cronStoragePriceCandidate =
         finalizedUploadResponse.storage_price ?? loggedQuote.storagePrice;
       const cronStoragePrice =
@@ -3230,7 +3021,7 @@ async function runCloudCommandHandler(
       const cronJob = await createStoragePaymentCronJob(
         finalizedUploadResponse,
         cronStoragePrice,
-        objectLogHomeDir,
+        mnemosparkHomeDir,
         nowDateFn,
       );
       await datastore.upsertObject({
@@ -3288,7 +3079,7 @@ async function runCloudCommandHandler(
 
         if (!friendlyNameVerified) {
           const warning =
-            "SQLite friendly-name write verification failed; manifest fallback may be required for --name lookups.";
+            "SQLite friendly-name write verification failed; --name lookups may not resolve until SQLite is healthy.";
           await emitCloudEventBestEffort(
             "friendly_name.write_verification_failed",
             {
@@ -3301,28 +3092,11 @@ async function runCloudCommandHandler(
               friendly_name: normalizedFriendlyName,
               warning,
             },
-            objectLogHomeDir,
+            mnemosparkHomeDir,
           );
           if (process.env.MNEMOSPARK_SQLITE_STRICT === "1") {
             throw new Error(warning);
           }
-        }
-
-        try {
-          await appendJsonlEvent(
-            "manifest.jsonl",
-            {
-              friendly_name: normalizedFriendlyName,
-              object_id: finalizedUploadResponse.object_id,
-              object_key: finalizedUploadResponse.object_key,
-              quote_id: finalizedUploadResponse.quote_id,
-              wallet_address: finalizedUploadResponse.addr,
-              created_at: new Date().toISOString(),
-            },
-            objectLogHomeDir,
-          );
-        } catch {
-          // Manifest logging is non-critical and must not affect command results.
         }
       }
       await emitCloudEventBestEffort(
@@ -3336,7 +3110,7 @@ async function runCloudCommandHandler(
           quote_id: finalizedUploadResponse.quote_id,
           status: "succeeded",
         },
-        objectLogHomeDir,
+        mnemosparkHomeDir,
       );
       await maybeCleanupLocalBackupArchive(archivePath);
 
@@ -3354,7 +3128,7 @@ async function runCloudCommandHandler(
           quote_id: parsed.uploadRequest.quote_id,
           status: "failed",
         },
-        objectLogHomeDir,
+        mnemosparkHomeDir,
       );
       const uploadErrorMessage = extractUploadErrorMessage(error);
       return {
@@ -3369,7 +3143,6 @@ async function runCloudCommandHandler(
       datastore,
       parsed.storageObjectRequest,
       parsed.nameSelector,
-      objectLogHomeDir,
     );
     if (resolved.error || !resolved.request) {
       return { text: resolved.error ?? "Cannot resolve storage object request.", isError: true };
@@ -3384,7 +3157,7 @@ async function runCloudCommandHandler(
           object_key: resolvedRequest.object_key ?? null,
           warning: resolved.degradedWarning,
         },
-        objectLogHomeDir,
+        mnemosparkHomeDir,
       );
     }
 
@@ -3430,7 +3203,7 @@ async function runCloudCommandHandler(
           status: "succeeded",
           list_mode: isBucketList,
         },
-        objectLogHomeDir,
+        mnemosparkHomeDir,
       );
       const lsText = await buildMnemosparkLsMessage(lsResult, {
         walletAddress: resolvedRequest.wallet_address,
@@ -3460,7 +3233,7 @@ async function runCloudCommandHandler(
           status: "failed",
           list_mode: isBucketList,
         },
-        objectLogHomeDir,
+        mnemosparkHomeDir,
       );
       return {
         text: lsErrorMessage,
@@ -3474,7 +3247,6 @@ async function runCloudCommandHandler(
       datastore,
       parsed.storageObjectRequest,
       parsed.nameSelector,
-      objectLogHomeDir,
     );
     if (resolved.error || !resolved.request) {
       return { text: resolved.error ?? "Cannot resolve storage object request.", isError: true };
@@ -3496,7 +3268,7 @@ async function runCloudCommandHandler(
           object_key: resolvedRequest.object_key,
           warning: resolved.degradedWarning,
         },
-        objectLogHomeDir,
+        mnemosparkHomeDir,
       );
     }
 
@@ -3542,7 +3314,7 @@ async function runCloudCommandHandler(
           object_key: resolvedRequest.object_key,
           status: "succeeded",
         },
-        objectLogHomeDir,
+        mnemosparkHomeDir,
       );
       const downloadText = `File ${resolvedRequest.object_key} downloaded to ${downloadResult.file_path}`;
       return {
@@ -3569,7 +3341,7 @@ async function runCloudCommandHandler(
           object_key: resolvedRequest.object_key,
           status: "failed",
         },
-        objectLogHomeDir,
+        mnemosparkHomeDir,
       );
       return {
         text: "Cannot download file",
@@ -3583,7 +3355,6 @@ async function runCloudCommandHandler(
       datastore,
       parsed.storageObjectRequest,
       parsed.nameSelector,
-      objectLogHomeDir,
     );
     if (resolved.error || !resolved.request) {
       return { text: resolved.error ?? "Cannot resolve storage object request.", isError: true };
@@ -3604,7 +3375,7 @@ async function runCloudCommandHandler(
           object_key: resolvedRequest.object_key,
           warning: resolved.degradedWarning,
         },
-        objectLogHomeDir,
+        mnemosparkHomeDir,
       );
     }
     const correlation = buildRequestCorrelation();
@@ -3629,14 +3400,14 @@ async function runCloudCommandHandler(
           object_key: resolvedRequest.object_key,
           status: "failed",
         },
-        objectLogHomeDir,
+        mnemosparkHomeDir,
       );
       return {
         text: "Cannot delete file",
         isError: true,
       };
     }
-    let cronEntry: LoggedStoragePaymentCron | null = null;
+    let cronEntry: { cronId: string; objectId: string; objectKey: string } | null = null;
     let cronDeleted = false;
     try {
       const dbCron = await datastore.findCronByObjectKey(resolvedRequest.object_key);
@@ -3648,15 +3419,15 @@ async function runCloudCommandHandler(
         };
       }
       if (!cronEntry) {
-        cronEntry = await findLoggedStoragePaymentCronByObjectKey(
+        cronEntry = await findCronJobInCrontabByObjectKey(
           resolvedRequest.object_key,
-          objectLogHomeDir,
+          mnemosparkHomeDir,
         );
       }
       if (cronEntry) {
         const fileCronDeleted = await removeStoragePaymentCronJob(
           cronEntry.cronId,
-          objectLogHomeDir,
+          mnemosparkHomeDir,
         );
         const dbCronDeleted = await datastore.removeCronJob(cronEntry.cronId);
         cronDeleted = fileCronDeleted || dbCronDeleted;
@@ -3692,7 +3463,7 @@ async function runCloudCommandHandler(
         object_key: resolvedRequest.object_key,
         status: "succeeded",
       },
-      objectLogHomeDir,
+      mnemosparkHomeDir,
     );
     const deleteText = formatStorageDeleteUserMessage(
       resolvedRequest.object_key,
