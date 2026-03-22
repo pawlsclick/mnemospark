@@ -221,6 +221,7 @@ export async function createCloudDatastore(homeDir?: string): Promise<CloudDatas
         updated_at TEXT NOT NULL
       );
       CREATE INDEX IF NOT EXISTS idx_cron_jobs_object_key ON cron_jobs(object_key);
+      CREATE INDEX IF NOT EXISTS idx_cron_jobs_quote_id ON cron_jobs(quote_id);
 
       CREATE TABLE IF NOT EXISTS operations (
         operation_id TEXT PRIMARY KEY,
