@@ -1,0 +1,17 @@
+name: PR Title
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, edited, synchronize, reopened]
+
+jobs:
+  pr-title:
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
+      statuses: write
+    steps:
+      - uses: amannn/action-semantic-pull-request@v5
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

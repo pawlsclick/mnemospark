@@ -5,23 +5,11 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
-    types: [opened, edited, synchronize, reopened]
+    types: [opened, synchronize, reopened]
   workflow_dispatch:
 
 jobs:
-  pr-title:
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    permissions:
-      pull-requests: read
-      statuses: write
-    steps:
-      - uses: amannn/action-semantic-pull-request@v5
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
   check:
-    if: github.event_name != 'pull_request' || github.event.action != 'edited'
     runs-on: ubuntu-latest
 
     steps:
