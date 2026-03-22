@@ -7,7 +7,7 @@ import { privateKeyToAccount } from "viem/accounts";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { buildBackupObject, createCloudCommand, expandTilde } from "./cloud-command.js";
-import { createCloudDatastore, readPaymentRowFromStateDbForTests } from "./cloud-datastore.js";
+import { createCloudDatastore } from "./cloud-datastore.js";
 import type { StorageDownloadProxyResponse } from "./cloud-storage.js";
 import { PaymentCache } from "./payment-cache.js";
 
@@ -404,7 +404,7 @@ describe("cloud command", () => {
     expect(result.isError).toBe(true);
   });
 
-  it("handles payment-settle success, updates SQLite, and writes JSONL observations", async () => {
+  it("handles payment-settle success and writes JSONL observations", async () => {
     const { homeDir } = await createSandbox();
     await mkdir(join(homeDir, ".openclaw", "mnemospark"), { recursive: true });
     const walletKey = `0x${"cc".repeat(32)}` as const;
@@ -472,28 +472,44 @@ describe("cloud command", () => {
     expect(result.text).toContain("Payment settled");
     expect(result.text).toContain("tx-settle-new");
 
-    const pay = readPaymentRowFromStateDbForTests(homeDir, quoteId);
-    expect(pay?.status).toBe("settled");
-    expect(pay?.trans_id).toBe("tx-settle-new");
-
     const eventsPath = join(homeDir, ".openclaw", "mnemospark", "events.jsonl");
     const eventsRaw = await readFile(eventsPath, "utf-8");
     const eventLines = eventsRaw.trim().split("\n");
     const completed = eventLines
-      .map((l) => JSON.parse(l) as { event_type?: string })
+      .map(
+        (l) =>
+          JSON.parse(l) as {
+            event_type?: string;
+            quote_id?: string;
+            status?: string;
+            http_status?: number;
+          },
+      )
       .filter((e) => e.event_type === "payment-settle.completed");
     expect(completed.length).toBeGreaterThanOrEqual(1);
+    const lastCompleted = completed.at(-1);
+    expect(lastCompleted?.quote_id).toBe(quoteId);
+    expect(lastCompleted?.status).toBe("succeeded");
+    expect(lastCompleted?.http_status).toBe(200);
 
     const proxyPath = join(homeDir, ".openclaw", "mnemospark", "proxy-events.jsonl");
     const proxyRaw = await readFile(proxyPath, "utf-8");
     const proxyLines = proxyRaw.trim().split("\n");
     const settleProxy = proxyLines
-      .map((l) => JSON.parse(l) as { event_type?: string; status?: string })
+      .map(
+        (l) =>
+          JSON.parse(l) as {
+            event_type?: string;
+            status?: string;
+            details?: { http_status?: number };
+          },
+      )
       .filter((e) => e.event_type === "payment.settle" && e.status === "result");
     expect(settleProxy.length).toBeGreaterThanOrEqual(1);
+    expect(settleProxy.at(-1)?.details?.http_status).toBe(200);
   });
 
-  it("handles payment-settle HTTP error and persists settle_failed", async () => {
+  it("handles payment-settle HTTP error and logs JSONL failure", async () => {
     const { homeDir } = await createSandbox();
     await mkdir(join(homeDir, ".openclaw", "mnemospark"), { recursive: true });
     const walletKey = `0x${"dd".repeat(32)}` as const;
@@ -537,8 +553,25 @@ describe("cloud command", () => {
     expect(result.isError).toBe(true);
     expect(result.text).toContain("402");
 
-    const pay = readPaymentRowFromStateDbForTests(homeDir, quoteId);
-    expect(pay?.status).toBe("settle_failed");
+    const eventsPath = join(homeDir, ".openclaw", "mnemospark", "events.jsonl");
+    const eventsRaw = await readFile(eventsPath, "utf-8");
+    const failCompleted = eventsRaw
+      .trim()
+      .split("\n")
+      .map(
+        (l) =>
+          JSON.parse(l) as {
+            event_type?: string;
+            quote_id?: string;
+            status?: string;
+            http_status?: number;
+          },
+      )
+      .filter((e) => e.event_type === "payment-settle.completed")
+      .at(-1);
+    expect(failCompleted?.quote_id).toBe(quoteId);
+    expect(failCompleted?.status).toBe("failed");
+    expect(failCompleted?.http_status).toBe(402);
   });
 
   it("handles /mnemospark cloud upload, builds encrypted payload, logs upload response, and keeps archive by default", async () => {
