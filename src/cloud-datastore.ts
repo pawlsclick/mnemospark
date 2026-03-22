@@ -732,8 +732,10 @@ export async function createCloudDatastore(homeDir?: string): Promise<CloudDatas
           return byKey.friendly_name;
         }
         const obj = db!
-          .prepare(`SELECT object_id FROM objects WHERE object_key = ? LIMIT 1`)
-          .get(objectKey) as { object_id: string } | undefined;
+          .prepare(
+            `SELECT object_id FROM objects WHERE wallet_address = ? AND object_key = ? LIMIT 1`,
+          )
+          .get(w, objectKey) as { object_id: string } | undefined;
         if (!obj) {
           return null;
         }
