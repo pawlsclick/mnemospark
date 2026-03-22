@@ -16,6 +16,9 @@ jobs:
       - name: Run Release Please
         uses: googleapis/release-please-action@v4
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          # Default GITHUB_TOKEN cannot trigger other workflows (e.g. Publish on
+          # release: published). Set repo secret RELEASE_PLEASE_TOKEN to a fine-grained
+          # or classic PAT with contents:write + pull_requests:write on this repo.
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN || github.token }}
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
