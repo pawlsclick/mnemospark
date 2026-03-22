@@ -49,16 +49,6 @@ Documentation lives in the separate **mnemospark-docs** repository. Clone or ope
 
 Do not expect a `.company` subdirectory in this repo; that Git submodule has been removed in favor of working directly in `mnemospark-docs`.
 
-## Seed mnemospark-backend (examples and legacy)
-
-Before running Cursor Cloud Agent on backend features (01–10, 15–18), you may seed **mnemospark-backend** with examples from this repo (docs are provided via the mnemospark-docs repo):
-
-```bash
-./scripts/seed-mnemospark-backend.sh /path/to/mnemospark-backend
-```
-
-Then open mnemospark-backend in Cursor and start the Cloud Agent there. See `[features_cursor_dev/README.md]` in the `mnemospark-docs` repo for where to run each feature.
-
 ## Other scripts
 
 - `reinstall.sh` — Reinstall mnemospark OpenClaw plugin.
