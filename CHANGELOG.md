@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0](https://github.com/pawlsclick/mnemospark/compare/v0.3.0...v0.4.0) (2026-03-22)
+
+
+### Features
+
+* **cloud:** add payment-settle command and slash-command cron line ([#66](https://github.com/pawlsclick/mnemospark/issues/66)) ([8db715e](https://github.com/pawlsclick/mnemospark/commit/8db715eb52bd22656a038fdc974ae8e2a7de5a38))
+
+
+### Bug Fixes
+
+* **ci:** trigger Publish only on release published, not tag push ([#64](https://github.com/pawlsclick/mnemospark/issues/64)) ([3721019](https://github.com/pawlsclick/mnemospark/commit/37210192e7365587820113f9adf8ae0b417807e4))
+
 ## [0.3.0](https://github.com/pawlsclick/mnemospark/compare/v0.2.3...v0.3.0) (2026-03-22)
 
 
