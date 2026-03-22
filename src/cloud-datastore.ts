@@ -753,13 +753,14 @@ export async function createCloudDatastore(homeDir?: string): Promise<CloudDatas
         const w = normalizeWalletAddress(walletAddress);
         const cron = db!
           .prepare(
-            `SELECT cron_id, quote_id, schedule, status
-             FROM cron_jobs
-             WHERE object_key = ?
-             ORDER BY updated_at DESC
+            `SELECT c.cron_id, c.quote_id, c.schedule, c.status
+             FROM cron_jobs c
+             INNER JOIN objects o ON o.object_id = c.object_id
+             WHERE c.object_key = ? AND o.wallet_address = ?
+             ORDER BY c.updated_at DESC
              LIMIT 1`,
           )
-          .get(objectKey) as
+          .get(objectKey, w) as
           | { cron_id: string; quote_id: string; schedule: string; status: string }
           | undefined;
         if (!cron) {
