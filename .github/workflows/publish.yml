@@ -1,11 +1,12 @@
+# Release train (with Release Please + PAT):
+# 1) Merge the autorelease PR → Release Please creates GitHub Release + tag vX.Y.Z.
+# 2) This workflow runs once on release: published (PAT allows the event to trigger workflows).
+# Do not also trigger on push: tags — tag push + release:published both fired for v0.3.0, so npm publish ran twice.
 name: Publish
 
 on:
   release:
     types: [published]
-  push:
-    tags:
-      - "v*"
   workflow_dispatch:
     inputs:
       publish_ref:
