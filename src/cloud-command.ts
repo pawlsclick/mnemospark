@@ -1451,6 +1451,7 @@ function quoteLookupMatchesPriceStorageResponse(
     lookup.walletAddress.trim().toLowerCase() === quote.addr.trim().toLowerCase() &&
     lookup.objectId === quote.object_id &&
     lookup.objectIdHash.toLowerCase() === quote.object_id_hash.toLowerCase() &&
+    lookup.storagePrice === quote.storage_price &&
     lookup.provider === quote.provider &&
     lookup.location === quote.location
   );
@@ -1687,7 +1688,6 @@ async function resolveNameSelectorIfNeeded(
 ): Promise<{
   request?: StorageObjectRequest | StorageLsRequest;
   error?: string;
-  degradedWarning?: string;
 }> {
   if (!selector) {
     const walletAddress = request.wallet_address?.trim();
@@ -3149,18 +3149,6 @@ async function runCloudCommandHandler(
     }
     const resolvedRequest = resolved.request;
 
-    if (resolved.degradedWarning) {
-      await emitCloudEventBestEffort(
-        "name_resolution.degraded",
-        {
-          wallet_address: resolvedRequest.wallet_address,
-          object_key: resolvedRequest.object_key ?? null,
-          warning: resolved.degradedWarning,
-        },
-        mnemosparkHomeDir,
-      );
-    }
-
     const objectKeyForLs = resolvedRequest.object_key?.trim();
     const isBucketList = !objectKeyForLs;
     const correlation = buildRequestCorrelation();
@@ -3210,7 +3198,7 @@ async function runCloudCommandHandler(
         datastore,
       });
       return {
-        text: resolved.degradedWarning ? `${resolved.degradedWarning}\n\n${lsText}` : lsText,
+        text: lsText,
       };
     } catch (error) {
       const lsErrorMessage = extractLsErrorMessage(error) ?? "Cannot list storage object";
@@ -3260,18 +3248,6 @@ async function runCloudCommandHandler(
     }
     const resolvedRequest = narrowed.request;
 
-    if (resolved.degradedWarning) {
-      await emitCloudEventBestEffort(
-        "name_resolution.degraded",
-        {
-          wallet_address: resolvedRequest.wallet_address,
-          object_key: resolvedRequest.object_key,
-          warning: resolved.degradedWarning,
-        },
-        mnemosparkHomeDir,
-      );
-    }
-
     const correlation = buildRequestCorrelation(
       executionContext.forcedOperationId,
       executionContext.forcedTraceId,
@@ -3318,9 +3294,7 @@ async function runCloudCommandHandler(
       );
       const downloadText = `File ${resolvedRequest.object_key} downloaded to ${downloadResult.file_path}`;
       return {
-        text: resolved.degradedWarning
-          ? `${resolved.degradedWarning}\n${downloadText}`
-          : downloadText,
+        text: downloadText,
       };
     } catch {
       await datastore.upsertOperation({
@@ -3367,17 +3341,6 @@ async function runCloudCommandHandler(
       return { text: narrowedDelete.error, isError: true };
     }
     const resolvedRequest = narrowedDelete.request;
-    if (resolved.degradedWarning) {
-      await emitCloudEventBestEffort(
-        "name_resolution.degraded",
-        {
-          wallet_address: resolvedRequest.wallet_address,
-          object_key: resolvedRequest.object_key,
-          warning: resolved.degradedWarning,
-        },
-        mnemosparkHomeDir,
-      );
-    }
     const correlation = buildRequestCorrelation();
     const operationId = correlation.operationId;
 
@@ -3471,7 +3434,7 @@ async function runCloudCommandHandler(
       cronDeleted,
     );
     return {
-      text: resolved.degradedWarning ? `${resolved.degradedWarning}\n${deleteText}` : deleteText,
+      text: deleteText,
     };
   }
 
