@@ -1521,6 +1521,48 @@ describe("cloud command", () => {
     expect(result.text).toContain("b.bin");
   });
 
+  it("stores null error_message on successful bucket ls operation", async () => {
+    const { homeDir } = await createSandbox();
+    try {
+      await import("node:sqlite");
+    } catch {
+      // node:sqlite may be unavailable in some environments; skip SQLite-specific assertion.
+      return;
+    }
+
+    let operationId: string | undefined;
+    const command = createCloudCommand({
+      objectLogHomeDir: homeDir,
+      requestStorageLsFn: async (_request, requestOptions) => {
+        operationId = requestOptions?.correlation?.operationId;
+        return {
+          mode: "list" as const,
+          success: true,
+          list_mode: true as const,
+          bucket: "wallet-bucket-list",
+          objects: [],
+          is_truncated: false,
+          next_continuation_token: null,
+        };
+      },
+    });
+
+    const result = await command.handler({
+      channel: "test",
+      isAuthorizedSender: true,
+      args: "ls --wallet-address 0x1234567890123456789012345678901234567890",
+      commandBody: "ls",
+      config: {},
+    });
+
+    expect(result.isError).not.toBe(true);
+    expect(operationId).toBeTruthy();
+    const datastore = await createCloudDatastore(homeDir);
+    const operation = await datastore.findOperationById(operationId ?? "");
+    expect(operation?.status).toBe("succeeded");
+    expect(operation?.error_message).toBeNull();
+  });
+
   it("returns Cannot list storage object when a required flag value is missing", async () => {
     let lsCalled = false;
     const command = createCloudCommand({

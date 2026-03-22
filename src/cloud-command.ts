@@ -3418,7 +3418,7 @@ async function runCloudCommandHandler(
         quote_id: null,
         status: "succeeded",
         error_code: null,
-        error_message: isBucketList ? "list_mode=true" : null,
+        error_message: null,
       });
       await emitCloudEventBestEffort(
         "ls.completed",
