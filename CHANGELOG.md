@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0](https://github.com/pawlsclick/mnemospark/compare/v0.2.3...v0.3.0) (2026-03-22)
+
+
+### Features
+
+* **ci:** enforce Conventional Commits (commitlint + PR title check) ([#63](https://github.com/pawlsclick/mnemospark/issues/63)) ([07a9217](https://github.com/pawlsclick/mnemospark/commit/07a9217eb22de975eb0e3c1e161eef364ffce0ac))
+
+
+### Bug Fixes
+
+* **ci:** allow Release Please PAT so Publish runs on new releases ([#61](https://github.com/pawlsclick/mnemospark/issues/61)) ([57148d0](https://github.com/pawlsclick/mnemospark/commit/57148d0cc895f9e3376380db201797efd0461b22))
+
 ## [0.2.3](https://github.com/pawlsclick/mnemospark/compare/v0.2.2...v0.2.3) (2026-03-22)
 
 
