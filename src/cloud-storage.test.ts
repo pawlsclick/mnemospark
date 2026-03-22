@@ -11,11 +11,14 @@ import {
   forwardStorageDeleteToBackend,
   forwardStorageDownloadToBackend,
   forwardStorageLsToBackend,
+  jsonBodyForLsRequest,
+  parseStorageLsResponse,
   requestStorageLsViaProxy,
   type BackendStorageForwardResult,
   type StorageObjectRequest,
 } from "./cloud-storage.js";
 import { AES_GCM_NONCE_BYTES, resolveWalletKekPath } from "./cloud-storage-crypto.js";
+import { formatBytesForDisplay } from "./cloud-utils.js";
 
 const sandboxDirs: string[] = [];
 
@@ -40,6 +43,15 @@ function encryptAesGcm(plaintext: Buffer, key: Buffer): Buffer {
   const tag = cipher.getAuthTag();
   return Buffer.concat([nonce, ciphertext, tag]);
 }
+
+describe("formatBytesForDisplay", () => {
+  it("uses decimal SI units and handles zero", () => {
+    expect(formatBytesForDisplay(0)).toBe("0 B");
+    expect(formatBytesForDisplay(1)).toBe("1 B");
+    expect(formatBytesForDisplay(1000)).toBe("1 KB");
+    expect(formatBytesForDisplay(1_500_000)).toBe("1.5 MB");
+  });
+});
 
 describe("cloud storage transport", () => {
   it("sends ls request to local proxy and parses response", async () => {
@@ -83,8 +95,86 @@ describe("cloud storage transport", () => {
       "trace-ls-1",
     );
     expect(capturedInit?.body).toBe(JSON.stringify(SAMPLE_REQUEST));
-    expect(lsResult.size_bytes).toBe(2048);
-    expect(lsResult.bucket).toBe("wallet-bucket-001");
+    expect(lsResult.mode).toBe("stat");
+    if (lsResult.mode === "stat") {
+      expect(lsResult.size_bytes).toBe(2048);
+      expect(lsResult.bucket).toBe("wallet-bucket-001");
+    }
+  });
+
+  it("sends wallet-only ls JSON without object_key", async () => {
+    let body = "";
+    await requestStorageLsViaProxy(
+      { wallet_address: "0xaaaabbbbccccddddeeeeffff00001111aaaabbbb" },
+      {
+        proxyBaseUrl: "http://127.0.0.1:7120/",
+        fetchImpl: async (_input, init) => {
+          body = String(init?.body ?? "");
+          return new Response(
+            JSON.stringify({
+              success: true,
+              list_mode: true,
+              bucket: "b",
+              objects: [],
+              is_truncated: false,
+              next_continuation_token: null,
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          );
+        },
+      },
+    );
+    expect(body).toBe(
+      JSON.stringify(
+        jsonBodyForLsRequest({ wallet_address: "0xaaaabbbbccccddddeeeeffff00001111aaaabbbb" }),
+      ),
+    );
+  });
+
+  it("parses list and stat ls responses", () => {
+    const list = parseStorageLsResponse({
+      success: true,
+      list_mode: true,
+      bucket: "bk",
+      objects: [{ key: "x", size_bytes: 1000, last_modified: "2025-01-01T00:00:00Z" }],
+      is_truncated: true,
+      next_continuation_token: "tok",
+    });
+    expect(list.mode).toBe("list");
+    if (list.mode === "list") {
+      expect(list.objects).toHaveLength(1);
+    }
+
+    const stat = parseStorageLsResponse({
+      success: true,
+      key: "y",
+      size_bytes: 99,
+      bucket: "bk2",
+    });
+    expect(stat.mode).toBe("stat");
+    if (stat.mode === "stat") {
+      expect(stat.key).toBe("y");
+    }
+  });
+
+  it("rejects stat ls responses with invalid size_bytes", () => {
+    expect(() =>
+      parseStorageLsResponse({
+        success: true,
+        key: "fractional",
+        size_bytes: 1.5,
+        bucket: "bk",
+      }),
+    ).toThrow("ls response has invalid size_bytes; expected non-negative integer");
+
+    expect(() =>
+      parseStorageLsResponse({
+        success: true,
+        key: "negative",
+        size_bytes: -1,
+        bucket: "bk",
+      }),
+    ).toThrow("ls response has invalid size_bytes; expected non-negative integer");
   });
 
   it("forwards delete request to backend with wallet proof header", async () => {

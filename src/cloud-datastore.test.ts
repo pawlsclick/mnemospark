@@ -254,4 +254,87 @@ describe("cloud datastore", () => {
     expect(operation?.started_at).toBeTruthy();
     expect(operation?.finished_at).toBeTruthy();
   });
+
+  it("findLatestFriendlyNameForObjectKey and findCronAndPaymentForObjectKey join local catalog", async () => {
+    const datastore = await createCloudDatastore(homeDir);
+    if (!sqliteAvailable) {
+      expect(await datastore.findLatestFriendlyNameForObjectKey("0xabc", "k")).toBeNull();
+      return;
+    }
+    await datastore.ensureReady();
+    const wallet = "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    await datastore.upsertObject({
+      object_id: "obj-ls-meta",
+      object_key: "blob.bin",
+      wallet_address: wallet,
+      quote_id: "quote-ls-meta",
+      provider: "aws",
+      bucket_name: "b",
+      region: "us-east-1",
+      sha256: "aa",
+      status: "uploaded",
+    });
+    await datastore.upsertFriendlyName({
+      friendly_name: "My Blob",
+      object_id: "obj-ls-meta",
+      object_key: "blob.bin",
+      quote_id: "quote-ls-meta",
+      wallet_address: wallet,
+    });
+    expect(await datastore.findLatestFriendlyNameForObjectKey(wallet, "blob.bin")).toBe("My Blob");
+
+    await datastore.upsertPayment({
+      quote_id: "quote-ls-meta",
+      wallet_address: wallet,
+      trans_id: null,
+      amount: 2.5,
+      network: "base",
+      status: "settled",
+    });
+    await datastore.upsertCronJob({
+      cron_id: "cron-ls-meta",
+      object_id: "obj-ls-meta",
+      object_key: "blob.bin",
+      quote_id: "quote-ls-meta",
+      schedule: "0 0 1 * *",
+      command: "/pay",
+      status: "active",
+    });
+    const otherWallet = "0xcccccccccccccccccccccccccccccccccccccccc";
+    await datastore.upsertObject({
+      object_id: "obj-ls-meta-other",
+      object_key: "blob.bin",
+      wallet_address: otherWallet,
+      quote_id: "quote-ls-meta-other",
+      provider: "aws",
+      bucket_name: "b",
+      region: "us-east-1",
+      sha256: "bb",
+      status: "uploaded",
+    });
+    await datastore.upsertPayment({
+      quote_id: "quote-ls-meta-other",
+      wallet_address: otherWallet,
+      trans_id: null,
+      amount: 9.9,
+      network: "base",
+      status: "settled",
+    });
+    await datastore.upsertCronJob({
+      cron_id: "cron-ls-meta-other",
+      object_id: "obj-ls-meta-other",
+      object_key: "blob.bin",
+      quote_id: "quote-ls-meta-other",
+      schedule: "0 0 2 * *",
+      command: "/pay",
+      status: "active",
+    });
+    const cp = await datastore.findCronAndPaymentForObjectKey(wallet, "blob.bin");
+    expect(cp?.cronId).toBe("cron-ls-meta");
+    expect(cp?.amount).toBe(2.5);
+    expect(cp?.network).toBe("base");
+    const otherCp = await datastore.findCronAndPaymentForObjectKey(otherWallet, "blob.bin");
+    expect(otherCp?.cronId).toBe("cron-ls-meta-other");
+    expect(otherCp?.amount).toBe(9.9);
+  });
 });
