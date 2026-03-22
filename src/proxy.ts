@@ -36,6 +36,7 @@ import {
   forwardStorageDeleteToBackend,
   forwardStorageDownloadToBackend,
   forwardStorageLsToBackend,
+  parseStorageLsRequestPayload,
   parseStorageObjectRequest,
 } from "./cloud-storage.js";
 import { appendJsonlEvent } from "./cloud-jsonl.js";
@@ -970,13 +971,13 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
           return;
         }
 
-        const requestPayload = parseStorageObjectRequest(payload);
+        const requestPayload = parseStorageLsRequestPayload(payload);
         if (!requestPayload) {
           logProxyEvent("warn", "proxy_ls_missing_fields");
           emitProxyTerminalFromStatus(correlation, 400, { reason: "missing_fields" });
           sendJson(res, 400, {
             error: "Bad request",
-            message: "Missing required fields: wallet_address, object_key",
+            message: "Missing required field: wallet_address",
           });
           return;
         }

@@ -30,13 +30,46 @@ export type StorageObjectRequest = {
   location?: string;
 };
 
-export type StorageLsResponse = {
+/** POST /storage/ls body: wallet required; omit object_key for S3 list mode. */
+export type StorageLsRequest = {
+  wallet_address: string;
+  object_key?: string;
+  location?: string;
+  continuation_token?: string;
+  max_keys?: number;
+  prefix?: string;
+};
+
+export type StorageLsStatResponse = {
+  mode: "stat";
   success: boolean;
   key: string;
   size_bytes: number;
   bucket: string;
   object_id?: string;
 };
+
+export type StorageLsListObject = {
+  key: string;
+  size_bytes: number;
+  last_modified?: string;
+};
+
+export type StorageLsListResponse = {
+  mode: "list";
+  success: boolean;
+  list_mode: true;
+  bucket: string;
+  objects: StorageLsListObject[];
+  is_truncated: boolean;
+  next_continuation_token: string | null;
+};
+
+export type StorageLsResponse = StorageLsStatResponse | StorageLsListResponse;
+
+export function isStorageLsListResponse(r: StorageLsResponse): r is StorageLsListResponse {
+  return r.mode === "list";
+}
 
 export type StorageDeleteResponse = {
   success: boolean;
@@ -203,7 +236,7 @@ async function decryptDownloadBytes(
 
 async function requestJsonViaProxy<T>(
   proxyPath: string,
-  request: StorageObjectRequest,
+  jsonBody: Record<string, unknown>,
   parser: (payload: unknown) => T,
   options: ProxyStorageOptions = {},
 ): Promise<T> {
@@ -220,7 +253,7 @@ async function requestJsonViaProxy<T>(
       },
       options.correlation,
     ),
-    body: JSON.stringify(request),
+    body: JSON.stringify(jsonBody),
   });
 
   const bodyText = await response.text();
@@ -241,7 +274,7 @@ async function requestJsonViaProxy<T>(
 async function forwardStorageToBackend(
   path: string,
   method: "POST" | "DELETE" | "GET",
-  request: StorageObjectRequest,
+  jsonBody: Record<string, unknown>,
   options: BackendStorageOptions = {},
 ): Promise<BackendStorageForwardResult> {
   const fetchImpl = options.fetchImpl ?? fetch;
@@ -264,7 +297,7 @@ async function forwardStorageToBackend(
       "Content-Type": "application/json",
       "X-Wallet-Signature": walletSignature,
     },
-    body: JSON.stringify(request),
+    body: JSON.stringify(jsonBody),
   });
 
   const bodyBuffer = Buffer.from(await response.arrayBuffer());
@@ -301,10 +334,102 @@ export function parseStorageObjectRequest(payload: unknown): StorageObjectReques
   };
 }
 
+function jsonBodyForObjectRequest(request: StorageObjectRequest): Record<string, unknown> {
+  const o: Record<string, unknown> = {
+    wallet_address: request.wallet_address,
+    object_key: request.object_key,
+  };
+  if (request.location) {
+    o.location = request.location;
+  }
+  return o;
+}
+
+export function jsonBodyForLsRequest(request: StorageLsRequest): Record<string, unknown> {
+  const o: Record<string, unknown> = { wallet_address: request.wallet_address };
+  if (request.object_key) {
+    o.object_key = request.object_key;
+  }
+  if (request.location) {
+    o.location = request.location;
+  }
+  if (request.continuation_token) {
+    o.continuation_token = request.continuation_token;
+  }
+  if (typeof request.max_keys === "number") {
+    o.max_keys = request.max_keys;
+  }
+  if (request.prefix) {
+    o.prefix = request.prefix;
+  }
+  return o;
+}
+
+/** Proxy / local CLI: parse JSON body for /storage/ls (object_key optional). */
+export function parseStorageLsRequestPayload(payload: unknown): StorageLsRequest | null {
+  const record = asRecord(payload);
+  if (!record) {
+    return null;
+  }
+  const walletAddress = asNonEmptyString(record.wallet_address);
+  if (!walletAddress) {
+    return null;
+  }
+  const objectKey = asNonEmptyString(record.object_key) ?? undefined;
+  const location = asNonEmptyString(record.location) ?? undefined;
+  const continuation_token = asNonEmptyString(record.continuation_token) ?? undefined;
+  const maxRaw = asNumber(record.max_keys);
+  const max_keys = maxRaw !== null && Number.isInteger(maxRaw) && maxRaw >= 1 ? maxRaw : undefined;
+  const prefix = asNonEmptyString(record.prefix) ?? undefined;
+  return {
+    wallet_address: walletAddress,
+    ...(objectKey ? { object_key: objectKey } : {}),
+    ...(location ? { location } : {}),
+    ...(continuation_token ? { continuation_token } : {}),
+    ...(typeof max_keys === "number" ? { max_keys } : {}),
+    ...(prefix ? { prefix } : {}),
+  };
+}
+
 export function parseStorageLsResponse(payload: unknown): StorageLsResponse {
   const record = asRecord(payload);
   if (!record) {
     throw new Error("Invalid ls response payload");
+  }
+
+  if (record.list_mode === true) {
+    const bucket = asNonEmptyString(record.bucket) ?? asNonEmptyString(record.bucket_name);
+    const rawObjects = record.objects;
+    if (!bucket || !Array.isArray(rawObjects)) {
+      throw new Error("ls list response is missing required fields");
+    }
+    const objects: StorageLsListObject[] = [];
+    for (const item of rawObjects) {
+      const row = asRecord(item);
+      if (!row) {
+        continue;
+      }
+      const key = asNonEmptyString(row.key);
+      const sizeBytes = asNumber(row.size_bytes);
+      if (!key || sizeBytes === null || !Number.isInteger(sizeBytes) || sizeBytes < 0) {
+        continue;
+      }
+      const last_modified = asNonEmptyString(row.last_modified) ?? undefined;
+      objects.push({ key, size_bytes: sizeBytes, last_modified });
+    }
+    const is_truncated = asBooleanOrDefault(record.is_truncated, false);
+    const nextRaw = record.next_continuation_token;
+    const next_continuation_token =
+      nextRaw === undefined || nextRaw === null ? null : String(nextRaw);
+    return {
+      mode: "list",
+      success: asBooleanOrDefault(record.success, true),
+      list_mode: true,
+      bucket,
+      objects,
+      is_truncated,
+      next_continuation_token,
+    };
   }
 
   const key = asNonEmptyString(record.key) ?? asNonEmptyString(record.object_key);
@@ -317,6 +442,7 @@ export function parseStorageLsResponse(payload: unknown): StorageLsResponse {
   }
 
   return {
+    mode: "stat",
     success: asBooleanOrDefault(record.success, true),
     key,
     size_bytes: sizeBytes,
@@ -367,10 +493,15 @@ export function parseStorageDownloadProxyResponse(payload: unknown): StorageDown
 }
 
 export async function requestStorageLsViaProxy(
-  request: StorageObjectRequest,
+  request: StorageLsRequest,
   options: ProxyStorageOptions = {},
 ): Promise<StorageLsResponse> {
-  return requestJsonViaProxy(STORAGE_LS_PROXY_PATH, request, parseStorageLsResponse, options);
+  return requestJsonViaProxy(
+    STORAGE_LS_PROXY_PATH,
+    jsonBodyForLsRequest(request),
+    parseStorageLsResponse,
+    options,
+  );
 }
 
 export async function requestStorageDownloadViaProxy(
@@ -379,7 +510,7 @@ export async function requestStorageDownloadViaProxy(
 ): Promise<StorageDownloadProxyResponse> {
   return requestJsonViaProxy(
     STORAGE_DOWNLOAD_PROXY_PATH,
-    request,
+    jsonBodyForObjectRequest(request),
     parseStorageDownloadProxyResponse,
     options,
   );
@@ -391,31 +522,41 @@ export async function requestStorageDeleteViaProxy(
 ): Promise<StorageDeleteResponse> {
   return requestJsonViaProxy(
     STORAGE_DELETE_PROXY_PATH,
-    request,
+    jsonBodyForObjectRequest(request),
     parseStorageDeleteResponse,
     options,
   );
 }
 
 export async function forwardStorageLsToBackend(
-  request: StorageObjectRequest,
+  request: StorageLsRequest,
   options: BackendStorageOptions = {},
 ): Promise<BackendStorageForwardResult> {
-  return forwardStorageToBackend("/storage/ls", "POST", request, options);
+  return forwardStorageToBackend("/storage/ls", "POST", jsonBodyForLsRequest(request), options);
 }
 
 export async function forwardStorageDownloadToBackend(
   request: StorageObjectRequest,
   options: BackendStorageOptions = {},
 ): Promise<BackendStorageForwardResult> {
-  return forwardStorageToBackend("/storage/download", "POST", request, options);
+  return forwardStorageToBackend(
+    "/storage/download",
+    "POST",
+    jsonBodyForObjectRequest(request),
+    options,
+  );
 }
 
 export async function forwardStorageDeleteToBackend(
   request: StorageObjectRequest,
   options: BackendStorageOptions = {},
 ): Promise<BackendStorageForwardResult> {
-  return forwardStorageToBackend("/storage/delete", "POST", request, options);
+  return forwardStorageToBackend(
+    "/storage/delete",
+    "POST",
+    jsonBodyForObjectRequest(request),
+    options,
+  );
 }
 
 export async function downloadStorageToDisk(

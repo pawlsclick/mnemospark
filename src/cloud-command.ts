@@ -29,6 +29,7 @@ import {
   type ProxyQuoteOptions,
   type ProxyUploadOptions,
 } from "./cloud-price-storage.js";
+import { buildMnemosparkLsMessage } from "./cloud-ls-format.js";
 import {
   parseStorageObjectRequest,
   requestStorageDeleteViaProxy,
@@ -37,6 +38,7 @@ import {
   type ProxyStorageOptions,
   type StorageDeleteResponse,
   type StorageDownloadProxyResponse,
+  type StorageLsRequest,
   type StorageLsResponse,
   type StorageObjectRequest,
 } from "./cloud-storage.js";
@@ -76,6 +78,8 @@ const REQUIRED_UPLOAD = "--quote-id, --wallet-address, --object-id, --object-id-
 const REQUIRED_PAYMENT_SETTLE = "--quote-id and --wallet-address";
 const REQUIRED_STORAGE_OBJECT =
   "--wallet-address and one of (--object-key | --name [--latest|--at])";
+const REQUIRED_LS =
+  "--wallet-address (for one object add --object-key or --name [--latest|--at]; omit both to list the bucket)";
 const PAYMENT_SETTLE_FLAG_NAMES = new Set([
   "quote-id",
   "wallet-address",
@@ -125,9 +129,9 @@ const CLOUD_HELP_TEXT = [
   "  Purpose: settle storage payment for a quote (e.g. monthly cron). Uses the same proxy + x402 path as upload pre-settlement.",
   "  Required: --quote-id, --wallet-address (wallet private key must match the address).",
   "",
-  "• `/mnemospark_cloud ls --wallet-address <addr> [--object-key <object-key> | --name <friendly-name>] [--latest|--at <timestamp>]`",
-  "  Purpose: look up remote object metadata.",
-  "  Required: " + REQUIRED_STORAGE_OBJECT,
+  "• `/mnemospark_cloud ls --wallet-address <addr> [--object-key <key> | --name <friendly-name> | omit both to list bucket] [--latest|--at <timestamp>]`",
+  "  Purpose: stat one object or list all keys in the wallet bucket (S3).",
+  "  Required: " + REQUIRED_LS,
   "",
   "• `/mnemospark_cloud download --wallet-address <addr> [--object-key <object-key> | --name <friendly-name>] [--latest|--at <timestamp>] [--async] [--orchestrator <inline|subagent>] [--timeout-seconds <n>]`",
   "  Purpose: fetch an object to local disk.",
@@ -321,7 +325,7 @@ type CreateCloudCommandOptions = {
     options?: ProxySettleOptions,
   ) => Promise<BackendSettleForwardResult>;
   requestStorageLsFn?: (
-    request: StorageObjectRequest,
+    request: StorageLsRequest,
     options?: ProxyStorageOptions,
   ) => Promise<StorageLsResponse>;
   requestStorageDownloadFn?: (
@@ -426,6 +430,23 @@ function parseObjectSelector(
 
   if (objectKey) return { objectKey };
   return { nameSelector: { name: name!, latest, at } };
+}
+
+/** Like parseObjectSelector but allows wallet-only list mode (no key, no --name). */
+function parseLsObjectSelector(
+  flags: Record<string, string>,
+): { objectKey?: string; nameSelector?: NameSelector } | null {
+  const objectKey = flags["object-key"]?.trim();
+  const name = flags.name?.trim();
+  const latest = flags.latest === "true";
+  const at = flags.at?.trim();
+
+  if (objectKey && name) return null;
+  if (latest && at) return null;
+
+  if (objectKey) return { objectKey };
+  if (name) return { nameSelector: { name, latest, at } };
+  return {};
 }
 
 function parseStorageObjectRequestInput(
@@ -664,15 +685,36 @@ function parseCloudArgs(args?: string): ParsedCloudArgs {
     if (!flags) {
       return { mode: "ls-invalid" };
     }
-    const selector = parseObjectSelector(flags);
+    const walletAddress = flags["wallet-address"]?.trim() ?? flags["wallet_address"]?.trim() ?? "";
+    if (!walletAddress) {
+      return { mode: "ls-invalid" };
+    }
+    const selector = parseLsObjectSelector(flags);
     if (!selector) {
       return { mode: "ls-invalid" };
     }
-    const request = parseStorageObjectRequestInput(flags, selector);
-    if (!request) {
-      return { mode: "ls-invalid" };
+    const location = flags.location?.trim() || flags.region?.trim() || undefined;
+    if (selector.nameSelector) {
+      return {
+        mode: "ls",
+        storageObjectRequest: { wallet_address: walletAddress, location },
+        nameSelector: selector.nameSelector,
+      };
     }
-    return { mode: "ls", storageObjectRequest: request, nameSelector: selector.nameSelector };
+    if (selector.objectKey) {
+      return {
+        mode: "ls",
+        storageObjectRequest: {
+          wallet_address: walletAddress,
+          object_key: selector.objectKey,
+          location,
+        },
+      };
+    }
+    return {
+      mode: "ls",
+      storageObjectRequest: { wallet_address: walletAddress, location },
+    };
   }
 
   if (subcommand === "download") {
@@ -1533,11 +1575,6 @@ function formatPriceStorageUserMessage(quote: PriceStorageQuoteResponse): string
   ].join("\n");
 }
 
-function formatStorageLsUserMessage(result: StorageLsResponse, requestedObjectKey: string): string {
-  const objectId = result.object_id ?? result.key;
-  return `${objectId} with ${requestedObjectKey} is ${result.size_bytes} in ${result.bucket}`;
-}
-
 function createInProcessSubagentOrchestrator(): MnemosparkSubagentOrchestrator {
   type SessionState = {
     terminal: boolean;
@@ -1807,9 +1844,29 @@ async function resolveNameSelectorIfNeeded(
   request: StorageObjectRequestInput,
   selector?: NameSelector,
   homeDir?: string,
-): Promise<{ request?: StorageObjectRequest; error?: string; degradedWarning?: string }> {
+): Promise<{
+  request?: StorageObjectRequest | StorageLsRequest;
+  error?: string;
+  degradedWarning?: string;
+}> {
   if (!selector) {
-    const parsedRequest = parseStorageObjectRequest(request);
+    const walletAddress = request.wallet_address?.trim();
+    if (!walletAddress) {
+      return { error: "Cannot resolve storage object request." };
+    }
+    const objectKey = request.object_key?.trim();
+    if (!objectKey) {
+      const listRequest: StorageLsRequest = { wallet_address: walletAddress };
+      if (request.location) {
+        listRequest.location = request.location;
+      }
+      return { request: listRequest };
+    }
+    const parsedRequest = parseStorageObjectRequest({
+      wallet_address: walletAddress,
+      object_key: objectKey,
+      location: request.location,
+    });
     if (!parsedRequest) {
       return { error: "Cannot resolve storage object request." };
     }
@@ -1874,6 +1931,25 @@ async function resolveNameSelectorIfNeeded(
     request: parsedRequest,
     degradedWarning,
   };
+}
+
+function toStorageObjectRequestOrError(
+  request: StorageObjectRequest | StorageLsRequest,
+  missingKeyMessage: string,
+): { ok: true; request: StorageObjectRequest } | { ok: false; error: string } {
+  const key = request.object_key?.trim();
+  if (!key) {
+    return { ok: false, error: missingKeyMessage };
+  }
+  const parsed = parseStorageObjectRequest({
+    wallet_address: request.wallet_address,
+    object_key: key,
+    location: request.location,
+  });
+  if (!parsed) {
+    return { ok: false, error: "Cannot resolve storage object request." };
+  }
+  return { ok: true, request: parsed };
 }
 
 async function emitCloudEvent(
@@ -2181,7 +2257,7 @@ async function runCloudCommandHandler(
 
   if (parsed.mode === "ls-invalid") {
     return {
-      text: `Cannot list storage object: required arguments are ${REQUIRED_STORAGE_OBJECT}.`,
+      text: `Cannot list storage object: required arguments are ${REQUIRED_LS}.`,
       isError: true,
     };
   }
@@ -3283,16 +3359,18 @@ async function runCloudCommandHandler(
         "name_resolution.degraded",
         {
           wallet_address: resolvedRequest.wallet_address,
-          object_key: resolvedRequest.object_key,
+          object_key: resolvedRequest.object_key ?? null,
           warning: resolved.degradedWarning,
         },
         objectLogHomeDir,
       );
     }
 
+    const objectKeyForLs = resolvedRequest.object_key?.trim();
+    const isBucketList = !objectKeyForLs;
     const correlation = buildRequestCorrelation();
     const operationId = correlation.operationId;
-    const knownObject = await datastore.findObjectByObjectKey(resolvedRequest.object_key);
+    const knownObject = isBucketList ? null : await datastore.findObjectByObjectKey(objectKeyForLs);
     const operationObjectId = knownObject?.object_id ?? null;
     await datastore.upsertOperation({
       operation_id: operationId,
@@ -3318,7 +3396,7 @@ async function runCloudCommandHandler(
         quote_id: null,
         status: "succeeded",
         error_code: null,
-        error_message: null,
+        error_message: isBucketList ? "list_mode=true" : null,
       });
       await emitCloudEventBestEffort(
         "ls.completed",
@@ -3326,14 +3404,18 @@ async function runCloudCommandHandler(
           operation_id: operationId,
           trace_id: correlation.traceId,
           wallet_address: resolvedRequest.wallet_address,
-          object_key: resolvedRequest.object_key,
+          object_key: resolvedRequest.object_key ?? null,
           status: "succeeded",
+          list_mode: isBucketList,
         },
         objectLogHomeDir,
       );
-      const lsText = formatStorageLsUserMessage(lsResult, resolvedRequest.object_key);
+      const lsText = await buildMnemosparkLsMessage(lsResult, {
+        walletAddress: resolvedRequest.wallet_address,
+        datastore,
+      });
       return {
-        text: resolved.degradedWarning ? `${resolved.degradedWarning}\n${lsText}` : lsText,
+        text: resolved.degradedWarning ? `${resolved.degradedWarning}\n\n${lsText}` : lsText,
       };
     } catch {
       await datastore.upsertOperation({
@@ -3351,8 +3433,9 @@ async function runCloudCommandHandler(
           operation_id: operationId,
           trace_id: correlation.traceId,
           wallet_address: resolvedRequest.wallet_address,
-          object_key: resolvedRequest.object_key,
+          object_key: resolvedRequest.object_key ?? null,
           status: "failed",
+          list_mode: isBucketList,
         },
         objectLogHomeDir,
       );
@@ -3373,7 +3456,14 @@ async function runCloudCommandHandler(
     if (resolved.error || !resolved.request) {
       return { text: resolved.error ?? "Cannot resolve storage object request.", isError: true };
     }
-    const resolvedRequest = resolved.request;
+    const narrowed = toStorageObjectRequestOrError(
+      resolved.request,
+      `Cannot download file: required arguments are ${REQUIRED_STORAGE_OBJECT}.`,
+    );
+    if (!narrowed.ok) {
+      return { text: narrowed.error, isError: true };
+    }
+    const resolvedRequest = narrowed.request;
 
     if (resolved.degradedWarning) {
       await emitCloudEventBestEffort(
@@ -3475,7 +3565,14 @@ async function runCloudCommandHandler(
     if (resolved.error || !resolved.request) {
       return { text: resolved.error ?? "Cannot resolve storage object request.", isError: true };
     }
-    const resolvedRequest = resolved.request;
+    const narrowedDelete = toStorageObjectRequestOrError(
+      resolved.request,
+      `Cannot delete file: required arguments are ${REQUIRED_STORAGE_OBJECT}.`,
+    );
+    if (!narrowedDelete.ok) {
+      return { text: narrowedDelete.error, isError: true };
+    }
+    const resolvedRequest = narrowedDelete.request;
     if (resolved.degradedWarning) {
       await emitCloudEventBestEffort(
         "name_resolution.degraded",

@@ -87,7 +87,7 @@ describe("cloud command", () => {
     }
 
     expect(result.text).toContain("/mnemospark_cloud ls --wallet-address <addr>");
-    expect(result.text).toContain("[--object-key <object-key> | --name <friendly-name>]");
+    expect(result.text).toContain("omit both to list bucket");
     expect(result.text).toContain("/mnemospark_cloud download --wallet-address <addr>");
     expect(result.text).toContain("/mnemospark_cloud delete --wallet-address <addr>");
     expect(result.text).toContain("/mnemospark_cloud payment-settle");
@@ -1215,6 +1215,7 @@ describe("cloud command", () => {
         capturedRequest = request as Record<string, unknown>;
         capturedCorrelation = requestOptions?.correlation;
         return {
+          mode: "stat" as const,
           success: true,
           key: "backup/archive.tar.gz",
           size_bytes: 1536,
@@ -1240,7 +1241,10 @@ describe("cloud command", () => {
     expect(capturedCorrelation?.operationId).toBeTruthy();
     expect(capturedCorrelation?.traceId).toBeTruthy();
     expect(result.isError).not.toBe(true);
-    expect(result.text).toBe("obj-001 with backup/archive.tar.gz is 1536 in wallet-bucket-001");
+    expect(result.text).toContain("```");
+    expect(result.text).toContain("PERM");
+    expect(result.text).toContain("1.5 KB");
+    expect(result.text).toContain("wallet-bucket-001");
   });
 
   it("resolves --name with --wallet_address alias and mixed-case wallet values", async () => {
@@ -1268,6 +1272,7 @@ describe("cloud command", () => {
       requestStorageLsFn: async (request) => {
         capturedRequest = request as Record<string, unknown>;
         return {
+          mode: "stat" as const,
           success: true,
           key: "backup/myfile.txt.tar.gz.enc",
           size_bytes: 1024,
@@ -1296,9 +1301,9 @@ describe("cloud command", () => {
       object_key: "backup/myfile.txt.tar.gz.enc",
       location: undefined,
     });
-    expect(result.text).toBe(
-      "obj-friendly-1 with backup/myfile.txt.tar.gz.enc is 1024 in wallet-bucket-001",
-    );
+    expect(result.text).toContain("```");
+    expect(result.text).toContain("1 KB");
+    expect(result.text).toContain("wallet-bucket-001");
   });
 
   it("handles /mnemospark cloud download and prints success message", async () => {
@@ -1454,21 +1459,66 @@ describe("cloud command", () => {
     );
   });
 
-  it("returns Cannot list storage object on invalid /mnemospark cloud ls args", async () => {
+  it("returns Cannot list storage object when ls is missing wallet-address", async () => {
     const command = createCloudCommand();
 
     const result = await command.handler({
       channel: "test",
       isAuthorizedSender: true,
-      args: "ls --wallet-address 0x1234abcd",
+      args: "ls --object-key backup/archive.tar.gz",
       commandBody: "ls",
       config: {},
     });
 
     expect(result.isError).toBe(true);
-    expect(result.text).toBe(
-      "Cannot list storage object: required arguments are --wallet-address and one of (--object-key | --name [--latest|--at]).",
-    );
+    expect(result.text).toContain("Cannot list storage object");
+    expect(result.text).toContain("--wallet-address");
+  });
+
+  it("lists bucket when /mnemospark cloud ls has wallet only", async () => {
+    let capturedRequest: Record<string, unknown> | undefined;
+    const command = createCloudCommand({
+      requestStorageLsFn: async (request) => {
+        capturedRequest = request as Record<string, unknown>;
+        return {
+          mode: "list" as const,
+          success: true,
+          list_mode: true as const,
+          bucket: "wallet-bucket-list",
+          objects: [
+            {
+              key: "a.bin",
+              size_bytes: 500,
+              last_modified: "2025-06-01T12:00:00Z",
+            },
+            {
+              key: "b.bin",
+              size_bytes: 1500,
+              last_modified: "2025-07-01T12:00:00Z",
+            },
+          ],
+          is_truncated: false,
+          next_continuation_token: null,
+        };
+      },
+    });
+
+    const result = await command.handler({
+      channel: "test",
+      isAuthorizedSender: true,
+      args: "ls --wallet-address 0x1234567890123456789012345678901234567890",
+      commandBody: "ls",
+      config: {},
+    });
+
+    expect(capturedRequest).toEqual({
+      wallet_address: "0x1234567890123456789012345678901234567890",
+    });
+    expect(result.isError).not.toBe(true);
+    expect(result.text).toContain("total 2");
+    expect(result.text).toContain("```");
+    expect(result.text).toContain("a.bin");
+    expect(result.text).toContain("b.bin");
   });
 
   it("returns Cannot list storage object when a required flag value is missing", async () => {
@@ -1477,6 +1527,7 @@ describe("cloud command", () => {
       requestStorageLsFn: async () => {
         lsCalled = true;
         return {
+          mode: "stat" as const,
           success: true,
           key: "backup/archive.tar.gz",
           size_bytes: 1536,
@@ -1494,9 +1545,8 @@ describe("cloud command", () => {
     });
 
     expect(result.isError).toBe(true);
-    expect(result.text).toBe(
-      "Cannot list storage object: required arguments are --wallet-address and one of (--object-key | --name [--latest|--at]).",
-    );
+    expect(result.text).toContain("Cannot list storage object");
+    expect(result.text).toContain("--wallet-address");
     expect(lsCalled).toBe(false);
   });
 

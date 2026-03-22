@@ -123,6 +123,22 @@ export type CloudDatastore = {
     at?: string;
   }) => Promise<FriendlyNameLookup | null>;
   countFriendlyNameMatches: (walletAddress: string, friendlyName: string) => Promise<number>;
+  findLatestFriendlyNameForObjectKey: (
+    walletAddress: string,
+    objectKey: string,
+  ) => Promise<string | null>;
+  findCronAndPaymentForObjectKey: (
+    walletAddress: string,
+    objectKey: string,
+  ) => Promise<{
+    cronId: string;
+    schedule: string;
+    quoteId: string;
+    cronStatus: string;
+    amount: number | null;
+    network: string | null;
+    paymentStatus: string | null;
+  } | null>;
 };
 
 function resolveDbPath(homeDir?: string): string {
@@ -700,6 +716,75 @@ export async function createCloudDatastore(homeDir?: string): Promise<CloudDatas
           .get(normalizedWalletAddress, friendlyName) as { cnt: number } | undefined;
         return Number(row?.cnt ?? 0);
       }, 0),
+    findLatestFriendlyNameForObjectKey: async (walletAddress, objectKey) =>
+      safe(() => {
+        const w = normalizeWalletAddress(walletAddress);
+        const byKey = db!
+          .prepare(
+            `SELECT friendly_name
+             FROM friendly_names
+             WHERE wallet_address = ? AND object_key = ? AND is_active = 1
+             ORDER BY created_at DESC
+             LIMIT 1`,
+          )
+          .get(w, objectKey) as { friendly_name: string } | undefined;
+        if (byKey) {
+          return byKey.friendly_name;
+        }
+        const obj = db!
+          .prepare(`SELECT object_id FROM objects WHERE object_key = ? LIMIT 1`)
+          .get(objectKey) as { object_id: string } | undefined;
+        if (!obj) {
+          return null;
+        }
+        const byObj = db!
+          .prepare(
+            `SELECT friendly_name
+             FROM friendly_names
+             WHERE wallet_address = ? AND object_id = ? AND is_active = 1
+             ORDER BY created_at DESC
+             LIMIT 1`,
+          )
+          .get(w, obj.object_id) as { friendly_name: string } | undefined;
+        return byObj?.friendly_name ?? null;
+      }, null),
+    findCronAndPaymentForObjectKey: async (walletAddress, objectKey) =>
+      safe(() => {
+        const w = normalizeWalletAddress(walletAddress);
+        const cron = db!
+          .prepare(
+            `SELECT cron_id, quote_id, schedule, status
+             FROM cron_jobs
+             WHERE object_key = ?
+             ORDER BY updated_at DESC
+             LIMIT 1`,
+          )
+          .get(objectKey) as
+          | { cron_id: string; quote_id: string; schedule: string; status: string }
+          | undefined;
+        if (!cron) {
+          return null;
+        }
+        const pay = db!
+          .prepare(
+            `SELECT amount, network, status
+             FROM payments
+             WHERE quote_id = ? AND wallet_address = ?
+             LIMIT 1`,
+          )
+          .get(cron.quote_id, w) as
+          | { amount: number; network: string | null; status: string }
+          | undefined;
+        return {
+          cronId: cron.cron_id,
+          schedule: cron.schedule,
+          quoteId: cron.quote_id,
+          cronStatus: cron.status,
+          amount: pay?.amount ?? null,
+          network: pay?.network ?? null,
+          paymentStatus: pay?.status ?? null,
+        };
+      }, null),
   };
 }
 
