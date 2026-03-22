@@ -41,10 +41,10 @@ jobs:
         with:
           ref: ${{ steps.ref.outputs.value }}
 
-      - name: Set up Node.js 20
+      - name: Set up Node.js 22
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "22"
           cache: npm
           registry-url: "https://registry.npmjs.org"
 

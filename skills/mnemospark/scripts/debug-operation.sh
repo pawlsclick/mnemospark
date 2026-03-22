@@ -16,9 +16,7 @@ Behavior:
   - If operation-id is omitted, the latest operation in SQLite is used.
   - Correlates operation context across:
       state.db (operations/objects/payments)
-      events.jsonl
-      proxy-events.jsonl
-      manifest.jsonl
+      events.jsonl (command + proxy; use jq on "source" if needed)
 USAGE
 }
 
@@ -81,8 +79,6 @@ require_cmd tail
 STATE_DIR="${HOME_DIR}/.openclaw/mnemospark"
 DB_PATH="${STATE_DIR}/state.db"
 EVENTS_PATH="${STATE_DIR}/events.jsonl"
-PROXY_PATH="${STATE_DIR}/proxy-events.jsonl"
-MANIFEST_PATH="${STATE_DIR}/manifest.jsonl"
 
 if [[ ! -f "${DB_PATH}" ]]; then
   echo "SQLite state not found: ${DB_PATH}" >&2
@@ -178,7 +174,5 @@ print_stream_matches() {
 }
 
 print_stream_matches "${EVENTS_PATH}"
-print_stream_matches "${PROXY_PATH}"
-print_stream_matches "${MANIFEST_PATH}"
 
 echo "Done."

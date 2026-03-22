@@ -44,6 +44,41 @@ function sha256Hex(content: string): string {
   return createHash("sha256").update(content, "utf-8").digest("hex");
 }
 
+/** Seeds `payments` + `objects` so `findQuoteById` succeeds for upload tests. */
+async function seedQuotedStorageInSqlite(
+  homeDir: string,
+  params: {
+    quoteId: string;
+    walletAddress: string;
+    objectId: string;
+    objectHash: string;
+    storagePrice: number;
+    provider?: string;
+    region?: string;
+  },
+): Promise<void> {
+  const datastore = await createCloudDatastore(homeDir);
+  await datastore.upsertObject({
+    object_id: params.objectId,
+    object_key: null,
+    wallet_address: params.walletAddress,
+    quote_id: params.quoteId,
+    provider: params.provider ?? "aws",
+    bucket_name: null,
+    region: params.region ?? "us-east-1",
+    sha256: params.objectHash,
+    status: "quoted",
+  });
+  await datastore.upsertPayment({
+    quote_id: params.quoteId,
+    wallet_address: params.walletAddress,
+    trans_id: null,
+    amount: params.storagePrice,
+    network: null,
+    status: "quoted",
+  });
+}
+
 describe("expandTilde", () => {
   it("expands ~/foo to homedir + /foo", () => {
     expect(expandTilde("~/x")).toBe(join(homedir(), "x"));
@@ -95,7 +130,7 @@ describe("cloud command", () => {
     expect(result.text).not.toContain("s3-key");
   });
 
-  it("builds tar.gz object, computes hash/size, and appends object.log entry", async () => {
+  it("builds tar.gz object and computes hash/size (no object.log sidecar)", async () => {
     const { homeDir, tmpBackupDir, sourceDir } = await createSandbox();
     await writeFile(join(sourceDir, "notes.txt"), "hello from mnemospark backup");
 
@@ -113,10 +148,6 @@ describe("cloud command", () => {
 
     const archiveStats = await stat(result.archivePath);
     expect(archiveStats.size).toBeGreaterThan(0);
-
-    const logContent = await readFile(result.objectLogPath, "utf-8");
-    const lastLine = logContent.trim().split("\n").at(-1);
-    expect(lastLine).toBe(`${result.objectId},${result.objectIdHash},${result.objectSizeGb}`);
   });
 
   it("backup succeeds when path uses leading tilde and file exists under HOME", async () => {
@@ -148,18 +179,13 @@ describe("cloud command", () => {
     }
   });
 
-  it("removes archive when metadata logging fails after archive creation", async () => {
-    const { root, tmpBackupDir, sourceDir } = await createSandbox();
-    await writeFile(join(sourceDir, "notes.txt"), "hello from mnemospark backup");
-
-    const invalidHomeDir = join(root, "home-file");
-    await writeFile(invalidHomeDir, "not a directory");
+  it("does not leave backup artifacts in tmp when the backup target is missing", async () => {
+    const { tmpBackupDir, sourceDir } = await createSandbox();
     const filesBefore = await readdir(tmpBackupDir);
 
     await expect(
-      buildBackupObject(sourceDir, {
+      buildBackupObject(join(sourceDir, "missing-path"), {
         platform: "linux",
-        homeDir: invalidHomeDir,
         tmpDir: tmpBackupDir,
         now: () => 1700000002000,
         randomBytes: randomBytesFixture,
@@ -257,7 +283,7 @@ describe("cloud command", () => {
     let capturedRequest: Record<string, unknown> | undefined;
 
     const command = createCloudCommand({
-      objectLogHomeDir: homeDir,
+      mnemosparkHomeDir: homeDir,
       requestPriceStorageQuoteFn: async (request) => {
         capturedRequest = request as Record<string, unknown>;
         return {
@@ -299,18 +325,19 @@ describe("cloud command", () => {
       region: "us-east-1",
     });
     expect(result.isError).not.toBe(true);
-    expect(result.text).toContain("Your storage quote `quote-abc123` is valid for 1 hour");
-    expect(result.text).toContain(
-      "If you accept this quote run the command /mnemospark_cloud upload",
-    );
+    expect(result.text).toContain("Your storage quote `quote-abc123`:");
+    expect(result.text).toContain("If you accept this quote, run:");
+    expect(result.text).toContain("/mnemospark_cloud upload --quote-id `quote-abc123`");
     expect(result.text).toContain("--object-id-hash `hash-001`");
-
-    const objectLogPath = join(homeDir, ".openclaw", "mnemospark", "object.log");
-    const logContent = await readFile(objectLogPath, "utf-8");
-    const lastLine = logContent.trim().split("\n").at(-1);
-    expect(lastLine).toBe(
-      "2026-02-25 19:00:00,quote-abc123,2.75,0x1234abcd,obj-001,hash-001,0.015,aws,us-east-1",
+    expect(result.text).toContain(
+      "Quotes are valid for one hour. Please run price-storage again if you need a new quote.",
     );
+
+    const datastore = await createCloudDatastore(homeDir);
+    const verified = await datastore.findQuoteById("quote-abc123");
+    expect(verified?.storagePrice).toBe(2.75);
+    expect(verified?.objectId).toBe("obj-001");
+    expect(verified?.objectIdHash).toBe("hash-001");
   });
 
   it("returns Cannot price storage on invalid /mnemospark cloud price-storage args", async () => {
@@ -444,7 +471,7 @@ describe("cloud command", () => {
     });
 
     const command = createCloudCommand({
-      objectLogHomeDir: homeDir,
+      mnemosparkHomeDir: homeDir,
       resolveWalletPrivateKeyFn: async () => walletKey,
       createPaymentFetchFn: () => ({
         fetch: async () =>
@@ -492,21 +519,22 @@ describe("cloud command", () => {
     expect(lastCompleted?.status).toBe("succeeded");
     expect(lastCompleted?.http_status).toBe(200);
 
-    const proxyPath = join(homeDir, ".openclaw", "mnemospark", "proxy-events.jsonl");
-    const proxyRaw = await readFile(proxyPath, "utf-8");
-    const proxyLines = proxyRaw.trim().split("\n");
-    const settleProxy = proxyLines
+    const allLines = eventsRaw.trim().split("\n");
+    const settleObservations = allLines
       .map(
         (l) =>
           JSON.parse(l) as {
             event_type?: string;
             status?: string;
-            details?: { http_status?: number };
+            source?: string;
+            http_status?: number;
           },
       )
-      .filter((e) => e.event_type === "payment.settle" && e.status === "result");
-    expect(settleProxy.length).toBeGreaterThanOrEqual(1);
-    expect(settleProxy.at(-1)?.details?.http_status).toBe(200);
+      .filter(
+        (e) => e.event_type === "payment.settle" && e.status === "result" && e.source === "command",
+      );
+    expect(settleObservations.length).toBeGreaterThanOrEqual(1);
+    expect(settleObservations.at(-1)?.http_status).toBe(200);
   });
 
   it("handles payment-settle HTTP error and logs JSONL failure", async () => {
@@ -527,7 +555,7 @@ describe("cloud command", () => {
     });
 
     const command = createCloudCommand({
-      objectLogHomeDir: homeDir,
+      mnemosparkHomeDir: homeDir,
       resolveWalletPrivateKeyFn: async () => walletKey,
       createPaymentFetchFn: () => ({
         fetch: async () => new Response("{}", { status: 500 }),
@@ -584,13 +612,14 @@ describe("cloud command", () => {
     const archivePath = join(tmpBackupDir, objectId);
     await writeFile(archivePath, archiveContent, "utf-8");
 
-    const objectLogPath = join(homeDir, ".openclaw", "mnemospark", "object.log");
     await mkdir(join(homeDir, ".openclaw", "mnemospark"), { recursive: true });
-    await writeFile(
-      objectLogPath,
-      `2026-02-25 19:00:00,quote-abc123,2.75,${walletAddress},${objectId},${objectHash},0.015,aws,us-east-1\n`,
-      "utf-8",
-    );
+    await seedQuotedStorageInSqlite(homeDir, {
+      quoteId: "quote-abc123",
+      walletAddress,
+      objectId,
+      objectHash,
+      storagePrice: 2.75,
+    });
 
     let createPaymentFetchCalls = 0;
     let capturedBody: Record<string, unknown> | undefined;
@@ -610,7 +639,7 @@ describe("cloud command", () => {
     };
 
     const command = createCloudCommand({
-      objectLogHomeDir: homeDir,
+      mnemosparkHomeDir: homeDir,
       backupOptions: { tmpDir: tmpBackupDir },
       resolveWalletPrivateKeyFn: async () => walletKey,
       idempotencyKeyFn: () => "idempotency-123",
@@ -669,30 +698,17 @@ describe("cloud command", () => {
     if (!result.text) {
       throw new Error("Expected upload response text");
     }
-    const messageLines = result.text.split("\n");
-    expect(messageLines).toHaveLength(3);
-    expect(messageLines[0]).toBe(
+    expect(result.text).toContain(
       "Your file `obj-upload-001` with key `obj-upload-001.tar.gz.enc` has been stored using `aws` in `mnemospark-1234` `us-east-1`",
     );
-    expect(messageLines[1]).toContain("A cron job `");
-    expect(messageLines[1]).toContain("monthly");
-    expect(messageLines[1]).toContain("**32-day deadline**");
-    expect(messageLines[2]).toBe("Thank you for using mnemospark!");
-
-    const cronIdMatch = messageLines[1].match(/A cron job `([^`]+)` has been configured/);
+    const cronIdMatch = result.text.match(/A cron job `([^`]+)` has been configured/);
     const cronId = cronIdMatch?.[1];
     expect(cronId).toBeTruthy();
-
-    const logContent = await readFile(objectLogPath, "utf-8");
-    const logLines = logContent.trim().split("\n");
-    const uploadLogLine = logLines.at(-2);
-    const cronLogLine = logLines.at(-1);
-    expect(uploadLogLine).toBe(
-      `2026-02-25 20:10:00,quote-abc123,${walletAddress},addr-hash,tx-001,2.75,obj-upload-001,obj-upload-001.tar.gz.enc,aws,mnemospark-1234,us-east-1`,
-    );
-    expect(cronLogLine).toBe(
-      `cron,2026-02-25 20:10:00,${cronId},obj-upload-001,obj-upload-001.tar.gz.enc,quote-abc123,2.75`,
-    );
+    expect(result.text).toContain("monthly");
+    expect(result.text).toContain("32-day deadline");
+    expect(result.text).toContain(`/mnemospark_cloud ls --wallet-address \`${walletAddress}\``);
+    expect(result.text).toContain("Thank you for using mnemospark!");
+    expect(result.text).toContain("pluggedin@mnemospark.ai");
 
     const cronTablePath = join(homeDir, ".openclaw", "mnemospark", "crontab.txt");
     const cronTableContent = await readFile(cronTablePath, "utf-8");
@@ -723,13 +739,14 @@ describe("cloud command", () => {
     const archivePath = join(tmpBackupDir, objectId);
     await writeFile(archivePath, archiveContent, "utf-8");
 
-    const objectLogPath = join(homeDir, ".openclaw", "mnemospark", "object.log");
     await mkdir(join(homeDir, ".openclaw", "mnemospark"), { recursive: true });
-    await writeFile(
-      objectLogPath,
-      `2026-02-25 19:00:00,quote-cleanup,2.75,${walletAddress},${objectId},${objectHash},0.015,aws,us-east-1\n`,
-      "utf-8",
-    );
+    await seedQuotedStorageInSqlite(homeDir, {
+      quoteId: "quote-cleanup",
+      walletAddress,
+      objectId,
+      objectHash,
+      storagePrice: 2.75,
+    });
 
     let createPaymentFetchCalls = 0;
     const previousEnv = process.env.MNEMOSPARK_DELETE_BACKUP_AFTER_UPLOAD;
@@ -749,7 +766,7 @@ describe("cloud command", () => {
     };
     try {
       const command = createCloudCommand({
-        objectLogHomeDir: homeDir,
+        mnemosparkHomeDir: homeDir,
         backupOptions: { tmpDir: tmpBackupDir },
         resolveWalletPrivateKeyFn: async () => walletKey,
         idempotencyKeyFn: () => "idempotency-cleanup-123",
@@ -810,16 +827,17 @@ describe("cloud command", () => {
     const objectHash = sha256Hex(archiveContent);
     await writeFile(join(tmpBackupDir, objectId), archiveContent, "utf-8");
 
-    const objectLogPath = join(homeDir, ".openclaw", "mnemospark", "object.log");
     await mkdir(join(homeDir, ".openclaw", "mnemospark"), { recursive: true });
-    await writeFile(
-      objectLogPath,
-      `2026-02-25 19:00:00,quote-xyz,2.75,${walletAddress},${objectId},${objectHash},0.015,aws,us-east-1\n`,
-      "utf-8",
-    );
+    await seedQuotedStorageInSqlite(homeDir, {
+      quoteId: "quote-xyz",
+      walletAddress,
+      objectId,
+      objectHash,
+      storagePrice: 2.75,
+    });
 
     const command = createCloudCommand({
-      objectLogHomeDir: homeDir,
+      mnemosparkHomeDir: homeDir,
       backupOptions: { tmpDir: tmpBackupDir },
       resolveWalletPrivateKeyFn: async () => walletKey,
       proxyUploadOptions: {
@@ -864,18 +882,20 @@ describe("cloud command", () => {
     const objectHash = sha256Hex(archiveContent);
     await writeFile(join(tmpBackupDir, objectId), archiveContent, "utf-8");
 
-    const objectLogPath = join(homeDir, ".openclaw", "mnemospark", "object.log");
     await mkdir(join(homeDir, ".openclaw", "mnemospark"), { recursive: true });
-    await writeFile(
-      objectLogPath,
-      `2026-02-25 19:00:00,quote-presigned-confirm,2.75,${walletAddress},${objectId},${objectHash},0.015,aws,[REDACTED]\n`,
-      "utf-8",
-    );
+    await seedQuotedStorageInSqlite(homeDir, {
+      quoteId: "quote-presigned-confirm",
+      walletAddress,
+      objectId,
+      objectHash,
+      storagePrice: 2.75,
+      region: "[REDACTED]",
+    });
 
     let capturedConfirmRequest: Record<string, unknown> | undefined;
     let presignedPutCount = 0;
     const command = createCloudCommand({
-      objectLogHomeDir: homeDir,
+      mnemosparkHomeDir: homeDir,
       backupOptions: { tmpDir: tmpBackupDir },
       resolveWalletPrivateKeyFn: async () => walletKey,
       idempotencyKeyFn: () => "idemp-presigned-confirm-123",
@@ -977,13 +997,6 @@ describe("cloud command", () => {
       object_key: "obj-upload-presigned-confirm-001.tar.gz.enc",
       idempotency_key: "idemp-presigned-confirm-123",
     });
-
-    const logContent = await readFile(objectLogPath, "utf-8");
-    const logLines = logContent.trim().split("\n");
-    const uploadLogLine = logLines.at(-2);
-    expect(uploadLogLine).toBe(
-      `2026-02-25 20:45:00,quote-presigned-confirm,${walletAddress},addr-hash,tx-confirmed,2.75,obj-upload-presigned-confirm-001,obj-upload-presigned-confirm-001.tar.gz.enc,aws,mnemospark-1234,[REDACTED]`,
-    );
   });
 
   it("returns actionable error when presigned upload confirmation fails", async () => {
@@ -995,13 +1008,18 @@ describe("cloud command", () => {
     const objectHash = sha256Hex(archiveContent);
     await writeFile(join(tmpBackupDir, objectId), archiveContent, "utf-8");
 
-    const objectLogPath = join(homeDir, ".openclaw", "mnemospark", "object.log");
     await mkdir(join(homeDir, ".openclaw", "mnemospark"), { recursive: true });
-    const initialLogLine = `2026-02-25 19:00:00,quote-presigned-confirm-fail,2.75,${walletAddress},${objectId},${objectHash},0.015,aws,[REDACTED]`;
-    await writeFile(objectLogPath, `${initialLogLine}\n`, "utf-8");
+    await seedQuotedStorageInSqlite(homeDir, {
+      quoteId: "quote-presigned-confirm-fail",
+      walletAddress,
+      objectId,
+      objectHash,
+      storagePrice: 2.75,
+      region: "[REDACTED]",
+    });
 
     const command = createCloudCommand({
-      objectLogHomeDir: homeDir,
+      mnemosparkHomeDir: homeDir,
       backupOptions: { tmpDir: tmpBackupDir },
       resolveWalletPrivateKeyFn: async () => walletKey,
       idempotencyKeyFn: () => "idemp-presigned-confirm-fail-123",
@@ -1088,8 +1106,16 @@ describe("cloud command", () => {
     expect(result.text).toContain("idempotency_key: idemp-presigned-confirm-fail-123");
     expect(result.text).toContain("S3 object not found");
 
-    const logContent = await readFile(objectLogPath, "utf-8");
-    expect(logContent.trim()).toBe(initialLogLine);
+    const eventsPath = join(homeDir, ".openclaw", "mnemospark", "events.jsonl");
+    const uploadFailed = (await readFile(eventsPath, "utf-8"))
+      .trim()
+      .split("\n")
+      .map((l) => JSON.parse(l) as { event_type?: string; status?: string; quote_id?: string })
+      .filter(
+        (e) => e.event_type === "upload.completed" && e.quote_id === "quote-presigned-confirm-fail",
+      )
+      .at(-1);
+    expect(uploadFailed?.status).toBe("failed");
   });
 
   it("returns error when presigned upload response is missing upload URL", async () => {
@@ -1101,10 +1127,14 @@ describe("cloud command", () => {
     const objectHash = sha256Hex(archiveContent);
     await writeFile(join(tmpBackupDir, objectId), archiveContent, "utf-8");
 
-    const objectLogPath = join(homeDir, ".openclaw", "mnemospark", "object.log");
     await mkdir(join(homeDir, ".openclaw", "mnemospark"), { recursive: true });
-    const initialLogLine = `2026-02-25 19:00:00,quote-presigned,2.75,${walletAddress},${objectId},${objectHash},0.015,aws,us-east-1`;
-    await writeFile(objectLogPath, `${initialLogLine}\n`, "utf-8");
+    await seedQuotedStorageInSqlite(homeDir, {
+      quoteId: "quote-presigned",
+      walletAddress,
+      objectId,
+      objectHash,
+      storagePrice: 2.75,
+    });
 
     let capturedBody: Record<string, unknown> | undefined;
     const uploadResponseNoUrl = {
@@ -1117,7 +1147,7 @@ describe("cloud command", () => {
       location: "us-east-1",
     };
     const command = createCloudCommand({
-      objectLogHomeDir: homeDir,
+      mnemosparkHomeDir: homeDir,
       backupOptions: { tmpDir: tmpBackupDir },
       resolveWalletPrivateKeyFn: async () => walletKey,
       createPaymentFetchFn: () => ({
@@ -1160,9 +1190,6 @@ describe("cloud command", () => {
     expect(payload.content_base64).toBeUndefined();
     expect(result.isError).toBe(true);
     expect(result.text).toBe("Cannot upload storage object: missing presigned upload URL.");
-
-    const logContent = await readFile(objectLogPath, "utf-8");
-    expect(logContent.trim()).toBe(initialLogLine);
   });
 
   it("returns Cannot upload storage object on invalid /mnemospark cloud upload args", async () => {
@@ -1269,7 +1296,7 @@ describe("cloud command", () => {
 
     let capturedRequest: Record<string, unknown> | undefined;
     const command = createCloudCommand({
-      objectLogHomeDir: homeDir,
+      mnemosparkHomeDir: homeDir,
       requestStorageLsFn: async (request) => {
         capturedRequest = request as Record<string, unknown>;
         return {
@@ -1343,14 +1370,8 @@ describe("cloud command", () => {
     let capturedRequest: Record<string, unknown> | undefined;
     const cronId = "cron-delete-001";
 
-    const objectLogPath = join(homeDir, ".openclaw", "mnemospark", "object.log");
     const cronTablePath = join(homeDir, ".openclaw", "mnemospark", "crontab.txt");
     await mkdir(join(homeDir, ".openclaw", "mnemospark"), { recursive: true });
-    await writeFile(
-      objectLogPath,
-      `cron,2026-02-25 20:10:00,${cronId},obj-001,backup/archive.tar.gz,quote-abc123,2.75\n`,
-      "utf-8",
-    );
     await writeFile(
       cronTablePath,
       `${JSON.stringify({
@@ -1372,7 +1393,7 @@ describe("cloud command", () => {
     );
 
     const command = createCloudCommand({
-      objectLogHomeDir: homeDir,
+      mnemosparkHomeDir: homeDir,
       requestStorageDeleteFn: async (request) => {
         capturedRequest = request as Record<string, unknown>;
         return {
@@ -1426,7 +1447,7 @@ describe("cloud command", () => {
     let capturedRequest: Record<string, unknown> | undefined;
 
     const command = createCloudCommand({
-      objectLogHomeDir: homeDir,
+      mnemosparkHomeDir: homeDir,
       requestStorageDeleteFn: async (request) => {
         capturedRequest = request as Record<string, unknown>;
         return {
@@ -1534,7 +1555,7 @@ describe("cloud command", () => {
 
     let operationId: string | undefined;
     const command = createCloudCommand({
-      objectLogHomeDir: homeDir,
+      mnemosparkHomeDir: homeDir,
       requestStorageLsFn: async (_request, requestOptions) => {
         operationId = requestOptions?.correlation?.operationId;
         return {
@@ -1684,7 +1705,7 @@ describe("cloud command", () => {
 
   it("supports async upload with operation id", async () => {
     const { homeDir } = await createSandbox();
-    const command = createCloudCommand({ objectLogHomeDir: homeDir });
+    const command = createCloudCommand({ mnemosparkHomeDir: homeDir });
 
     const result = await command.handler({
       channel: "test",
@@ -1700,7 +1721,7 @@ describe("cloud command", () => {
 
   it("returns operation status via op-status", async () => {
     const { homeDir } = await createSandbox();
-    const command = createCloudCommand({ objectLogHomeDir: homeDir });
+    const command = createCloudCommand({ mnemosparkHomeDir: homeDir });
 
     const started = await command.handler({
       channel: "test",
@@ -1735,7 +1756,7 @@ describe("cloud command", () => {
   it("supports subagent orchestration metadata and lifecycle events", async () => {
     const { homeDir } = await createSandbox();
     const command = createCloudCommand({
-      objectLogHomeDir: homeDir,
+      mnemosparkHomeDir: homeDir,
       requestStorageDownloadFn: async () => ({
         success: true,
         key: "backup/archive.tar.gz",
@@ -1788,12 +1809,7 @@ describe("cloud command", () => {
     }
 
     const eventsPath = join(homeDir, ".openclaw", "mnemospark", "events.jsonl");
-    const proxyEventsPath = join(homeDir, ".openclaw", "mnemospark", "proxy-events.jsonl");
     const events = (await readFile(eventsPath, "utf-8"))
-      .trim()
-      .split("\n")
-      .map((line) => JSON.parse(line) as Record<string, unknown>);
-    const proxyEvents = (await readFile(proxyEventsPath, "utf-8"))
       .trim()
       .split("\n")
       .map((line) => JSON.parse(line) as Record<string, unknown>);
@@ -1808,17 +1824,15 @@ describe("cloud command", () => {
       expect(typeof event.event_type).toBe("string");
       expect(typeof event.status).toBe("string");
       expect(typeof event.ts).toBe("string");
+      expect(event.source).toBe("command");
     }
-
-    const proxyOpEvents = proxyEvents.filter((event) => event.operation_id === operationId);
-    expect(proxyOpEvents.length).toBeGreaterThan(0);
   });
 
   it("labels backup subagent tasks as backup", async () => {
     const { homeDir } = await createSandbox();
     let subagentCommand: string | undefined;
     const command = createCloudCommand({
-      objectLogHomeDir: homeDir,
+      mnemosparkHomeDir: homeDir,
       subagentOrchestrator: {
         dispatch: async (input) => {
           subagentCommand = input.task.command;
@@ -1844,7 +1858,7 @@ describe("cloud command", () => {
   it("does not regress operation status after subagent dispatch resolves", async () => {
     const { homeDir } = await createSandbox();
     const command = createCloudCommand({
-      objectLogHomeDir: homeDir,
+      mnemosparkHomeDir: homeDir,
       subagentOrchestrator: {
         dispatch: async (input) => {
           const sessionId = "session-sync-hooks";
@@ -1900,7 +1914,7 @@ describe("cloud command", () => {
   it("records dispatch failures for subagent orchestration", async () => {
     const { homeDir } = await createSandbox();
     const command = createCloudCommand({
-      objectLogHomeDir: homeDir,
+      mnemosparkHomeDir: homeDir,
       subagentOrchestrator: {
         dispatch: async () => {
           throw new Error("subagent spawn denied");
@@ -1962,7 +1976,7 @@ describe("cloud command", () => {
   it("supports idempotent cancel for subagent operations", async () => {
     const { homeDir } = await createSandbox();
     const command = createCloudCommand({
-      objectLogHomeDir: homeDir,
+      mnemosparkHomeDir: homeDir,
       requestStorageDownloadFn: async () =>
         new Promise<StorageDownloadProxyResponse>(() => {
           // Intentionally unresolved so cancel drives terminal state.
@@ -2035,7 +2049,7 @@ describe("cloud command", () => {
   it("marks timed out subagent operations with timeout error", async () => {
     const { homeDir } = await createSandbox();
     const command = createCloudCommand({
-      objectLogHomeDir: homeDir,
+      mnemosparkHomeDir: homeDir,
       requestStorageDownloadFn: async () =>
         new Promise<StorageDownloadProxyResponse>(() => {
           // Intentionally unresolved so timeout drives terminal state.
@@ -2088,7 +2102,7 @@ describe("cloud command", () => {
   it("returns Cannot delete file when /mnemospark cloud delete fails", async () => {
     const { homeDir } = await createSandbox();
     const command = createCloudCommand({
-      objectLogHomeDir: homeDir,
+      mnemosparkHomeDir: homeDir,
       requestStorageDeleteFn: async () => {
         throw new Error("delete failed");
       },
@@ -2120,18 +2134,12 @@ describe("cloud command", () => {
 
   it("returns success when cloud delete succeeds but cron cleanup throws", async () => {
     const { homeDir } = await createSandbox();
-    const objectLogPath = join(homeDir, ".openclaw", "mnemospark", "object.log");
     const cronTablePath = join(homeDir, ".openclaw", "mnemospark", "crontab.txt");
     await mkdir(join(homeDir, ".openclaw", "mnemospark"), { recursive: true });
-    await writeFile(
-      objectLogPath,
-      "cron,2026-02-25 20:10:00,cron-cleanup-fail,obj-002,backup/other.tar.gz,quote-xyz,1.5\n",
-      "utf-8",
-    );
     await mkdir(cronTablePath, { recursive: true });
 
     const command = createCloudCommand({
-      objectLogHomeDir: homeDir,
+      mnemosparkHomeDir: homeDir,
       requestStorageDeleteFn: async () => ({
         success: true,
         key: "backup/other.tar.gz",

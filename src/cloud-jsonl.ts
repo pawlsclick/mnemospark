@@ -6,8 +6,9 @@ import { basename, dirname, join } from "node:path";
 import { pipeline } from "node:stream/promises";
 
 const BASE_DIR = join(homedir(), ".openclaw", "mnemospark");
-const MAX_BYTES = 10 * 1024 * 1024;
-const KEEP_ROTATED = 10;
+/** Higher ceiling now that proxy + command share events.jsonl. */
+const MAX_BYTES = 15 * 1024 * 1024;
+const KEEP_ROTATED = 12;
 
 function resolvePath(fileName: string, homeDir?: string): string {
   const baseDir = homeDir ? join(homeDir, ".openclaw", "mnemospark") : BASE_DIR;

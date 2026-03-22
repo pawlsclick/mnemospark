@@ -127,10 +127,11 @@ function emitProxyEvent(
   correlation: ProxyEventCorrelation,
   details: Record<string, unknown> = {},
 ): void {
-  void appendJsonlEvent("proxy-events.jsonl", {
+  void appendJsonlEvent("events.jsonl", {
     ts: new Date().toISOString(),
     event_type: eventType,
     status,
+    source: "proxy",
     trace_id: correlation.trace_id,
     operation_id: correlation.operation_id,
     quote_id: correlation.quote_id ?? null,
