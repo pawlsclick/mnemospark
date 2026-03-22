@@ -157,6 +157,26 @@ describe("cloud storage transport", () => {
     }
   });
 
+  it("rejects stat ls responses with invalid size_bytes", () => {
+    expect(() =>
+      parseStorageLsResponse({
+        success: true,
+        key: "fractional",
+        size_bytes: 1.5,
+        bucket: "bk",
+      }),
+    ).toThrow("ls response has invalid size_bytes; expected non-negative integer");
+
+    expect(() =>
+      parseStorageLsResponse({
+        success: true,
+        key: "negative",
+        size_bytes: -1,
+        bucket: "bk",
+      }),
+    ).toThrow("ls response has invalid size_bytes; expected non-negative integer");
+  });
+
   it("forwards delete request to backend with wallet proof header", async () => {
     let capturedUrl = "";
     let capturedInit: RequestInit | undefined;

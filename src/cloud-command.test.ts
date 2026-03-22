@@ -1550,6 +1550,27 @@ describe("cloud command", () => {
     expect(lsCalled).toBe(false);
   });
 
+  it("returns a meaningful ls error when stat response has invalid size_bytes", async () => {
+    const command = createCloudCommand({
+      requestStorageLsFn: async () => {
+        throw new Error("ls response has invalid size_bytes; expected non-negative integer");
+      },
+    });
+
+    const result = await command.handler({
+      channel: "test",
+      isAuthorizedSender: true,
+      args: "ls --wallet-address 0x1234abcd --object-key backup/archive.tar.gz",
+      commandBody: "ls",
+      config: {},
+    });
+
+    expect(result.isError).toBe(true);
+    expect(result.text).toBe(
+      "Cannot list storage object: ls response has invalid size_bytes; expected non-negative integer",
+    );
+  });
+
   it("returns Cannot download file when /mnemospark cloud download fails", async () => {
     const command = createCloudCommand({
       requestStorageDownloadFn: async () => {

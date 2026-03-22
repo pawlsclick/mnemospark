@@ -440,6 +440,9 @@ export function parseStorageLsResponse(payload: unknown): StorageLsResponse {
   if (!key || sizeBytes === null || !bucket) {
     throw new Error("ls response is missing required fields");
   }
+  if (!Number.isInteger(sizeBytes) || sizeBytes < 0) {
+    throw new Error("ls response has invalid size_bytes; expected non-negative integer");
+  }
 
   return {
     mode: "stat",

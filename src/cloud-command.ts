@@ -1568,6 +1568,27 @@ function extractUploadErrorMessage(error: unknown): string | null {
   return message;
 }
 
+function extractLsErrorMessage(error: unknown): string | null {
+  if (!(error instanceof Error)) {
+    return null;
+  }
+  const message = error.message.trim();
+  if (!message) {
+    return null;
+  }
+  if (
+    message.startsWith("ls response") ||
+    message.startsWith("ls list response") ||
+    message.startsWith("Invalid ls response payload")
+  ) {
+    return `Cannot list storage object: ${message}`;
+  }
+  if (message === "formatBytesForDisplay expects a non-negative integer") {
+    return "Cannot list storage object: ls response has invalid size_bytes; expected non-negative integer";
+  }
+  return null;
+}
+
 function formatPriceStorageUserMessage(quote: PriceStorageQuoteResponse): string {
   return [
     `Your storage quote \`${quote.quote_id}\` is valid for 1 hour, the storage price is \`${quote.storage_price}\` for \`${quote.object_id}\` with file size of \`${quote.object_size_gb}\` in \`${quote.provider}\` \`${quote.location}\``,
@@ -3417,7 +3438,8 @@ async function runCloudCommandHandler(
       return {
         text: resolved.degradedWarning ? `${resolved.degradedWarning}\n\n${lsText}` : lsText,
       };
-    } catch {
+    } catch (error) {
+      const lsErrorMessage = extractLsErrorMessage(error) ?? "Cannot list storage object";
       await datastore.upsertOperation({
         operation_id: operationId,
         type: "ls",
@@ -3425,7 +3447,7 @@ async function runCloudCommandHandler(
         quote_id: null,
         status: "failed",
         error_code: "LS_FAILED",
-        error_message: "Cannot list storage object",
+        error_message: lsErrorMessage,
       });
       await emitCloudEventBestEffort(
         "ls.completed",
@@ -3440,7 +3462,7 @@ async function runCloudCommandHandler(
         objectLogHomeDir,
       );
       return {
-        text: "Cannot list storage object",
+        text: lsErrorMessage,
         isError: true,
       };
     }
