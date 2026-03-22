@@ -1550,6 +1550,37 @@ describe("cloud command", () => {
     expect(lsCalled).toBe(false);
   });
 
+  it("returns Cannot list storage object when ls selector flags are used without key or name", async () => {
+    let lsCalled = false;
+    const command = createCloudCommand({
+      requestStorageLsFn: async () => {
+        lsCalled = true;
+        return {
+          mode: "list" as const,
+          success: true,
+          list_mode: true as const,
+          bucket: "wallet-bucket-list",
+          objects: [],
+          is_truncated: false,
+          next_continuation_token: null,
+        };
+      },
+    });
+
+    const result = await command.handler({
+      channel: "test",
+      isAuthorizedSender: true,
+      args: "ls --wallet-address 0x1234567890123456789012345678901234567890 --latest",
+      commandBody: "ls",
+      config: {},
+    });
+
+    expect(result.isError).toBe(true);
+    expect(result.text).toContain("Cannot list storage object");
+    expect(result.text).toContain("--name");
+    expect(lsCalled).toBe(false);
+  });
+
   it("returns a meaningful ls error when stat response has invalid size_bytes", async () => {
     const command = createCloudCommand({
       requestStorageLsFn: async () => {

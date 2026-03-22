@@ -443,6 +443,7 @@ function parseLsObjectSelector(
 
   if (objectKey && name) return null;
   if (latest && at) return null;
+  if (!objectKey && !name && (latest || at)) return null;
 
   if (objectKey) return { objectKey };
   if (name) return { nameSelector: { name, latest, at } };
