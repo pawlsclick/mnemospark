@@ -17,12 +17,14 @@ import {
   requestStorageUploadViaProxy,
   parsePriceStorageQuoteRequest,
   requestPriceStorageViaProxy,
+  type BackendSettleForwardResult,
   type StorageUploadConfirmRequest,
   type StorageUploadRequest,
   type StorageUploadResponse,
   type UploadPayload,
   type PriceStorageQuoteRequest,
   type PriceStorageQuoteResponse,
+  type ProxySettleOptions,
   type ProxyUploadConfirmOptions,
   type ProxyQuoteOptions,
   type ProxyUploadOptions,
@@ -71,8 +73,16 @@ const TAR_OVERHEAD_BYTES = 10 * 1024 * 1024; // Conservative headroom for tar me
 const REQUIRED_PRICE_STORAGE =
   "--wallet-address, --object-id, --object-id-hash, --gb, --provider, --region";
 const REQUIRED_UPLOAD = "--quote-id, --wallet-address, --object-id, --object-id-hash";
+const REQUIRED_PAYMENT_SETTLE = "--quote-id and --wallet-address";
 const REQUIRED_STORAGE_OBJECT =
   "--wallet-address and one of (--object-key | --name [--latest|--at])";
+const PAYMENT_SETTLE_FLAG_NAMES = new Set([
+  "quote-id",
+  "wallet-address",
+  "object-id",
+  "object-key",
+  "storage-price",
+]);
 const BOOLEAN_SELECTOR_FLAGS = new Set(["latest"]);
 const BOOLEAN_ASYNC_FLAGS = new Set(["async"]);
 const BOOLEAN_OP_STATUS_FLAGS = new Set(["cancel"]);
@@ -111,6 +121,10 @@ const CLOUD_HELP_TEXT = [
   "  Purpose: upload an encrypted object using a valid quote-id.",
   "  Required: " + REQUIRED_UPLOAD,
   "",
+  "• `/mnemospark_cloud payment-settle --quote-id <quote-id> --wallet-address <addr> [--object-id <id>] [--object-key <key>] [--storage-price <n>]`",
+  "  Purpose: settle storage payment for a quote (e.g. monthly cron). Uses the same proxy + x402 path as upload pre-settlement.",
+  "  Required: --quote-id, --wallet-address (wallet private key must match the address).",
+  "",
   "• `/mnemospark_cloud ls --wallet-address <addr> [--object-key <object-key> | --name <friendly-name>] [--latest|--at <timestamp>]`",
   "  Purpose: look up remote object metadata.",
   "  Required: " + REQUIRED_STORAGE_OBJECT,
@@ -145,7 +159,7 @@ const CLOUD_HELP_TEXT = [
   "• `/mnemospark_cloud op-status --operation-id <id>`",
   "• `/mnemospark_cloud op-status --operation-id <id> --cancel`",
   "",
-  "Backup creates a tar+gzip object in ~/.openclaw/mnemospark/backup and appends object metadata to ~/.openclaw/mnemospark/object.log. Upload appends storage rows and cron-tracking rows to object.log, and keeps job entries in ~/.openclaw/mnemospark/crontab.txt. All storage commands (price-storage, upload, ls, download, delete) require --wallet-address.",
+  "Backup creates a tar+gzip object in ~/.openclaw/mnemospark/backup and appends object metadata to ~/.openclaw/mnemospark/object.log. Upload appends storage rows and cron-tracking rows to object.log, and keeps job entries in ~/.openclaw/mnemospark/crontab.txt. Commands price-storage, upload, ls, download, delete, and payment-settle require --wallet-address.",
 ].join("\n");
 
 type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
@@ -155,6 +169,14 @@ type UploadCommandRequest = {
   wallet_address: string;
   object_id: string;
   object_id_hash: string;
+};
+
+type PaymentSettleCommandRequest = {
+  quote_id: string;
+  wallet_address: string;
+  object_id?: string;
+  object_key?: string;
+  storage_price?: number;
 };
 
 type BackupObjectOptions = {
@@ -249,6 +271,8 @@ type ParsedCloudArgs =
     } & AsyncOperationArgs)
   | { mode: "upload-invalid" }
   | { mode: "upload-invalid-async" }
+  | { mode: "payment-settle"; paymentSettleRequest: PaymentSettleCommandRequest }
+  | { mode: "payment-settle-invalid" }
   | { mode: "ls"; storageObjectRequest: StorageObjectRequestInput; nameSelector?: NameSelector }
   | { mode: "ls-invalid" }
   | ({
@@ -290,6 +314,11 @@ type CreateCloudCommandOptions = {
   proxyQuoteOptions?: ProxyQuoteOptions;
   proxyUploadOptions?: ProxyUploadOptions;
   proxyUploadConfirmOptions?: ProxyUploadConfirmOptions;
+  requestPaymentSettleViaProxyFn?: (
+    quoteId: string,
+    walletAddress: string,
+    options?: ProxySettleOptions,
+  ) => Promise<BackendSettleForwardResult>;
   requestStorageLsFn?: (
     request: StorageObjectRequest,
     options?: ProxyStorageOptions,
@@ -589,6 +618,42 @@ function parseCloudArgs(args?: string): ParsedCloudArgs {
         wallet_address: walletAddress,
         object_id: objectId,
         object_id_hash: objectIdHash,
+      },
+    };
+  }
+
+  if (subcommand === "payment-settle") {
+    const flags = parseNamedFlags(rest);
+    if (!flags) {
+      return { mode: "payment-settle-invalid" };
+    }
+    for (const key of Object.keys(flags)) {
+      if (!PAYMENT_SETTLE_FLAG_NAMES.has(key)) {
+        return { mode: "payment-settle-invalid" };
+      }
+    }
+    const quoteId = flags["quote-id"]?.trim();
+    const walletAddress = flags["wallet-address"]?.trim();
+    if (!quoteId || !walletAddress) {
+      return { mode: "payment-settle-invalid" };
+    }
+    let storagePrice: number | undefined;
+    if (flags["storage-price"] !== undefined && flags["storage-price"] !== "") {
+      const raw = flags["storage-price"]?.trim() ?? "";
+      const n = Number.parseFloat(raw);
+      if (!Number.isFinite(n) || n < 0) {
+        return { mode: "payment-settle-invalid" };
+      }
+      storagePrice = n;
+    }
+    return {
+      mode: "payment-settle",
+      paymentSettleRequest: {
+        quote_id: quoteId,
+        wallet_address: walletAddress,
+        object_id: flags["object-id"]?.trim() || undefined,
+        object_key: flags["object-key"]?.trim() || undefined,
+        storage_price: storagePrice,
       },
     };
   }
@@ -1068,7 +1133,8 @@ function buildStoragePaymentCronCommand(job: {
   storagePrice: number;
 }): string {
   return [
-    "mnemospark-pay-storage",
+    "/mnemospark_cloud",
+    "payment-settle",
     "--quote-id",
     quoteCronArgument(job.quoteId),
     "--wallet-address",
@@ -1616,6 +1682,8 @@ export function createCloudCommand(
           requestStorageDownloadFn:
             options.requestStorageDownloadFn ?? requestStorageDownloadViaProxy,
           requestStorageDeleteFn: options.requestStorageDeleteFn ?? requestStorageDeleteViaProxy,
+          requestPaymentSettleViaProxyFn:
+            options.requestPaymentSettleViaProxyFn ?? requestPaymentSettleViaProxy,
           objectLogHomeDir: options.objectLogHomeDir ?? options.backupOptions?.homeDir,
           backupOptions: options.backupOptions,
           proxyQuoteOptions: options.proxyQuoteOptions,
@@ -1652,6 +1720,9 @@ type RunCloudCommandHandlerOptions = {
   requestStorageLsFn: NonNullable<CreateCloudCommandOptions["requestStorageLsFn"]>;
   requestStorageDownloadFn: NonNullable<CreateCloudCommandOptions["requestStorageDownloadFn"]>;
   requestStorageDeleteFn: NonNullable<CreateCloudCommandOptions["requestStorageDeleteFn"]>;
+  requestPaymentSettleViaProxyFn: NonNullable<
+    CreateCloudCommandOptions["requestPaymentSettleViaProxyFn"]
+  >;
   objectLogHomeDir: string | undefined;
   backupOptions: CreateCloudCommandOptions["backupOptions"];
   proxyQuoteOptions: CreateCloudCommandOptions["proxyQuoteOptions"];
@@ -1902,6 +1973,138 @@ function buildRequestCorrelation(
   return { operationId, traceId };
 }
 
+function parseTransIdFromPaymentSettleBody(bodyText: string): string | null {
+  const trimmed = bodyText.trim();
+  if (!trimmed.startsWith("{")) {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(trimmed) as { trans_id?: unknown };
+    const tid = parsed.trans_id;
+    return typeof tid === "string" && tid.trim() ? tid.trim() : null;
+  } catch {
+    return null;
+  }
+}
+
+async function resolveAmountForPaymentSettle(
+  quoteId: string,
+  storagePriceFromFlag: number | undefined,
+  datastore: Awaited<ReturnType<typeof createCloudDatastore>>,
+  homeDir?: string,
+): Promise<number> {
+  if (storagePriceFromFlag !== undefined && Number.isFinite(storagePriceFromFlag)) {
+    return storagePriceFromFlag;
+  }
+  const quoteLookup = await datastore.findQuoteById(quoteId);
+  if (quoteLookup && Number.isFinite(quoteLookup.storagePrice)) {
+    return quoteLookup.storagePrice;
+  }
+  const logged = await findLoggedPriceStorageQuote(quoteId, homeDir);
+  if (logged && Number.isFinite(logged.storagePrice)) {
+    return logged.storagePrice;
+  }
+  const payment = await datastore.findPaymentByQuoteId(quoteId);
+  if (payment && Number.isFinite(payment.amount)) {
+    return payment.amount;
+  }
+  return 0;
+}
+
+async function emitPaymentSettleClientObservationBestEffort(params: {
+  phase: "start" | "result";
+  correlation: RequestCorrelation;
+  quoteId: string;
+  walletAddress: string;
+  objectId?: string;
+  objectKey?: string;
+  httpStatus?: number;
+  outcomeStatus?: "succeeded" | "failed";
+  homeDir?: string;
+}): Promise<void> {
+  try {
+    const {
+      phase,
+      correlation,
+      quoteId,
+      walletAddress,
+      objectId,
+      objectKey,
+      httpStatus,
+      outcomeStatus,
+      homeDir,
+    } = params;
+    const ts = new Date().toISOString();
+
+    if (phase === "start") {
+      await emitCloudEventBestEffort(
+        "payment-settle.started",
+        {
+          operation_id: correlation.operationId,
+          trace_id: correlation.traceId,
+          quote_id: quoteId,
+          wallet_address: walletAddress,
+          object_id: objectId,
+          object_key: objectKey,
+          status: "running",
+        },
+        homeDir,
+      );
+      await appendJsonlEvent(
+        "proxy-events.jsonl",
+        {
+          ts,
+          event_type: "payment.settle",
+          status: "start",
+          trace_id: correlation.traceId,
+          operation_id: correlation.operationId,
+          quote_id: quoteId,
+          wallet_address: walletAddress,
+          object_id: objectId ?? null,
+          object_key: objectKey ?? null,
+          details: { source: "client" },
+        },
+        homeDir,
+      );
+      return;
+    }
+
+    const terminal = outcomeStatus ?? "failed";
+    await emitCloudEventBestEffort(
+      "payment-settle.completed",
+      {
+        operation_id: correlation.operationId,
+        trace_id: correlation.traceId,
+        quote_id: quoteId,
+        wallet_address: walletAddress,
+        object_id: objectId,
+        object_key: objectKey,
+        status: terminal === "succeeded" ? "succeeded" : "failed",
+        http_status: httpStatus,
+      },
+      homeDir,
+    );
+    await appendJsonlEvent(
+      "proxy-events.jsonl",
+      {
+        ts,
+        event_type: "payment.settle",
+        status: "result",
+        trace_id: correlation.traceId,
+        operation_id: correlation.operationId,
+        quote_id: quoteId,
+        wallet_address: walletAddress,
+        object_id: objectId ?? null,
+        object_key: objectKey ?? null,
+        details: { http_status: httpStatus ?? null, source: "client" },
+      },
+      homeDir,
+    );
+  } catch {
+    // best-effort only
+  }
+}
+
 async function runCloudCommandHandler(
   ctx: { args?: string; channel?: string; senderId?: string },
   options: RunCloudCommandHandlerOptions,
@@ -1921,6 +2124,7 @@ async function runCloudCommandHandler(
   const requestStorageLs = options.requestStorageLsFn;
   const requestStorageDownload = options.requestStorageDownloadFn;
   const requestStorageDelete = options.requestStorageDeleteFn;
+  const requestPaymentSettleViaProxy = options.requestPaymentSettleViaProxyFn;
   const subagentOrchestrator = options.subagentOrchestrator;
 
   if (parsed.mode === "help" || parsed.mode === "unknown") {
@@ -1961,6 +2165,13 @@ async function runCloudCommandHandler(
   if (parsed.mode === "upload-invalid-async") {
     return {
       text: `Cannot upload storage object: ${INVALID_ASYNC_FLAGS_MESSAGE}`,
+      isError: true,
+    };
+  }
+
+  if (parsed.mode === "payment-settle-invalid") {
+    return {
+      text: `Cannot settle payment: required arguments are ${REQUIRED_PAYMENT_SETTLE}. Optional: --object-id, --object-key, --storage-price.`,
       isError: true,
     };
   }
@@ -2135,6 +2346,158 @@ async function runCloudCommandHandler(
       }
     }
     return formatOperationStatus(operation);
+  }
+
+  if (parsed.mode === "payment-settle") {
+    const req = parsed.paymentSettleRequest;
+    let walletKey: `0x${string}`;
+    try {
+      walletKey = await resolveWalletKey(objectLogHomeDir);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return { text: message.trim() || "Cannot resolve wallet key.", isError: true };
+    }
+    const walletAccount = privateKeyToAccount(walletKey);
+    if (walletAccount.address.toLowerCase() !== req.wallet_address.toLowerCase()) {
+      return {
+        text: `Cannot settle payment: wallet key address ${walletAccount.address} does not match --wallet-address ${req.wallet_address}.`,
+        isError: true,
+      };
+    }
+
+    const correlation = buildRequestCorrelation();
+    const settleFetch = createPayment(walletKey).fetch;
+    const objectId = req.object_id;
+    const objectKey = req.object_key;
+
+    await emitPaymentSettleClientObservationBestEffort({
+      phase: "start",
+      correlation,
+      quoteId: req.quote_id,
+      walletAddress: req.wallet_address,
+      objectId,
+      objectKey,
+      homeDir: objectLogHomeDir,
+    });
+
+    let settleResult: BackendSettleForwardResult;
+    try {
+      settleResult = await requestPaymentSettleViaProxy(req.quote_id, req.wallet_address, {
+        ...options.proxyUploadOptions,
+        correlation,
+        fetchImpl: (input, init) => settleFetch(input, init),
+      });
+    } catch (err) {
+      const amountErr = await resolveAmountForPaymentSettle(
+        req.quote_id,
+        req.storage_price,
+        datastore,
+        objectLogHomeDir,
+      );
+      await datastore.upsertPayment({
+        quote_id: req.quote_id,
+        wallet_address: req.wallet_address,
+        trans_id: null,
+        amount: amountErr,
+        network: null,
+        status: "settle_failed",
+        settled_at: null,
+      });
+      const cronErr = await datastore.findCronByQuoteId(req.quote_id);
+      if (cronErr) {
+        await datastore.upsertCronJob({ ...cronErr, status: "active" });
+      }
+      const msg = err instanceof Error ? err.message : String(err);
+      await emitPaymentSettleClientObservationBestEffort({
+        phase: "result",
+        correlation,
+        quoteId: req.quote_id,
+        walletAddress: req.wallet_address,
+        objectId,
+        objectKey,
+        outcomeStatus: "failed",
+        homeDir: objectLogHomeDir,
+      });
+      return { text: `Payment settle failed: ${msg}`, isError: true };
+    }
+
+    const amount = await resolveAmountForPaymentSettle(
+      req.quote_id,
+      req.storage_price,
+      datastore,
+      objectLogHomeDir,
+    );
+    const transId =
+      settleResult.status === 200
+        ? parseTransIdFromPaymentSettleBody(settleResult.bodyText ?? "")
+        : null;
+
+    if (settleResult.status === 200) {
+      await datastore.upsertPayment({
+        quote_id: req.quote_id,
+        wallet_address: req.wallet_address,
+        trans_id: transId,
+        amount,
+        network: null,
+        status: "settled",
+        settled_at: new Date().toISOString(),
+      });
+      const cronRow = await datastore.findCronByQuoteId(req.quote_id);
+      if (cronRow) {
+        await datastore.upsertCronJob({ ...cronRow, status: "active" });
+      }
+      await emitPaymentSettleClientObservationBestEffort({
+        phase: "result",
+        correlation,
+        quoteId: req.quote_id,
+        walletAddress: req.wallet_address,
+        objectId,
+        objectKey,
+        httpStatus: settleResult.status,
+        outcomeStatus: "succeeded",
+        homeDir: objectLogHomeDir,
+      });
+      return {
+        text: transId
+          ? `Payment settled for quote ${req.quote_id} (trans_id: ${transId}).`
+          : `Payment settled for quote ${req.quote_id}.`,
+      };
+    }
+
+    await datastore.upsertPayment({
+      quote_id: req.quote_id,
+      wallet_address: req.wallet_address,
+      trans_id: transId,
+      amount,
+      network: null,
+      status: "settle_failed",
+      settled_at: null,
+    });
+    const cronRowFailed = await datastore.findCronByQuoteId(req.quote_id);
+    if (cronRowFailed) {
+      await datastore.upsertCronJob({ ...cronRowFailed, status: "active" });
+    }
+    await emitPaymentSettleClientObservationBestEffort({
+      phase: "result",
+      correlation,
+      quoteId: req.quote_id,
+      walletAddress: req.wallet_address,
+      objectId,
+      objectKey,
+      httpStatus: settleResult.status,
+      outcomeStatus: "failed",
+      homeDir: objectLogHomeDir,
+    });
+
+    const bodySnippet = settleResult.bodyText?.trim();
+    const detail =
+      bodySnippet && bodySnippet.length > 500 ? `${bodySnippet.slice(0, 500)}…` : bodySnippet;
+    return {
+      text: detail
+        ? `Payment settle failed (HTTP ${settleResult.status}): ${detail}`
+        : `Payment settle failed with HTTP ${settleResult.status}.`,
+      isError: true,
+    };
   }
 
   if (

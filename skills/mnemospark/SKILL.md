@@ -6,7 +6,7 @@ Use this skill for mnemospark cloud backup/storage workflows, async operation tr
 
 ## Inputs expected
 
-- User intent: backup, price-storage, upload, ls, download, delete, op-status
+- User intent: backup, price-storage, upload, payment-settle, ls, download, delete, op-status
 - Wallet context (`--wallet-address`) where required
 - Optional selector context (`--object-key` or `--name`, plus `--latest` / `--at`)
 - Optional async orchestration context for long-running work:
@@ -32,6 +32,7 @@ Use this skill for mnemospark cloud backup/storage workflows, async operation tr
 - `/mnemospark_cloud backup <file|directory> [--name <friendly-name>] [--async] [--orchestrator <inline|subagent>] [--timeout-seconds <n>]`
 - `/mnemospark_cloud price-storage --wallet-address <addr> --object-id <id> --object-id-hash <hash> --gb <gb> --provider <provider> --region <region>`
 - `/mnemospark_cloud upload --quote-id <quote-id> --wallet-address <addr> --object-id <id> --object-id-hash <hash> [--name <friendly-name>] [--async] [--orchestrator <inline|subagent>] [--timeout-seconds <n>]`
+- `/mnemospark_cloud payment-settle --quote-id <quote-id> --wallet-address <addr> [--object-id <id>] [--object-key <key>] [--storage-price <n>]`
 - `/mnemospark_cloud ls --wallet-address <addr> [--object-key <object-key> | --name <friendly-name>] [--latest|--at <timestamp>]`
 - `/mnemospark_cloud download --wallet-address <addr> [--object-key <object-key> | --name <friendly-name>] [--latest|--at <timestamp>] [--async] [--orchestrator <inline|subagent>] [--timeout-seconds <n>]`
 - `/mnemospark_cloud delete --wallet-address <addr> [--object-key <object-key> | --name <friendly-name>] [--latest|--at <timestamp>]`

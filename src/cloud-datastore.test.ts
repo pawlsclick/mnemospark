@@ -175,6 +175,8 @@ describe("cloud datastore", () => {
     if (!sqliteAvailable) {
       const found = await datastore.findCronByObjectKey("obj-key-1");
       expect(found).toBeNull();
+      const byQuoteMissing = await datastore.findCronByQuoteId("q-1");
+      expect(byQuoteMissing).toBeNull();
       const removed = await datastore.removeCronJob("cron-1");
       expect(removed).toBe(false);
       return;
@@ -186,9 +188,13 @@ describe("cloud datastore", () => {
       object_key: "obj-key-1",
       quote_id: "q-1",
       schedule: "0 0 1 * *",
-      command: "mnemospark-pay-storage",
+      command: '/mnemospark_cloud payment-settle --quote-id "q-1"',
       status: "active",
     });
+
+    const byQuote = await datastore.findCronByQuoteId("q-1");
+    expect(byQuote?.cron_id).toBe("cron-1");
+    expect(byQuote?.quote_id).toBe("q-1");
 
     const found = await datastore.findCronByObjectKey("obj-key-1");
     expect(found?.cronId).toBe("cron-1");

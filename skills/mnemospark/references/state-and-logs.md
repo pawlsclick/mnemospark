@@ -62,6 +62,14 @@ For async runs, `operations` may include:
 - `timeout_seconds`
 - `cancel_requested_at`
 
+## Payment settle (client) JSONL events
+
+Emitted to `events.jsonl` and `proxy-events.jsonl` when `/mnemospark_cloud payment-settle` runs (dual-write for operator grep parity with proxy `payment.settle` lines):
+
+- `payment-settle.started` → `events.jsonl` (status `running`)
+- `payment-settle.completed` → `events.jsonl` (status `succeeded` or `failed`, includes `http_status` when known)
+- `payment.settle` with `status` `start` / `result` → `proxy-events.jsonl` (`details.source`: `client`)
+
 ## Operation lifecycle JSONL events
 
 Operation lifecycle events emitted to `events.jsonl` and `proxy-events.jsonl`:

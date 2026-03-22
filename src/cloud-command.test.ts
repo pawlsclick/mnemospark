@@ -90,6 +90,7 @@ describe("cloud command", () => {
     expect(result.text).toContain("[--object-key <object-key> | --name <friendly-name>]");
     expect(result.text).toContain("/mnemospark_cloud download --wallet-address <addr>");
     expect(result.text).toContain("/mnemospark_cloud delete --wallet-address <addr>");
+    expect(result.text).toContain("/mnemospark_cloud payment-settle");
     expect(result.text).not.toContain("<s3-key>");
     expect(result.text).not.toContain("s3-key");
   });
@@ -356,6 +357,190 @@ describe("cloud command", () => {
     expect(result.text).toBe("Cannot price storage: network down");
   });
 
+  it("rejects payment-settle when required flags are missing", async () => {
+    const command = createCloudCommand();
+    const result = await command.handler({
+      channel: "test",
+      isAuthorizedSender: true,
+      args: "payment-settle --quote-id q1",
+      commandBody: "payment-settle",
+      config: {},
+    });
+    expect(result.isError).toBe(true);
+    expect(result.text).toContain("--quote-id and --wallet-address");
+  });
+
+  it("rejects payment-settle on wallet address mismatch", async () => {
+    const walletKey = `0x${"aa".repeat(32)}` as const;
+    const walletAddress = privateKeyToAccount(walletKey).address;
+    const command = createCloudCommand({
+      resolveWalletPrivateKeyFn: async () => walletKey,
+    });
+    const result = await command.handler({
+      channel: "test",
+      isAuthorizedSender: true,
+      args: "payment-settle --quote-id quote-x --wallet-address 0x0000000000000000000000000000000000000001",
+      commandBody: "payment-settle",
+      config: {},
+    });
+    expect(result.isError).toBe(true);
+    expect(result.text).toContain("does not match");
+    expect(result.text).toContain(walletAddress);
+  });
+
+  it("rejects payment-settle with unknown flags", async () => {
+    const walletKey = `0x${"bb".repeat(32)}` as const;
+    const walletAddress = privateKeyToAccount(walletKey).address;
+    const command = createCloudCommand({
+      resolveWalletPrivateKeyFn: async () => walletKey,
+    });
+    const result = await command.handler({
+      channel: "test",
+      isAuthorizedSender: true,
+      args: `payment-settle --quote-id q1 --wallet-address ${walletAddress} --extra-flag x`,
+      commandBody: "payment-settle",
+      config: {},
+    });
+    expect(result.isError).toBe(true);
+  });
+
+  it("handles payment-settle success, updates SQLite, and writes JSONL observations", async () => {
+    const { homeDir } = await createSandbox();
+    await mkdir(join(homeDir, ".openclaw", "mnemospark"), { recursive: true });
+    const walletKey = `0x${"cc".repeat(32)}` as const;
+    const walletAddress = privateKeyToAccount(walletKey).address;
+    const quoteId = "quote-settle-1";
+    const objectId = "obj-cron-1";
+    const objectKey = "backup/x.enc";
+
+    const datastore = await createCloudDatastore(homeDir);
+    await datastore.upsertObject({
+      object_id: objectId,
+      object_key: objectKey,
+      wallet_address: walletAddress,
+      quote_id: quoteId,
+      provider: "aws",
+      bucket_name: "b",
+      region: "us-east-1",
+      sha256: "ab".repeat(32),
+      status: "uploaded",
+    });
+    await datastore.upsertPayment({
+      quote_id: quoteId,
+      wallet_address: walletAddress,
+      trans_id: "tx-old",
+      amount: 3.5,
+      network: null,
+      status: "settled",
+    });
+    await datastore.upsertCronJob({
+      cron_id: "cron-settle-test",
+      object_id: objectId,
+      object_key: objectKey,
+      quote_id: quoteId,
+      schedule: "0 0 1 * *",
+      command: "/mnemospark_cloud payment-settle --quote-id x",
+      status: "active",
+    });
+
+    const command = createCloudCommand({
+      objectLogHomeDir: homeDir,
+      resolveWalletPrivateKeyFn: async () => walletKey,
+      createPaymentFetchFn: () => ({
+        fetch: async () =>
+          new Response(JSON.stringify({ ok: true }), { status: 200, statusText: "OK" }),
+        cache: new PaymentCache(),
+      }),
+      requestPaymentSettleViaProxyFn: async () => ({
+        status: 200,
+        bodyText: JSON.stringify({ trans_id: "tx-settle-new", payment_status: "confirmed" }),
+        contentType: "application/json",
+        paymentRequired: undefined,
+        paymentResponse: undefined,
+      }),
+    });
+
+    const result = await command.handler({
+      channel: "test",
+      isAuthorizedSender: true,
+      args: `payment-settle --quote-id ${quoteId} --wallet-address ${walletAddress} --object-id ${objectId} --object-key ${objectKey} --storage-price 3.5`,
+      commandBody: "payment-settle",
+      config: {},
+    });
+
+    expect(result.isError).not.toBe(true);
+    expect(result.text).toContain("Payment settled");
+    expect(result.text).toContain("tx-settle-new");
+
+    const pay = await datastore.findPaymentByQuoteId(quoteId);
+    expect(pay?.status).toBe("settled");
+    expect(pay?.trans_id).toBe("tx-settle-new");
+
+    const eventsPath = join(homeDir, ".openclaw", "mnemospark", "events.jsonl");
+    const eventsRaw = await readFile(eventsPath, "utf-8");
+    const eventLines = eventsRaw.trim().split("\n");
+    const completed = eventLines
+      .map((l) => JSON.parse(l) as { event_type?: string })
+      .filter((e) => e.event_type === "payment-settle.completed");
+    expect(completed.length).toBeGreaterThanOrEqual(1);
+
+    const proxyPath = join(homeDir, ".openclaw", "mnemospark", "proxy-events.jsonl");
+    const proxyRaw = await readFile(proxyPath, "utf-8");
+    const proxyLines = proxyRaw.trim().split("\n");
+    const settleProxy = proxyLines
+      .map((l) => JSON.parse(l) as { event_type?: string; status?: string })
+      .filter((e) => e.event_type === "payment.settle" && e.status === "result");
+    expect(settleProxy.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("handles payment-settle HTTP error and persists settle_failed", async () => {
+    const { homeDir } = await createSandbox();
+    await mkdir(join(homeDir, ".openclaw", "mnemospark"), { recursive: true });
+    const walletKey = `0x${"dd".repeat(32)}` as const;
+    const walletAddress = privateKeyToAccount(walletKey).address;
+    const quoteId = "quote-fail-1";
+
+    const datastore = await createCloudDatastore(homeDir);
+    await datastore.upsertPayment({
+      quote_id: quoteId,
+      wallet_address: walletAddress,
+      trans_id: null,
+      amount: 1,
+      network: null,
+      status: "quoted",
+    });
+
+    const command = createCloudCommand({
+      objectLogHomeDir: homeDir,
+      resolveWalletPrivateKeyFn: async () => walletKey,
+      createPaymentFetchFn: () => ({
+        fetch: async () => new Response("{}", { status: 500 }),
+        cache: new PaymentCache(),
+      }),
+      requestPaymentSettleViaProxyFn: async () => ({
+        status: 402,
+        bodyText: "payment required",
+        contentType: "text/plain",
+        paymentRequired: undefined,
+        paymentResponse: undefined,
+      }),
+    });
+
+    const result = await command.handler({
+      channel: "test",
+      isAuthorizedSender: true,
+      args: `payment-settle --quote-id ${quoteId} --wallet-address ${walletAddress} --storage-price 1`,
+      commandBody: "payment-settle",
+      config: {},
+    });
+
+    expect(result.isError).toBe(true);
+    expect(result.text).toContain("402");
+
+    const pay = await datastore.findPaymentByQuoteId(quoteId);
+    expect(pay?.status).toBe("settle_failed");
+  });
+
   it("handles /mnemospark cloud upload, builds encrypted payload, logs upload response, and keeps archive by default", async () => {
     const { homeDir, tmpBackupDir } = await createSandbox();
     const walletKey = `0x${"11".repeat(32)}` as const;
@@ -487,6 +672,8 @@ describe("cloud command", () => {
     expect(cronEntry.quoteId).toBe("quote-abc123");
     expect(cronEntry.storagePrice).toBe(2.75);
     expect(cronEntry.schedule).toBe("0 0 1 * *");
+    expect(String(cronEntry.command)).toContain("/mnemospark_cloud payment-settle");
+    expect(String(cronEntry.command)).toContain("quote-abc123");
 
     // By default, local backup archive should remain on disk.
     const archiveExists = await stat(archivePath);
@@ -1132,7 +1319,7 @@ describe("cloud command", () => {
         createdAt: "2026-02-25 20:10:00",
         schedule: "0 0 1 * *",
         command:
-          'mnemospark-pay-storage --quote-id "quote-abc123" --wallet-address "0x1234abcd" --object-id "obj-001" --object-key "backup/archive.tar.gz" --storage-price "2.75"',
+          '/mnemospark_cloud payment-settle --quote-id "quote-abc123" --wallet-address "0x1234abcd" --object-id "obj-001" --object-key "backup/archive.tar.gz" --storage-price "2.75"',
         quoteId: "quote-abc123",
         storagePrice: 2.75,
         walletAddress: "0x1234abcd",
