@@ -472,7 +472,9 @@ describe("cloud command", () => {
     expect(result.text).toContain("Payment settled");
     expect(result.text).toContain("tx-settle-new");
 
-    const pay = await datastore.findPaymentByQuoteId(quoteId);
+    // Fresh handle: handler uses its own DatabaseSync; some platforms do not resnapshot WAL on the test connection.
+    const payReader = await createCloudDatastore(homeDir);
+    const pay = await payReader.findPaymentByQuoteId(quoteId);
     expect(pay?.status).toBe("settled");
     expect(pay?.trans_id).toBe("tx-settle-new");
 
@@ -537,7 +539,8 @@ describe("cloud command", () => {
     expect(result.isError).toBe(true);
     expect(result.text).toContain("402");
 
-    const pay = await datastore.findPaymentByQuoteId(quoteId);
+    const payReader = await createCloudDatastore(homeDir);
+    const pay = await payReader.findPaymentByQuoteId(quoteId);
     expect(pay?.status).toBe("settle_failed");
   });
 

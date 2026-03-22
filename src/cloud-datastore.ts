@@ -170,6 +170,8 @@ export async function createCloudDatastore(homeDir?: string): Promise<CloudDatas
     const nextDb = new DatabaseSyncCtor(dbPath);
     nextDb.exec("PRAGMA journal_mode=WAL;");
     nextDb.exec("PRAGMA foreign_keys=ON;");
+    // Multiple DatabaseSync handles may open the same file (e.g. tests + handler); wait on locks.
+    nextDb.exec("PRAGMA busy_timeout=5000;");
 
     nextDb.exec(`
       CREATE TABLE IF NOT EXISTS schema_migrations (
