@@ -1242,9 +1242,10 @@ describe("cloud command", () => {
     expect(capturedCorrelation?.traceId).toBeTruthy();
     expect(result.isError).not.toBe(true);
     expect(result.text).toContain("```");
-    expect(result.text).toContain("PERM");
+    expect(result.text).toContain("CRON JOB");
     expect(result.text).toContain("1.5 KB");
-    expect(result.text).toContain("wallet-bucket-001");
+    expect(result.text).toContain("S3 bucket: wallet-bucket-001");
+    expect(result.text).toContain("☁️ mnemospark cloud files");
   });
 
   it("resolves --name with --wallet_address alias and mixed-case wallet values", async () => {
@@ -1515,7 +1516,8 @@ describe("cloud command", () => {
       wallet_address: "0x1234567890123456789012345678901234567890",
     });
     expect(result.isError).not.toBe(true);
-    expect(result.text).toContain("total 2");
+    expect(result.text).toContain("☁️ mnemospark cloud files");
+    expect(result.text).toContain("S3 bucket: wallet-bucket-list");
     expect(result.text).toContain("```");
     expect(result.text).toContain("a.bin");
     expect(result.text).toContain("b.bin");

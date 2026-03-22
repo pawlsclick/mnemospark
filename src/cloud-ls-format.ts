@@ -11,7 +11,18 @@ import { formatBytesForDisplay } from "./cloud-utils.js";
 const LS_NAME_DISPLAY_MAX = 72;
 const LS_PAY_DISPLAY_MAX = 28;
 const LS_CRON_ID_MAX = 14;
-const LS_TIME_FIELD_WIDTH = 12;
+
+/** Data column width for S3 last-modified (UTC). */
+const LS_S3_COL_WIDTH = 12;
+/** Fits header "NEXT PAYMENT DATE" and time cells. */
+const LS_NEXT_COL_WIDTH = Math.max(LS_S3_COL_WIDTH, "NEXT PAYMENT DATE".length);
+
+const HDR_SIZE = "SIZE";
+const HDR_S3_TIME = "S3_TIME";
+const HDR_CRON_JOB = "CRON JOB";
+const HDR_NEXT_PAYMENT = "NEXT PAYMENT DATE";
+const HDR_AMOUNT_DUE = "AMOUNT DUE";
+const HDR_FILE_OR_KEY = "FILE NAME OR OBJECT-KEY";
 
 const MONTHS_SHORT = [
   "Jan",
@@ -29,14 +40,18 @@ const MONTHS_SHORT = [
 ] as const;
 
 /** S3 object times in listings use UTC (matches backend ISO timestamps). */
-function formatLsTimeFieldUtc(iso: string | undefined, now: Date): string {
-  const placeholder = "         -  ".slice(0, LS_TIME_FIELD_WIDTH);
+function formatLsTimeFieldUtc(
+  iso: string | undefined,
+  now: Date,
+  fieldWidth: number = LS_S3_COL_WIDTH,
+): string {
+  const placeholder = "         -  ".slice(0, fieldWidth);
   if (!iso) {
-    return placeholder.padEnd(LS_TIME_FIELD_WIDTH, " ");
+    return placeholder.padEnd(fieldWidth, " ");
   }
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) {
-    return placeholder.padEnd(LS_TIME_FIELD_WIDTH, " ");
+    return placeholder.padEnd(fieldWidth, " ");
   }
   const mon = MONTHS_SHORT[d.getUTCMonth()] ?? "???";
   const day = String(d.getUTCDate()).padStart(2, " ");
@@ -50,7 +65,7 @@ function formatLsTimeFieldUtc(iso: string | undefined, now: Date): string {
   } else {
     core = `${mon} ${day}  ${y}`;
   }
-  return core.padEnd(LS_TIME_FIELD_WIDTH, " ");
+  return core.padEnd(fieldWidth, " ");
 }
 
 function truncateEnd(value: string, max: number): string {
@@ -99,24 +114,20 @@ function formatPaymentCell(
 }
 
 function formatNextCronUtc(schedule: string, cronStatus: string, now: Date): string {
-  const blank = "         -  ".slice(0, LS_TIME_FIELD_WIDTH).padEnd(LS_TIME_FIELD_WIDTH, " ");
+  const blank = "         -  ".slice(0, LS_NEXT_COL_WIDTH).padEnd(LS_NEXT_COL_WIDTH, " ");
   if (cronStatus !== "active") {
     return blank;
   }
   try {
     const expr = CronExpressionParser.parse(schedule, { tz: "UTC", currentDate: now });
     const next = expr.next().toDate();
-    return formatLsTimeFieldUtc(next.toISOString(), now);
+    return formatLsTimeFieldUtc(next.toISOString(), now, LS_NEXT_COL_WIDTH);
   } catch {
-    return "?".padEnd(LS_TIME_FIELD_WIDTH, " ");
+    return "?".padEnd(LS_NEXT_COL_WIDTH, " ");
   }
 }
 
 type PreparedLsRow = {
-  perm: string;
-  ln: string;
-  user: string;
-  grp: string;
   sizeStr: string;
   s3time: string;
   cronIdRaw: string | null;
@@ -124,6 +135,15 @@ type PreparedLsRow = {
   payRaw: string;
   nameRaw: string;
 };
+
+function buildLsProseIntro(bucket: string): string[] {
+  return [
+    "☁️ mnemospark cloud files",
+    `S3 bucket: ${bucket}`,
+    "The columns: CRON JOB, NEXT PAYMENT DATE, AMOUNT DUE, FILE NAME are from this host's mnemospark SQLite catalog",
+    "mnemospark cloud only stores the OBJECT-KEY for privacy",
+  ];
+}
 
 async function prepareRows(
   objects: StorageLsListObject[],
@@ -153,9 +173,9 @@ async function prepareRows(
     const friendly = await datastore.findLatestFriendlyNameForObjectKey(walletAddress, obj.key);
     const cp = await datastore.findCronAndPaymentForObjectKey(walletAddress, obj.key);
     const sizeStr = formatBytesForDisplay(obj.size_bytes);
-    const s3time = formatLsTimeFieldUtc(obj.last_modified, now);
+    const s3time = formatLsTimeFieldUtc(obj.last_modified, now, LS_S3_COL_WIDTH);
     let cronIdDisp: string | null = null;
-    let nextRun = "         -  ".slice(0, LS_TIME_FIELD_WIDTH).padEnd(LS_TIME_FIELD_WIDTH, " ");
+    let nextRun = "         -  ".slice(0, LS_NEXT_COL_WIDTH).padEnd(LS_NEXT_COL_WIDTH, " ");
     let payCell = "";
     if (cp) {
       cronIdDisp = cp.cronId;
@@ -166,10 +186,6 @@ async function prepareRows(
     }
     const nameRaw = friendly ? `${friendly} (${obj.key})` : obj.key;
     rows.push({
-      perm: "----------",
-      ln: " 1",
-      user: "-       ",
-      grp: "-       ",
       sizeStr,
       s3time,
       cronIdRaw: cronIdDisp,
@@ -181,55 +197,47 @@ async function prepareRows(
   return rows;
 }
 
-function columnWidths(rows: PreparedLsRow[]): {
-  sizeW: number;
-  cronW: number;
-  payW: number;
-} {
-  let sizeW = 4;
-  let cronW = 4;
-  let payW = 3;
+type ColWidths = { sizeW: number; s3W: number; cronW: number; nextW: number; payW: number };
+
+function columnWidths(rows: PreparedLsRow[]): ColWidths {
+  let sizeW = HDR_SIZE.length;
+  let s3W = Math.max(LS_S3_COL_WIDTH, HDR_S3_TIME.length);
+  let nextW = LS_NEXT_COL_WIDTH;
+  let cronW = HDR_CRON_JOB.length;
+  let payW = HDR_AMOUNT_DUE.length;
   for (const r of rows) {
     sizeW = Math.max(sizeW, r.sizeStr.length);
+    s3W = Math.max(s3W, r.s3time.length);
+    nextW = Math.max(nextW, r.nextRun.length);
     const cid = r.cronIdRaw ? truncateEnd(r.cronIdRaw, LS_CRON_ID_MAX) : "";
     cronW = Math.max(cronW, cid.length || 1);
     payW = Math.max(payW, r.payRaw.length);
   }
-  cronW = Math.min(Math.max(cronW, 4), LS_CRON_ID_MAX);
-  payW = Math.min(Math.max(payW, 3), LS_PAY_DISPLAY_MAX);
-  return { sizeW, cronW, payW };
+  cronW = Math.min(Math.max(cronW, HDR_CRON_JOB.length), LS_CRON_ID_MAX);
+  payW = Math.min(Math.max(payW, HDR_AMOUNT_DUE.length), LS_PAY_DISPLAY_MAX);
+  return { sizeW, s3W, cronW, nextW, payW };
 }
 
-function renderRow(r: PreparedLsRow, w: { sizeW: number; cronW: number; payW: number }): string {
+function renderRow(r: PreparedLsRow, w: ColWidths): string {
   const cronPadded = formatCronIdCell(r.cronIdRaw, w.cronW);
-  const sizePadded = r.sizeStr.padStart(w.sizeW, " ");
-  const payPadded = r.payRaw.padStart(w.payW, " ");
   return [
-    r.perm,
-    r.ln,
-    r.user,
-    r.grp,
-    sizePadded,
-    r.s3time,
+    r.sizeStr.padStart(w.sizeW, " "),
+    r.s3time.padEnd(w.s3W, " "),
     cronPadded,
-    r.nextRun,
-    payPadded,
+    r.nextRun.padEnd(w.nextW, " "),
+    r.payRaw.padStart(w.payW, " "),
     r.nameRaw,
   ].join(" ");
 }
 
-function renderHeader(w: { sizeW: number; cronW: number; payW: number }): string {
+function renderHeader(w: ColWidths): string {
   return [
-    "PERM      ",
-    "LN",
-    "USER    ",
-    "GRP     ",
-    "SIZE".padStart(w.sizeW, " "),
-    "S3_TIME     ".slice(0, LS_TIME_FIELD_WIDTH).padEnd(LS_TIME_FIELD_WIDTH, " "),
-    "CRON".padStart(w.cronW, " "),
-    "NEXT        ".slice(0, LS_TIME_FIELD_WIDTH).padEnd(LS_TIME_FIELD_WIDTH, " "),
-    "PAY".padStart(w.payW, " "),
-    "NAME",
+    HDR_SIZE.padStart(w.sizeW, " "),
+    HDR_S3_TIME.padEnd(w.s3W, " "),
+    HDR_CRON_JOB.padStart(w.cronW, " "),
+    HDR_NEXT_PAYMENT.padEnd(w.nextW, " "),
+    HDR_AMOUNT_DUE.padStart(w.payW, " "),
+    HDR_FILE_OR_KEY,
   ].join(" ");
 }
 
@@ -244,26 +252,16 @@ export async function buildMnemosparkLsMessage(
   const now = ctx.now ?? new Date();
 
   if (isStorageLsListResponse(result)) {
-    const disclaimer =
-      "Names, cron, and payment columns come from this machine's SQLite catalog when available; `-` means unknown locally. S3 is authoritative for which keys exist.";
-    const legend =
-      "Legend: S3_TIME and NEXT are UTC. NEXT is the next cron fire from the stored expression.";
-    const bucketLine = `bucket: ${result.bucket}`;
-    const sortLine =
-      "sorted by: S3 last_modified descending (missing dates last), then key ascending.";
+    const intro = buildLsProseIntro(result.bucket);
     if (result.objects.length === 0) {
-      const lines = [disclaimer, "", bucketLine, "", "No objects in this bucket."];
-      return lines.join("\n");
+      return [...intro, "", "No objects in this bucket."].join("\n");
     }
     const rows = await prepareRows(result.objects, ctx.walletAddress, ctx.datastore, now);
     const w = columnWidths(rows);
     const header = renderHeader(w);
     const bodyLines = rows.map((r) => renderRow(r, w));
-    const totalLine = `total ${String(result.objects.length)}`;
     const truncLine = result.is_truncated ? "List truncated; more objects in bucket." : null;
-    const prose = [disclaimer, legend, bucketLine, sortLine, totalLine, truncLine]
-      .filter((x): x is string => Boolean(x))
-      .join("\n");
+    const prose = [...intro, ...(truncLine ? [truncLine] : [])].join("\n");
     const fence = ["```", [header, ...bodyLines].join("\n"), "```"].join("\n");
     return `${prose}\n\n${fence}`;
   }
@@ -274,10 +272,10 @@ export async function buildMnemosparkLsMessage(
   );
   const cp = await ctx.datastore.findCronAndPaymentForObjectKey(ctx.walletAddress, result.key);
   const sizeStr = formatBytesForDisplay(result.size_bytes);
-  const s3time = formatLsTimeFieldUtc(undefined, now);
+  const s3time = formatLsTimeFieldUtc(undefined, now, LS_S3_COL_WIDTH);
   let payCell = formatPaymentCell(null, null, LS_PAY_DISPLAY_MAX);
   let cronIdDisp: string | null = null;
-  let nextRun = "         -  ".slice(0, LS_TIME_FIELD_WIDTH).padEnd(LS_TIME_FIELD_WIDTH, " ");
+  let nextRun = "         -  ".slice(0, LS_NEXT_COL_WIDTH).padEnd(LS_NEXT_COL_WIDTH, " ");
   if (cp) {
     cronIdDisp = cp.cronId;
     nextRun = formatNextCronUtc(cp.schedule, cp.cronStatus, now);
@@ -289,10 +287,6 @@ export async function buildMnemosparkLsMessage(
     8,
   );
   const prep: PreparedLsRow = {
-    perm: "----------",
-    ln: " 1",
-    user: "-       ",
-    grp: "-       ",
     sizeStr,
     s3time,
     cronIdRaw: cronIdDisp,
@@ -303,10 +297,7 @@ export async function buildMnemosparkLsMessage(
   const w = columnWidths([prep]);
   const header = renderHeader(w);
   const line = renderRow(prep, w);
-  const disclaimer =
-    "Names, cron, and payment columns come from this machine's SQLite catalog when available; `-` means unknown locally.";
-  const legend = "Legend: S3_TIME and NEXT are UTC.";
-  const prose = [disclaimer, legend, `bucket: ${result.bucket}`, ""].join("\n");
+  const prose = buildLsProseIntro(result.bucket).join("\n");
   const fence = ["```", [header, line].join("\n"), "```"].join("\n");
-  return `${prose}\n${fence}`;
+  return `${prose}\n\n${fence}`;
 }
