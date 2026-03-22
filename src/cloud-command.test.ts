@@ -1,6 +1,5 @@
 import { mkdtemp, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
-import { createRequire } from "node:module";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { privateKeyToAccount } from "viem/accounts";
@@ -8,47 +7,11 @@ import { privateKeyToAccount } from "viem/accounts";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { buildBackupObject, createCloudCommand, expandTilde } from "./cloud-command.js";
-import { createCloudDatastore, resolveCloudDatastorePath } from "./cloud-datastore.js";
+import { createCloudDatastore, readPaymentRowFromStateDbForTests } from "./cloud-datastore.js";
 import type { StorageDownloadProxyResponse } from "./cloud-storage.js";
 import { PaymentCache } from "./payment-cache.js";
 
 const sandboxDirs: string[] = [];
-const nodeSqliteRequire = createRequire(import.meta.url);
-
-/**
- * Read payments row directly from state.db (bypasses datastore safe() which returns null on any error).
- * Uses a short-lived handle so Linux CI sees WAL-committed writes from the command handler.
- */
-function readPaymentRowFromStateDb(
-  homeDir: string,
-  quoteId: string,
-): {
-  status: string;
-  trans_id: string | null;
-} | null {
-  const sqliteMod = nodeSqliteRequire("node:sqlite") as {
-    DatabaseSync?: new (path: string) => {
-      prepare: (sql: string) => { get: (...args: unknown[]) => unknown };
-      close?: () => void;
-      exec?: (sql: string) => void;
-    };
-  };
-  const DatabaseSyncCtor = sqliteMod.DatabaseSync;
-  if (!DatabaseSyncCtor) {
-    throw new Error("node:sqlite DatabaseSync is unavailable for tests");
-  }
-  const dbPath = resolveCloudDatastorePath(homeDir);
-  const db = new DatabaseSyncCtor(dbPath);
-  try {
-    db.exec?.("PRAGMA busy_timeout=5000;");
-    const row = db
-      .prepare("SELECT status, trans_id FROM payments WHERE quote_id = ?")
-      .get(quoteId) as { status: string; trans_id: string | null } | undefined;
-    return row ? { status: row.status, trans_id: row.trans_id } : null;
-  } finally {
-    db.close?.();
-  }
-}
 
 afterEach(async () => {
   await Promise.all(
@@ -509,7 +472,7 @@ describe("cloud command", () => {
     expect(result.text).toContain("Payment settled");
     expect(result.text).toContain("tx-settle-new");
 
-    const pay = readPaymentRowFromStateDb(homeDir, quoteId);
+    const pay = readPaymentRowFromStateDbForTests(homeDir, quoteId);
     expect(pay?.status).toBe("settled");
     expect(pay?.trans_id).toBe("tx-settle-new");
 
@@ -574,7 +537,7 @@ describe("cloud command", () => {
     expect(result.isError).toBe(true);
     expect(result.text).toContain("402");
 
-    const pay = readPaymentRowFromStateDb(homeDir, quoteId);
+    const pay = readPaymentRowFromStateDbForTests(homeDir, quoteId);
     expect(pay?.status).toBe("settle_failed");
   });
 

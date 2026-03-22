@@ -702,4 +702,37 @@ export async function createCloudDatastore(homeDir?: string): Promise<CloudDatas
   };
 }
 
+/**
+ * Test-only helper: read a payment row with a short-lived DB handle so assertions see WAL
+ * commits from other handles. Declared here (not in *.test.ts) so Vitest does not bundle
+ * `require("node:sqlite")` in a context where `node:sqlite` is unavailable (ERR_UNKNOWN_BUILTIN_MODULE).
+ */
+export function readPaymentRowFromStateDbForTests(
+  homeDir: string,
+  quoteId: string,
+): { status: string; trans_id: string | null } | null {
+  const sqliteMod = require("node:sqlite") as {
+    DatabaseSync?: new (path: string) => {
+      prepare: (sql: string) => { get: (...args: unknown[]) => unknown };
+      close?: () => void;
+      exec?: (sql: string) => void;
+    };
+  };
+  const DatabaseSyncCtor = sqliteMod.DatabaseSync;
+  if (!DatabaseSyncCtor) {
+    throw new Error("node:sqlite DatabaseSync is unavailable");
+  }
+  const dbPath = resolveDbPath(homeDir);
+  const db = new DatabaseSyncCtor(dbPath);
+  try {
+    db.exec?.("PRAGMA busy_timeout=5000;");
+    const row = db
+      .prepare("SELECT status, trans_id FROM payments WHERE quote_id = ?")
+      .get(quoteId) as { status: string; trans_id: string | null } | undefined;
+    return row ? { status: row.status, trans_id: row.trans_id } : null;
+  } finally {
+    db.close?.();
+  }
+}
+
 export { DB_SUBPATH, SCHEMA_VERSION, resolveDbPath as resolveCloudDatastorePath };
