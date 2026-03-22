@@ -313,6 +313,7 @@ type CreateCloudCommandOptions = {
   idempotencyKeyFn?: () => string;
   proxyQuoteOptions?: ProxyQuoteOptions;
   proxyUploadOptions?: ProxyUploadOptions;
+  proxySettleOptions?: ProxySettleOptions;
   proxyUploadConfirmOptions?: ProxyUploadConfirmOptions;
   requestPaymentSettleViaProxyFn?: (
     quoteId: string,
@@ -1688,6 +1689,7 @@ export function createCloudCommand(
           backupOptions: options.backupOptions,
           proxyQuoteOptions: options.proxyQuoteOptions,
           proxyUploadOptions: options.proxyUploadOptions,
+          proxySettleOptions: options.proxySettleOptions,
           proxyUploadConfirmOptions: options.proxyUploadConfirmOptions,
           subagentOrchestrator,
           proxyStorageOptions: options.proxyStorageOptions,
@@ -1727,6 +1729,7 @@ type RunCloudCommandHandlerOptions = {
   backupOptions: CreateCloudCommandOptions["backupOptions"];
   proxyQuoteOptions: CreateCloudCommandOptions["proxyQuoteOptions"];
   proxyUploadOptions: CreateCloudCommandOptions["proxyUploadOptions"];
+  proxySettleOptions: CreateCloudCommandOptions["proxySettleOptions"];
   proxyUploadConfirmOptions: CreateCloudCommandOptions["proxyUploadConfirmOptions"];
   subagentOrchestrator: MnemosparkSubagentOrchestrator;
   proxyStorageOptions: CreateCloudCommandOptions["proxyStorageOptions"];
@@ -2383,7 +2386,7 @@ async function runCloudCommandHandler(
     let settleResult: BackendSettleForwardResult;
     try {
       settleResult = await requestPaymentSettleViaProxy(req.quote_id, req.wallet_address, {
-        ...options.proxyUploadOptions,
+        ...options.proxySettleOptions,
         correlation,
         fetchImpl: (input, init) => settleFetch(input, init),
       });
