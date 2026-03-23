@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.0](https://github.com/pawlsclick/mnemospark/compare/v0.7.0...v0.8.0) (2026-03-23)
+
+
+### Features
+
+* **cloud:** friendly-name backup paths and env docs ([#75](https://github.com/pawlsclick/mnemospark/issues/75)) ([599b300](https://github.com/pawlsclick/mnemospark/commit/599b300acc226f48331352e519980d0cbca45448))
+* **cloud:** improve storage copy and backup wallet handling ([#73](https://github.com/pawlsclick/mnemospark/issues/73)) ([55ce638](https://github.com/pawlsclick/mnemospark/commit/55ce6386e60a646eddaca2effa4e0c5f880ad298))
+* **cloud:** renewal payment-settle and monthly cron without quote_id ([#76](https://github.com/pawlsclick/mnemospark/issues/76)) ([3936599](https://github.com/pawlsclick/mnemospark/commit/3936599fd462e9be90e038bc887e807d2e9560ff))
+
 ## [Unreleased]
 
 ### Changed
