@@ -2804,13 +2804,7 @@ async function runCloudCommandHandler(
       return {
         text: formatBackupSuccessUserMessage(result, walletAddress),
       };
-    } catch (err) {
-      if (err instanceof UnsupportedBackupPlatformError) {
-        return {
-          text: "Cloud backup is only supported on macOS and Linux.",
-          isError: true,
-        };
-      }
+    } catch {
       return {
         text: "Cannot build storage object",
         isError: true,
