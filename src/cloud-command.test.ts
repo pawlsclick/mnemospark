@@ -768,6 +768,96 @@ describe("cloud command", () => {
     }
   });
 
+  it("keeps local backup archive when MNEMOSPARK_REMOVE_BACKUP_FILE is unrecognized", async () => {
+    const { homeDir, tmpBackupDir } = await createSandbox();
+    const walletKey = `0x${"55".repeat(32)}` as const;
+    const walletAddress = privateKeyToAccount(walletKey).address;
+    const objectId = "obj-upload-keep-unrecognized-001";
+    const archiveContent = "mnemospark upload content keep unrecognized";
+    const objectHash = sha256Hex(archiveContent);
+    const archivePath = join(tmpBackupDir, objectId);
+    await writeFile(archivePath, archiveContent, "utf-8");
+
+    await mkdir(join(homeDir, ".openclaw", "mnemospark"), { recursive: true });
+    await seedQuotedStorageInSqlite(homeDir, {
+      quoteId: "quote-keep-unrecognized",
+      walletAddress,
+      objectId,
+      objectHash,
+      storagePrice: 2.75,
+      friendlyName: "keep-unrecognized",
+    });
+
+    let createPaymentFetchCalls = 0;
+    const previousRemove = process.env.MNEMOSPARK_REMOVE_BACKUP_FILE;
+    process.env.MNEMOSPARK_REMOVE_BACKUP_FILE = "off";
+
+    const uploadResponseKeepUnrecognized = {
+      quote_id: "quote-keep-unrecognized",
+      addr: walletAddress,
+      addr_hash: "addr-hash-keep-unrecognized",
+      trans_id: "tx-keep-unrecognized-001",
+      storage_price: 2.75,
+      object_id: objectId,
+      object_key: "obj-upload-keep-unrecognized-001.tar.gz.enc",
+      provider: "aws",
+      bucket_name: "mnemospark-9999",
+      location: "us-east-1",
+    };
+    try {
+      const command = createCloudCommand({
+        mnemosparkHomeDir: homeDir,
+        backupOptions: { tmpDir: tmpBackupDir },
+        resolveWalletPrivateKeyFn: async () => walletKey,
+        idempotencyKeyFn: () => "idempotency-keep-unrecognized-123",
+        nowDateFn: () => new Date(2026, 1, 25, 21, 30, 0),
+        createPaymentFetchFn: () => {
+          createPaymentFetchCalls += 1;
+          return {
+            fetch: async () =>
+              new Response(JSON.stringify(uploadResponseKeepUnrecognized), {
+                status: 200,
+                headers: { "Content-Type": "application/json" },
+              }),
+            cache: new PaymentCache(),
+          };
+        },
+        proxyUploadOptions: {
+          fetchImpl: async () =>
+            new Response(JSON.stringify(uploadResponseKeepUnrecognized), {
+              status: 200,
+              headers: { "Content-Type": "application/json" },
+            }),
+        },
+      });
+
+      const result = await command.handler({
+        channel: "test",
+        isAuthorizedSender: true,
+        args: [
+          "upload",
+          "--quote-id quote-keep-unrecognized",
+          `--wallet-address ${walletAddress}`,
+          `--object-id ${objectId}`,
+          `--object-id-hash ${objectHash}`,
+        ].join(" "),
+        commandBody: "upload",
+        config: {},
+      });
+
+      expect(createPaymentFetchCalls).toBe(0);
+      expect(result.isError).not.toBe(true);
+      const archiveExists = await stat(archivePath);
+      expect(archiveExists.isFile()).toBe(true);
+    } finally {
+      if (previousRemove === undefined) {
+        delete process.env.MNEMOSPARK_REMOVE_BACKUP_FILE;
+      } else {
+        process.env.MNEMOSPARK_REMOVE_BACKUP_FILE = previousRemove;
+      }
+    }
+  });
+
   it("removes local backup archive after successful /mnemospark cloud upload by default", async () => {
     const { homeDir, tmpBackupDir } = await createSandbox();
     const walletKey = `0x${"44".repeat(32)}` as const;
