@@ -138,8 +138,8 @@ type PreparedLsRow = {
 
 function buildLsProseIntro(bucket: string): string[] {
   return [
-    "☁️ mnemospark cloud files",
-    `S3 bucket: ${bucket}`,
+    "☁️ mnemospark cloud",
+    `Folder: ${bucket}`,
     "The columns: CRON JOB, NEXT PAYMENT DATE, AMOUNT DUE, FILE NAME are from this host's mnemospark SQLite catalog",
     "mnemospark cloud only stores the OBJECT-KEY for privacy",
   ];

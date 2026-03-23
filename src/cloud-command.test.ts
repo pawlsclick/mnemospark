@@ -128,6 +128,7 @@ describe("cloud command", () => {
     expect(result.text).toContain("/mnemospark_cloud payment-settle");
     expect(result.text).not.toContain("<s3-key>");
     expect(result.text).not.toContain("s3-key");
+    expect(result.text).toContain("configured mnemospark wallet key");
   });
 
   it("builds tar.gz object and computes hash/size (no object.log sidecar)", async () => {
@@ -201,7 +202,12 @@ describe("cloud command", () => {
     const sourcePathWithSpaces = join(root, "source file.txt");
     await writeFile(sourcePathWithSpaces, "backup me");
 
+    const walletKey = `0x${"77".repeat(32)}` as const;
+    const walletAddress = privateKeyToAccount(walletKey).address;
+
     const command = createCloudCommand({
+      mnemosparkHomeDir: homeDir,
+      resolveWalletPrivateKeyFn: async () => walletKey,
       backupOptions: {
         platform: "linux",
         homeDir,
@@ -223,6 +229,8 @@ describe("cloud command", () => {
     expect(result.text).toContain("object-id:");
     expect(result.text).toContain("object-id-hash:");
     expect(result.text).toContain("object-size:");
+    expect(result.text).toContain(`--wallet-address \`${walletAddress}\``);
+    expect(result.text).toContain("Replace `<provider>` and `<region>`");
   });
 
   it("preserves quoted backup friendly names and writes events.jsonl under the mnemospark home subdirectory", async () => {
@@ -230,7 +238,12 @@ describe("cloud command", () => {
     const sourcePathWithSpaces = join(root, "source file.txt");
     await writeFile(sourcePathWithSpaces, "backup me");
 
+    const walletKey = `0x${"88".repeat(32)}` as const;
+    const walletAddress = privateKeyToAccount(walletKey).address;
+
     const command = createCloudCommand({
+      mnemosparkHomeDir: homeDir,
+      resolveWalletPrivateKeyFn: async () => walletKey,
       backupOptions: {
         platform: "linux",
         homeDir,
@@ -257,6 +270,7 @@ describe("cloud command", () => {
     };
     expect(backupEvent.event_type).toBe("backup.completed");
     expect(backupEvent.details?.friendly_name).toBe("my project");
+    expect(result.text).toContain(`--wallet-address \`${walletAddress}\``);
   });
 
   it("returns graceful unsupported-platform message", async () => {
@@ -326,6 +340,8 @@ describe("cloud command", () => {
     });
     expect(result.isError).not.toBe(true);
     expect(result.text).toContain("Your storage quote `quote-abc123`:");
+    expect(result.text).toContain("storage price `$2.75`");
+    expect(result.text).toContain("for file `obj-001`");
     expect(result.text).toContain("If you accept this quote, run:");
     expect(result.text).toContain("/mnemospark_cloud upload --quote-id `quote-abc123`");
     expect(result.text).toContain("--object-id-hash `hash-001`");
@@ -699,7 +715,7 @@ describe("cloud command", () => {
       throw new Error("Expected upload response text");
     }
     expect(result.text).toContain(
-      "Your file `obj-upload-001` with key `obj-upload-001.tar.gz.enc` has been stored using `aws` in `mnemospark-1234` `us-east-1`",
+      "Your file `obj-upload-001` with key `obj-upload-001.tar.gz.enc` has been stored using `aws` in folder `mnemospark-1234` in region `us-east-1`",
     );
     const cronIdMatch = result.text.match(/A cron job `([^`]+)` has been configured/);
     const cronId = cronIdMatch?.[1];
@@ -1271,8 +1287,8 @@ describe("cloud command", () => {
     expect(result.text).toContain("```");
     expect(result.text).toContain("CRON JOB");
     expect(result.text).toContain("1.5 KB");
-    expect(result.text).toContain("S3 bucket: wallet-bucket-001");
-    expect(result.text).toContain("☁️ mnemospark cloud files");
+    expect(result.text).toContain("Folder: wallet-bucket-001");
+    expect(result.text).toContain("☁️ mnemospark cloud");
   });
 
   it("resolves --name with --wallet_address alias and mixed-case wallet values", async () => {
@@ -1537,8 +1553,8 @@ describe("cloud command", () => {
       wallet_address: "0x1234567890123456789012345678901234567890",
     });
     expect(result.isError).not.toBe(true);
-    expect(result.text).toContain("☁️ mnemospark cloud files");
-    expect(result.text).toContain("S3 bucket: wallet-bucket-list");
+    expect(result.text).toContain("☁️ mnemospark cloud");
+    expect(result.text).toContain("Folder: wallet-bucket-list");
     expect(result.text).toContain("```");
     expect(result.text).toContain("a.bin");
     expect(result.text).toContain("b.bin");

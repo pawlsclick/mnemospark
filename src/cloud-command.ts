@@ -172,7 +172,7 @@ const CLOUD_HELP_TEXT = [
   "",
   CLOUD_HELP_FOOTER_STATE,
   "",
-  "Commands price-storage, upload, ls, download, delete, and payment-settle require --wallet-address.",
+  "Backup uses your configured mnemospark wallet key (no `--wallet-address` flag). Commands price-storage, upload, ls, download, delete, and payment-settle require `--wallet-address` on the command line (must match that wallet).",
 ].join("\n");
 
 type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
@@ -1346,7 +1346,7 @@ async function maybeCleanupLocalBackupArchive(archivePath: string): Promise<void
 function formatStorageUploadUserMessage(upload: StorageUploadResponse, cronJobId: string): string {
   const lsLine = `/mnemospark_cloud ls --wallet-address \`${upload.addr}\``;
   return [
-    `Your file \`${upload.object_id}\` with key \`${upload.object_key}\` has been stored using \`${upload.provider}\` in \`${upload.bucket_name}\` \`${upload.location}\``,
+    `Your file \`${upload.object_id}\` with key \`${upload.object_key}\` has been stored using \`${upload.provider}\` in folder \`${upload.bucket_name}\` in region \`${upload.location}\``,
     "",
     `A cron job \`${cronJobId}\` has been configured to send payment monthly (on the 1st) for storage services. If payment is not sent, your \`${upload.object_id}\` will be deleted after the ${PAYMENT_DELETE_DEADLINE_DAYS}-day deadline (${PAYMENT_REMINDER_INTERVAL_DAYS}-day billing interval + 2-day grace period).`,
     "",
@@ -1432,7 +1432,7 @@ function extractLsErrorMessage(error: unknown): string | null {
 function formatPriceStorageUserMessage(quote: PriceStorageQuoteResponse): string {
   const uploadLine = `/mnemospark_cloud upload --quote-id \`${quote.quote_id}\` --wallet-address \`${quote.addr}\` --object-id \`${quote.object_id}\` --object-id-hash \`${quote.object_id_hash}\``;
   return [
-    `Your storage quote \`${quote.quote_id}\`: storage price \`${quote.storage_price}\` for \`${quote.object_id}\` with file size \`${quote.object_size_gb}\` in \`${quote.provider}\` \`${quote.location}\`.`,
+    `Your storage quote \`${quote.quote_id}\`: storage price \`$${quote.storage_price}\` for file \`${quote.object_id}\` with file size \`${quote.object_size_gb}\` in \`${quote.provider}\` \`${quote.location}\`.`,
     "",
     "If you accept this quote, run:",
     "",
@@ -1457,9 +1457,9 @@ function quoteLookupMatchesPriceStorageResponse(
   );
 }
 
-function formatBackupSuccessUserMessage(result: BackupObjectResult): string {
+function formatBackupSuccessUserMessage(result: BackupObjectResult, walletAddress: string): string {
   const hash = result.objectIdHash.replace(/\s/g, "");
-  const priceStorageLine = `/mnemospark_cloud price-storage --wallet-address <wallet-address> --object-id \`${result.objectId}\` --object-id-hash \`${hash}\` --gb \`${result.objectSizeGb}\` --provider <provider> --region <region>`;
+  const priceStorageLine = `/mnemospark_cloud price-storage --wallet-address \`${walletAddress}\` --object-id \`${result.objectId}\` --object-id-hash \`${hash}\` --gb \`${result.objectSizeGb}\` --provider <provider> --region <region>`;
   return [
     `Backup archive: \`${result.archivePath}\``,
     "",
@@ -1467,7 +1467,7 @@ function formatBackupSuccessUserMessage(result: BackupObjectResult): string {
     `object-id-hash: ${hash}`,
     `object-size: ${result.objectSizeGb}`,
     "",
-    "Next, request a storage quote. Replace `<wallet-address>`, `<provider>`, and `<region>` (one line):",
+    "Next, request a storage quote. Replace `<provider>` and `<region>` (one line):",
     "",
     priceStorageLine,
     "",
@@ -2742,7 +2742,28 @@ async function runCloudCommandHandler(
   }
 
   if (parsed.mode === "backup") {
+    const backupPlatform = options.backupOptions?.platform ?? process.platform;
+    if (!SUPPORTED_BACKUP_PLATFORMS.has(backupPlatform)) {
+      return {
+        text: "Cloud backup is only supported on macOS and Linux.",
+        isError: true,
+      };
+    }
+
     try {
+      let walletAddress: string;
+      try {
+        const walletKey = await resolveWalletKey(mnemosparkHomeDir);
+        walletAddress = privateKeyToAccount(walletKey).address;
+      } catch (err) {
+        const message =
+          err instanceof Error ? err.message : typeof err === "string" ? err : String(err);
+        return {
+          text: message.trim() || "No mnemospark wallet found.",
+          isError: true,
+        };
+      }
+
       const result = await backupBuilder(parsed.backupTarget, options.backupOptions);
       await emitCloudEventBestEffort(
         "backup.completed",
@@ -2762,7 +2783,7 @@ async function runCloudCommandHandler(
       await datastore.upsertObject({
         object_id: result.objectId,
         object_key: null,
-        wallet_address: "unknown",
+        wallet_address: walletAddress,
         quote_id: null,
         provider: null,
         bucket_name: null,
@@ -2777,11 +2798,11 @@ async function runCloudCommandHandler(
           object_id: result.objectId,
           object_key: null,
           quote_id: null,
-          wallet_address: "unknown",
+          wallet_address: walletAddress,
         });
       }
       return {
-        text: formatBackupSuccessUserMessage(result),
+        text: formatBackupSuccessUserMessage(result, walletAddress),
       };
     } catch (err) {
       if (err instanceof UnsupportedBackupPlatformError) {
