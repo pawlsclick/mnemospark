@@ -169,6 +169,33 @@ describe("cloud datastore", () => {
     expect(at).not.toBeNull();
   });
 
+  it("finds latest friendly name by object id across wallets", async () => {
+    const datastore = await createCloudDatastore(homeDir);
+
+    if (!sqliteAvailable) {
+      expect(await datastore.findLatestFriendlyNameForObjectId("obj-by-id")).toBeNull();
+      return;
+    }
+
+    await datastore.upsertFriendlyName({
+      friendly_name: "first-label",
+      object_id: "obj-by-id",
+      object_key: null,
+      quote_id: "q-a",
+      wallet_address: "0xaaa",
+    });
+    await new Promise((r) => setTimeout(r, 2));
+    await datastore.upsertFriendlyName({
+      friendly_name: "second-label",
+      object_id: "obj-by-id",
+      object_key: "key-b",
+      quote_id: "q-b",
+      wallet_address: "0xbbb",
+    });
+
+    expect(await datastore.findLatestFriendlyNameForObjectId("obj-by-id")).toBe("second-label");
+  });
+
   it("tracks and removes cron rows", async () => {
     const datastore = await createCloudDatastore(homeDir);
 

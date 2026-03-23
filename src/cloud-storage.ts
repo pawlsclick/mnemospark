@@ -90,6 +90,8 @@ type ProxyStorageOptions = {
   proxyBaseUrl?: string;
   fetchImpl?: FetchLike;
   correlation?: RequestCorrelation;
+  /** Proxy-only: preferred on-disk basename under the download directory (not sent to the backend). */
+  downloadLocalBasename?: string;
 };
 
 type BackendStorageOptions = {
@@ -112,6 +114,8 @@ type DownloadStorageToDiskOptions = {
   outputDir?: string;
   homeDir?: string;
   fetchImpl?: FetchLike;
+  /** When set, used as the relative path key for resolveDownloadPath instead of object_key. */
+  localOutputBasename?: string;
 };
 
 type DownloadStorageToDiskResult = {
@@ -141,6 +145,34 @@ function parseJsonText(text: string, errorMessage: string): Record<string, unkno
     throw new Error(errorMessage);
   }
   return record;
+}
+
+const MAX_LOCAL_FRIENDLY_BASENAME_LEN = 200;
+
+/**
+ * Maps a user-supplied friendly name to a single safe filename segment for local backup/download paths.
+ * Throws if the result would be empty or invalid.
+ */
+export function sanitizeFriendlyNameForLocalBasename(raw: string): string {
+  const normalized = raw.replace(/\\/g, "/").trim();
+  if (!normalized) {
+    throw new Error("Friendly name is empty");
+  }
+  const segments = normalized
+    .split("/")
+    .filter((segment) => segment.length > 0 && segment !== "." && segment !== "..");
+  const segment = segments[segments.length - 1] ?? "";
+  if (!segment || segment === "." || segment === "..") {
+    throw new Error("Invalid friendly name for local file path");
+  }
+  // eslint-disable-next-line no-control-regex -- intentional strip of C0 control chars for filenames
+  const noCtrl = segment.replace(/[\x00-\x1f]/g, "").trim();
+  if (!noCtrl || noCtrl === "." || noCtrl === "..") {
+    throw new Error("Invalid friendly name for local file path");
+  }
+  return noCtrl.length > MAX_LOCAL_FRIENDLY_BASENAME_LEN
+    ? noCtrl.slice(0, MAX_LOCAL_FRIENDLY_BASENAME_LEN)
+    : noCtrl;
 }
 
 function sanitizeObjectKeyToRelativePath(objectKey: string): string {
@@ -334,6 +366,32 @@ export function parseStorageObjectRequest(payload: unknown): StorageObjectReques
   };
 }
 
+/** Proxy POST body for download: backend fields plus optional local filename hint (stripped before backend forward). */
+export function parseProxyStorageDownloadPayload(payload: unknown): {
+  request: StorageObjectRequest;
+  localBasename?: string;
+} | null {
+  const record = asRecord(payload);
+  if (!record) {
+    return null;
+  }
+  const walletAddress = asNonEmptyString(record.wallet_address);
+  const objectKey = asNonEmptyString(record.object_key);
+  const location = asNonEmptyString(record.location) ?? undefined;
+  if (!walletAddress || !objectKey) {
+    return null;
+  }
+  const localRaw = asNonEmptyString(record.mnemospark_local_filename) ?? undefined;
+  return {
+    request: {
+      wallet_address: walletAddress,
+      object_key: objectKey,
+      ...(location ? { location } : {}),
+    },
+    ...(localRaw ? { localBasename: localRaw } : {}),
+  };
+}
+
 function jsonBodyForObjectRequest(request: StorageObjectRequest): Record<string, unknown> {
   const o: Record<string, unknown> = {
     wallet_address: request.wallet_address,
@@ -343,6 +401,18 @@ function jsonBodyForObjectRequest(request: StorageObjectRequest): Record<string,
     o.location = request.location;
   }
   return o;
+}
+
+function jsonBodyForProxyDownloadRequest(
+  request: StorageObjectRequest,
+  downloadLocalBasename?: string,
+): Record<string, unknown> {
+  const body = jsonBodyForObjectRequest(request);
+  const trimmed = downloadLocalBasename?.trim();
+  if (trimmed) {
+    body.mnemospark_local_filename = trimmed;
+  }
+  return body;
 }
 
 export function jsonBodyForLsRequest(request: StorageLsRequest): Record<string, unknown> {
@@ -513,7 +583,7 @@ export async function requestStorageDownloadViaProxy(
 ): Promise<StorageDownloadProxyResponse> {
   return requestJsonViaProxy(
     STORAGE_DOWNLOAD_PROXY_PATH,
-    jsonBodyForObjectRequest(request),
+    jsonBodyForProxyDownloadRequest(request, options.downloadLocalBasename),
     parseStorageDownloadProxyResponse,
     options,
   );
@@ -633,7 +703,11 @@ export async function downloadStorageToDisk(
     }
   }
 
-  const filePath = resolveDownloadPath(outputDir, objectKey);
+  const pathKey =
+    options.localOutputBasename?.trim() && options.localOutputBasename.trim().length > 0
+      ? options.localOutputBasename.trim()
+      : objectKey;
+  const filePath = resolveDownloadPath(outputDir, pathKey);
   await mkdir(dirname(filePath), { recursive: true });
   await writeFile(filePath, bytes);
 

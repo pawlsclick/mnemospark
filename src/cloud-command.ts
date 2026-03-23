@@ -35,6 +35,7 @@ import {
   requestStorageDeleteViaProxy,
   requestStorageDownloadViaProxy,
   requestStorageLsViaProxy,
+  sanitizeFriendlyNameForLocalBasename,
   type ProxyStorageOptions,
   type StorageDeleteResponse,
   type StorageDownloadProxyResponse,
@@ -80,6 +81,7 @@ const CLOUD_HELP_FOOTER_STATE =
 const REQUIRED_PRICE_STORAGE =
   "--wallet-address, --object-id, --object-id-hash, --gb, --provider, --region";
 const REQUIRED_UPLOAD = "--quote-id, --wallet-address, --object-id, --object-id-hash";
+const REQUIRED_BACKUP = "<file|directory> and --name <friendly-name>";
 const REQUIRED_PAYMENT_SETTLE = "--quote-id and --wallet-address";
 const REQUIRED_STORAGE_OBJECT =
   "--wallet-address and one of (--object-key | --name [--latest|--at])";
@@ -120,9 +122,9 @@ const CLOUD_HELP_TEXT = [
   "",
   "• `/mnemospark_cloud` or `/mnemospark_cloud help` — show this message",
   "",
-  "• `/mnemospark_cloud backup <file|directory> [--name <friendly-name>] [--async] [--orchestrator <inline|subagent>] [--timeout-seconds <n>]`",
-  "  Purpose: create a local tar+gzip archive under ~/.openclaw/mnemospark/backup and record metadata in SQLite for later price-storage and upload.",
-  "  Required: <file|directory>",
+  "• `/mnemospark_cloud backup <file|directory> --name <friendly-name> [--async] [--orchestrator <inline|subagent>] [--timeout-seconds <n>]`",
+  "  Purpose: create a local tar+gzip archive under ~/.openclaw/mnemospark/backup (filename from sanitized friendly name) and record metadata in SQLite for later price-storage and upload.",
+  "  Required: " + REQUIRED_BACKUP,
   "",
   "• `/mnemospark_cloud price-storage --wallet-address <addr> --object-id <id> --object-id-hash <hash> --gb <gb> --provider <provider> --region <region>`",
   "  Purpose: request a storage quote before upload.",
@@ -199,6 +201,8 @@ type BackupObjectOptions = {
   now?: () => number;
   randomBytes?: (size: number) => Buffer;
   availableDiskBytes?: number;
+  /** Sanitized basename for the archive file under tmpDir (production backup). */
+  archiveBasename?: string;
 };
 
 type BackupObjectResult = {
@@ -271,9 +275,10 @@ type MnemosparkSubagentOrchestrator = {
 
 type ParsedCloudArgs =
   | { mode: "help" }
-  | ({ mode: "backup"; backupTarget: string; friendlyName?: string } & AsyncOperationArgs)
+  | ({ mode: "backup"; backupTarget: string; friendlyName: string } & AsyncOperationArgs)
   | { mode: "backup-invalid" }
   | { mode: "backup-invalid-async" }
+  | { mode: "backup-invalid-name" }
   | { mode: "price-storage"; priceStorageRequest: PriceStorageQuoteRequest }
   | { mode: "price-storage-invalid" }
   | ({
@@ -593,10 +598,14 @@ function parseCloudArgs(args?: string): ParsedCloudArgs {
     if (!asyncArgs) {
       return { mode: "backup-invalid-async" };
     }
+    const friendlyName = flags.name?.trim();
+    if (!friendlyName) {
+      return { mode: "backup-invalid-name" };
+    }
     return {
       mode: "backup",
       backupTarget,
-      friendlyName: flags.name?.trim() || undefined,
+      friendlyName,
       ...asyncArgs,
     };
   }
@@ -844,6 +853,46 @@ async function sha256File(filePath: string): Promise<string> {
   return hash.digest("hex");
 }
 
+async function resolveLocalUploadArchivePath(
+  backupDir: string,
+  objectId: string,
+  friendlyName: string,
+): Promise<{ ok: true; archivePath: string } | { ok: false; message: string }> {
+  if (friendlyName?.trim()) {
+    try {
+      const sanitized = sanitizeFriendlyNameForLocalBasename(friendlyName);
+      const candidate = join(backupDir, sanitized);
+      try {
+        const st = await stat(candidate);
+        if (st.isFile()) {
+          return { ok: true, archivePath: candidate };
+        }
+      } catch {
+        // Missing friendly-name path; try legacy.
+      }
+    } catch {
+      // Invalid friendly name for path; try legacy.
+    }
+  }
+
+  const legacyPath = join(backupDir, objectId);
+  try {
+    const legacyStats = await stat(legacyPath);
+    if (!legacyStats.isFile()) {
+      return {
+        ok: false,
+        message: `Cannot upload storage object: local archive path is not a file (${legacyPath}).`,
+      };
+    }
+    return { ok: true, archivePath: legacyPath };
+  } catch {
+    return {
+      ok: false,
+      message: `Cannot upload storage object: local archive not found. Run /mnemospark_cloud backup with --name (canonical layout) or restore the legacy file at ${legacyPath}.`,
+    };
+  }
+}
+
 function createObjectId(options: BackupObjectOptions): string {
   const nowFn = options.now ?? Date.now;
   const randomFn = options.randomBytes ?? randomBytesNode;
@@ -889,7 +938,26 @@ export async function buildBackupObject(
   }
 
   const objectId = createObjectId(options);
-  const archivePath = join(tmpDir, objectId);
+  const archiveBaseSegment = options.archiveBasename?.trim() || objectId;
+  const archivePath = join(tmpDir, archiveBaseSegment);
+
+  if (options.archiveBasename?.trim()) {
+    try {
+      const existing = await stat(archivePath);
+      if (existing.isFile() || existing.isDirectory()) {
+        throw new Error(
+          `Backup archive path already exists: ${archivePath}. Choose a different --name.`,
+        );
+      }
+    } catch (err) {
+      if (err instanceof Error && err.message.includes("already exists")) {
+        throw err;
+      }
+      if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+        throw err;
+      }
+    }
+  }
 
   try {
     await runTarGzip(archivePath, targetPath);
@@ -1327,13 +1395,34 @@ async function uploadPresignedObjectIfNeeded(
   );
 }
 
-async function maybeCleanupLocalBackupArchive(archivePath: string): Promise<void> {
-  const flag = process.env.MNEMOSPARK_DELETE_BACKUP_AFTER_UPLOAD;
-  if (!flag) {
-    return;
+function envMeansExplicitRemoveOrKeep(value: string | undefined): boolean | null {
+  if (value === undefined) {
+    return null;
   }
-  const normalized = flag.trim().toLowerCase();
-  if (normalized !== "1" && normalized !== "true" && normalized !== "yes" && normalized !== "y") {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const n = trimmed.toLowerCase();
+  if (n === "0" || n === "false" || n === "no" || n === "n") {
+    return false;
+  }
+  if (n === "1" || n === "true" || n === "yes" || n === "y") {
+    return true;
+  }
+  return null;
+}
+
+function shouldRemoveLocalBackupAfterUpload(): boolean {
+  const parsed = envMeansExplicitRemoveOrKeep(process.env.MNEMOSPARK_REMOVE_BACKUP_FILE);
+  if (parsed !== null) {
+    return parsed;
+  }
+  return true;
+}
+
+async function maybeCleanupLocalBackupArchive(archivePath: string): Promise<void> {
+  if (!shouldRemoveLocalBackupAfterUpload()) {
     return;
   }
   try {
@@ -1429,17 +1518,27 @@ function extractLsErrorMessage(error: unknown): string | null {
   return null;
 }
 
-function formatPriceStorageUserMessage(quote: PriceStorageQuoteResponse): string {
+function formatPriceStorageUserMessage(
+  quote: PriceStorageQuoteResponse,
+  localArchiveHint?: string | null,
+): string {
   const uploadLine = `/mnemospark_cloud upload --quote-id \`${quote.quote_id}\` --wallet-address \`${quote.addr}\` --object-id \`${quote.object_id}\` --object-id-hash \`${quote.object_id_hash}\``;
-  return [
+  const lines = [
     `Your storage quote \`${quote.quote_id}\`: storage price \`$${quote.storage_price}\` for file \`${quote.object_id}\` with file size \`${quote.object_size_gb}\` in \`${quote.provider}\` \`${quote.location}\`.`,
     "",
     "If you accept this quote, run:",
     "",
     uploadLine,
     "",
-    QUOTE_VALIDITY_USER_NOTE,
-  ].join("\n");
+  ];
+  if (localArchiveHint?.trim()) {
+    lines.push(
+      `Local backup archive uses friendly name \`${localArchiveHint.trim()}\` (on-disk basename is sanitized).`,
+      "",
+    );
+  }
+  lines.push(QUOTE_VALIDITY_USER_NOTE);
+  return lines.join("\n");
 }
 
 function quoteLookupMatchesPriceStorageResponse(
@@ -1457,12 +1556,17 @@ function quoteLookupMatchesPriceStorageResponse(
   );
 }
 
-function formatBackupSuccessUserMessage(result: BackupObjectResult, walletAddress: string): string {
+function formatBackupSuccessUserMessage(
+  result: BackupObjectResult,
+  walletAddress: string,
+  friendlyName: string,
+): string {
   const hash = result.objectIdHash.replace(/\s/g, "");
   const priceStorageLine = `/mnemospark_cloud price-storage --wallet-address \`${walletAddress}\` --object-id \`${result.objectId}\` --object-id-hash \`${hash}\` --gb \`${result.objectSizeGb}\` --provider <provider> --region <region>`;
   return [
     `Backup archive: \`${result.archivePath}\``,
     "",
+    `friendly-name: ${friendlyName}`,
     `object-id: ${result.objectId}`,
     `object-id-hash: ${hash}`,
     `object-size: ${result.objectSizeGb}`,
@@ -2044,6 +2148,13 @@ async function runCloudCommandHandler(
   if (parsed.mode === "backup-invalid-async") {
     return {
       text: `Cannot build storage object: ${INVALID_ASYNC_FLAGS_MESSAGE}`,
+      isError: true,
+    };
+  }
+
+  if (parsed.mode === "backup-invalid-name") {
+    return {
+      text: `Cannot build storage object: required arguments are ${REQUIRED_BACKUP}.`,
       isError: true,
     };
   }
@@ -2764,7 +2875,20 @@ async function runCloudCommandHandler(
         };
       }
 
-      const result = await backupBuilder(parsed.backupTarget, options.backupOptions);
+      let archiveBasename: string;
+      try {
+        archiveBasename = sanitizeFriendlyNameForLocalBasename(parsed.friendlyName);
+      } catch {
+        return {
+          text: "Cannot build storage object: invalid --name for local file path (use a non-empty name without reserved path segments).",
+          isError: true,
+        };
+      }
+
+      const result = await backupBuilder(parsed.backupTarget, {
+        ...options.backupOptions,
+        archiveBasename,
+      });
       await emitCloudEventBestEffort(
         "backup.completed",
         {
@@ -2772,7 +2896,7 @@ async function runCloudCommandHandler(
           object_id: result.objectId,
           status: "succeeded",
           details: {
-            friendly_name: parsed.friendlyName ?? basename(parsed.backupTarget),
+            friendly_name: parsed.friendlyName,
             archive_path: result.archivePath,
             object_id_hash: result.objectIdHash.replace(/\s/g, ""),
             object_size_gb: result.objectSizeGb,
@@ -2791,20 +2915,23 @@ async function runCloudCommandHandler(
         sha256: result.objectIdHash,
         status: "backed_up",
       });
-      const friendlyName = parsed.friendlyName?.trim() || basename(parsed.backupTarget);
-      if (friendlyName) {
-        await datastore.upsertFriendlyName({
-          friendly_name: friendlyName,
-          object_id: result.objectId,
-          object_key: null,
-          quote_id: null,
-          wallet_address: walletAddress,
-        });
-      }
+      await datastore.upsertFriendlyName({
+        friendly_name: parsed.friendlyName,
+        object_id: result.objectId,
+        object_key: null,
+        quote_id: null,
+        wallet_address: walletAddress,
+      });
       return {
-        text: formatBackupSuccessUserMessage(result, walletAddress),
+        text: formatBackupSuccessUserMessage(result, walletAddress, parsed.friendlyName),
       };
-    } catch {
+    } catch (err) {
+      if (err instanceof Error && err.message.includes("already exists")) {
+        return {
+          text: err.message,
+          isError: true,
+        };
+      }
       return {
         text: "Cannot build storage object",
         isError: true,
@@ -2858,8 +2985,14 @@ async function runCloudCommandHandler(
         },
         mnemosparkHomeDir,
       );
+      let friendlyForQuote: string | null = null;
+      try {
+        friendlyForQuote = await datastore.findLatestFriendlyNameForObjectId(quote.object_id);
+      } catch {
+        friendlyForQuote = null;
+      }
       return {
-        text: formatPriceStorageUserMessage(quote),
+        text: formatPriceStorageUserMessage(quote, friendlyForQuote),
       };
     } catch (err) {
       await emitCloudEventBestEffort(
@@ -2908,10 +3041,36 @@ async function runCloudCommandHandler(
         };
       }
 
-      const archivePath = join(
-        options.backupOptions?.tmpDir ?? DEFAULT_BACKUP_DIR,
+      const backupDir = options.backupOptions?.tmpDir ?? DEFAULT_BACKUP_DIR;
+      const dbFriendly = await datastore.findLatestFriendlyNameForObjectId(
         parsed.uploadRequest.object_id,
       );
+      if (!dbFriendly?.trim()) {
+        return {
+          text: "Cannot upload storage object: no friendly name in local SQLite for this object-id. Run /mnemospark_cloud backup with --name first.",
+          isError: true,
+        };
+      }
+
+      if (parsed.friendlyName?.trim()) {
+        if (parsed.friendlyName.trim() !== dbFriendly.trim()) {
+          return {
+            text: "Cannot upload storage object: --name does not match the friendly name stored in local SQLite for this object-id.",
+            isError: true,
+          };
+        }
+      }
+
+      const resolvedArchive = await resolveLocalUploadArchivePath(
+        backupDir,
+        parsed.uploadRequest.object_id,
+        dbFriendly,
+      );
+      if (!resolvedArchive.ok) {
+        return { text: resolvedArchive.message, isError: true };
+      }
+      const archivePath = resolvedArchive.archivePath;
+
       let archiveStats;
       try {
         archiveStats = await stat(archivePath);
@@ -3068,50 +3227,48 @@ async function runCloudCommandHandler(
         command: cronJob.command,
         status: "active",
       });
-      if (parsed.friendlyName?.trim()) {
-        const normalizedFriendlyName = parsed.friendlyName.trim();
-        await datastore.upsertFriendlyName({
-          friendly_name: normalizedFriendlyName,
-          object_id: finalizedUploadResponse.object_id,
-          object_key: finalizedUploadResponse.object_key,
-          quote_id: finalizedUploadResponse.quote_id,
-          wallet_address: finalizedUploadResponse.addr,
+      const normalizedFriendlyName = dbFriendly.trim();
+      await datastore.upsertFriendlyName({
+        friendly_name: normalizedFriendlyName,
+        object_id: finalizedUploadResponse.object_id,
+        object_key: finalizedUploadResponse.object_key,
+        quote_id: finalizedUploadResponse.quote_id,
+        wallet_address: finalizedUploadResponse.addr,
+      });
+
+      let friendlyNameVerified = false;
+      try {
+        const readBack = await datastore.resolveFriendlyName({
+          walletAddress: finalizedUploadResponse.addr,
+          friendlyName: normalizedFriendlyName,
+          latest: true,
         });
+        friendlyNameVerified =
+          Boolean(readBack?.objectKey) &&
+          readBack?.objectKey === finalizedUploadResponse.object_key;
+      } catch {
+        friendlyNameVerified = false;
+      }
 
-        let friendlyNameVerified = false;
-        try {
-          const readBack = await datastore.resolveFriendlyName({
-            walletAddress: finalizedUploadResponse.addr,
-            friendlyName: normalizedFriendlyName,
-            latest: true,
-          });
-          friendlyNameVerified =
-            Boolean(readBack?.objectKey) &&
-            readBack?.objectKey === finalizedUploadResponse.object_key;
-        } catch {
-          friendlyNameVerified = false;
-        }
-
-        if (!friendlyNameVerified) {
-          const warning =
-            "SQLite friendly-name write verification failed; --name lookups may not resolve until SQLite is healthy.";
-          await emitCloudEventBestEffort(
-            "friendly_name.write_verification_failed",
-            {
-              operation_id: uploadCorrelation.operationId,
-              trace_id: uploadCorrelation.traceId,
-              wallet_address: finalizedUploadResponse.addr,
-              object_id: finalizedUploadResponse.object_id,
-              object_key: finalizedUploadResponse.object_key,
-              quote_id: finalizedUploadResponse.quote_id,
-              friendly_name: normalizedFriendlyName,
-              warning,
-            },
-            mnemosparkHomeDir,
-          );
-          if (process.env.MNEMOSPARK_SQLITE_STRICT === "1") {
-            throw new Error(warning);
-          }
+      if (!friendlyNameVerified) {
+        const warning =
+          "SQLite friendly-name write verification failed; --name lookups may not resolve until SQLite is healthy.";
+        await emitCloudEventBestEffort(
+          "friendly_name.write_verification_failed",
+          {
+            operation_id: uploadCorrelation.operationId,
+            trace_id: uploadCorrelation.traceId,
+            wallet_address: finalizedUploadResponse.addr,
+            object_id: finalizedUploadResponse.object_id,
+            object_key: finalizedUploadResponse.object_key,
+            quote_id: finalizedUploadResponse.quote_id,
+            friendly_name: normalizedFriendlyName,
+            warning,
+          },
+          mnemosparkHomeDir,
+        );
+        if (process.env.MNEMOSPARK_SQLITE_STRICT === "1") {
+          throw new Error(warning);
         }
       }
       await emitCloudEventBestEffort(
@@ -3279,10 +3436,28 @@ async function runCloudCommandHandler(
       error_code: null,
       error_message: null,
     });
+    let downloadLocalBasename: string | undefined;
+    try {
+      const friendly = await datastore.findLatestFriendlyNameForObjectKey(
+        resolvedRequest.wallet_address,
+        resolvedRequest.object_key,
+      );
+      if (friendly?.trim()) {
+        try {
+          downloadLocalBasename = sanitizeFriendlyNameForLocalBasename(friendly);
+        } catch {
+          downloadLocalBasename = undefined;
+        }
+      }
+    } catch {
+      downloadLocalBasename = undefined;
+    }
+
     try {
       const downloadResult = await requestStorageDownload(resolvedRequest, {
         ...options.proxyStorageOptions,
         correlation,
+        ...(downloadLocalBasename ? { downloadLocalBasename } : {}),
       });
       if (!downloadResult.success) {
         throw new Error("download failed");

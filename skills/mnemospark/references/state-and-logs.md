@@ -1,5 +1,10 @@
 # mnemospark State and Logs Reference
 
+## Environment variables (local behavior)
+
+- `MNEMOSPARK_REMOVE_BACKUP_FILE` — after a successful **upload**, remove the local backup archive under `~/.openclaw/mnemospark/backup/`. Default when unset: **remove**. Set to `0`, `false`, `no`, or `n` to keep the file; `1`, `true`, `yes`, or `y` to remove.
+- `MNEMOSPARK_DOWNLOAD_DIR` — override the directory used for download output (default `~/.openclaw/mnemospark/downloads/`).
+
 ## Primary state
 
 - SQLite: `~/.openclaw/mnemospark/state.db`
