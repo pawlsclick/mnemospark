@@ -226,6 +226,10 @@ describe("cloud datastore", () => {
     const found = await datastore.findCronByObjectKey("obj-key-1");
     expect(found?.cronId).toBe("cron-1");
 
+    const fullRow = await datastore.findCronJobRowByObjectKey("obj-key-1");
+    expect(fullRow?.cron_id).toBe("cron-1");
+    expect(fullRow?.command).toContain("payment-settle");
+
     const removed = await datastore.removeCronJob("cron-1");
     expect(removed).toBe(true);
 

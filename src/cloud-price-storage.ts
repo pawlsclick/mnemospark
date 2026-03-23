@@ -128,8 +128,10 @@ type BackendUploadConfirmOptions = {
 
 /** Request body for POST /payment/settle. */
 export type PaymentSettleRequest = {
-  quote_id: string;
   wallet_address: string;
+  quote_id?: string;
+  renewal?: boolean;
+  object_key?: string;
   payment?: Record<string, unknown>;
   payment_authorization?: Record<string, unknown> | string;
 };
@@ -145,6 +147,9 @@ export type BackendSettleOptions = {
   payment?: Record<string, unknown>;
   /** Optional alternate inline payment authorization envelope. */
   paymentAuthorization?: Record<string, unknown> | string;
+  /** Monthly renewal path: JSON uses renewal + object_key (no quote_id). */
+  renewal?: boolean;
+  objectKey?: string;
 };
 
 /** Options for requesting payment/settle via the proxy. */
@@ -156,6 +161,8 @@ export type ProxySettleOptions = {
   payment?: Record<string, unknown>;
   /** Optional alternate inline payment authorization envelope. */
   paymentAuthorization?: Record<string, unknown> | string;
+  renewal?: boolean;
+  objectKey?: string;
 };
 
 /** Result from forwarding payment/settle to the backend (or proxy). */
@@ -669,9 +676,14 @@ export async function forwardPaymentSettleToBackend(
 
   const targetUrl = `${normalizeBaseUrl(backendBaseUrl)}/payment/settle`;
   const requestBody: PaymentSettleRequest = {
-    quote_id: quoteId,
     wallet_address: walletAddress,
   };
+  if (options.renewal === true && options.objectKey?.trim()) {
+    requestBody.renewal = true;
+    requestBody.object_key = options.objectKey.trim();
+  } else {
+    requestBody.quote_id = quoteId;
+  }
   if (options.payment) {
     requestBody.payment = options.payment;
   }
@@ -708,9 +720,14 @@ export async function requestPaymentSettleViaProxy(
   );
   const targetUrl = `${baseUrl}${PAYMENT_SETTLE_PROXY_PATH}`;
   const requestBody: PaymentSettleRequest = {
-    quote_id: quoteId,
     wallet_address: walletAddress,
   };
+  if (options.renewal === true && options.objectKey?.trim()) {
+    requestBody.renewal = true;
+    requestBody.object_key = options.objectKey.trim();
+  } else {
+    requestBody.quote_id = quoteId;
+  }
   if (options.payment) {
     requestBody.payment = options.payment;
   }

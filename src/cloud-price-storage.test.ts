@@ -540,6 +540,30 @@ describe("cloud price-storage transport", () => {
     expect(result.status).toBe(200);
   });
 
+  it("forwards renewal payment/settle without quote_id", async () => {
+    let capturedInit: RequestInit | undefined;
+
+    await forwardPaymentSettleToBackend("", "0x1234abcd", {
+      backendBaseUrl: "https://api.example.com/prod/",
+      walletSignature: "wallet-proof-header",
+      renewal: true,
+      objectKey: "obj/k.enc",
+      fetchImpl: async (_input, init) => {
+        capturedInit = init;
+        return new Response(JSON.stringify({ payment_status: "confirmed" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      },
+    });
+
+    const body = JSON.parse(String(capturedInit?.body)) as Record<string, unknown>;
+    expect(body.quote_id).toBeUndefined();
+    expect(body.renewal).toBe(true);
+    expect(body.object_key).toBe("obj/k.enc");
+    expect(body.wallet_address).toBe("0x1234abcd");
+  });
+
   it("requestPaymentSettleViaProxy POSTs to proxy path", async () => {
     let capturedUrl = "";
     let capturedBody = "";
@@ -563,5 +587,27 @@ describe("cloud price-storage transport", () => {
     expect(body.wallet_address).toBe("0xabcd");
     expect(body.payment).toEqual({ intent: "charge" });
     expect(result.status).toBe(200);
+  });
+
+  it("requestPaymentSettleViaProxy sends renewal body when flagged", async () => {
+    let capturedBody = "";
+
+    await requestPaymentSettleViaProxy("", "0xabcd", {
+      proxyBaseUrl: "http://127.0.0.1:9999/",
+      renewal: true,
+      objectKey: "a/b.enc",
+      fetchImpl: async (input, init) => {
+        capturedBody = typeof init?.body === "string" ? init.body : "";
+        return new Response(JSON.stringify({ payment_status: "confirmed" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      },
+    });
+
+    const body = JSON.parse(capturedBody) as Record<string, unknown>;
+    expect(body.quote_id).toBeUndefined();
+    expect(body.renewal).toBe(true);
+    expect(body.object_key).toBe("a/b.enc");
   });
 });
