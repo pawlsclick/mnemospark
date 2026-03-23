@@ -768,7 +768,7 @@ describe("cloud command", () => {
     }
   });
 
-  it("keeps local backup archive when MNEMOSPARK_REMOVE_BACKUP_FILE is unrecognized", async () => {
+  it("removes local backup archive when MNEMOSPARK_REMOVE_BACKUP_FILE is unrecognized", async () => {
     const { homeDir, tmpBackupDir } = await createSandbox();
     const walletKey = `0x${"55".repeat(32)}` as const;
     const walletAddress = privateKeyToAccount(walletKey).address;
@@ -847,8 +847,7 @@ describe("cloud command", () => {
 
       expect(createPaymentFetchCalls).toBe(0);
       expect(result.isError).not.toBe(true);
-      const archiveExists = await stat(archivePath);
-      expect(archiveExists.isFile()).toBe(true);
+      await expect(stat(archivePath)).rejects.toThrow();
     } finally {
       if (previousRemove === undefined) {
         delete process.env.MNEMOSPARK_REMOVE_BACKUP_FILE;
