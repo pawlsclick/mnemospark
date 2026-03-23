@@ -854,21 +854,13 @@ async function sha256File(filePath: string): Promise<string> {
 }
 
 async function resolveLocalUploadArchivePath(
-  datastore: Awaited<ReturnType<typeof createCloudDatastore>>,
   backupDir: string,
   objectId: string,
+  friendlyName: string,
 ): Promise<{ ok: true; archivePath: string } | { ok: false; message: string }> {
-  let friendly: string | null = null;
-  try {
-    await datastore.ensureReady();
-    friendly = await datastore.findLatestFriendlyNameForObjectId(objectId);
-  } catch {
-    // SQLite unavailable; still attempt legacy path below.
-  }
-
-  if (friendly?.trim()) {
+  if (friendlyName?.trim()) {
     try {
-      const sanitized = sanitizeFriendlyNameForLocalBasename(friendly);
+      const sanitized = sanitizeFriendlyNameForLocalBasename(friendlyName);
       const candidate = join(backupDir, sanitized);
       try {
         const st = await stat(candidate);
@@ -3070,9 +3062,9 @@ async function runCloudCommandHandler(
       }
 
       const resolvedArchive = await resolveLocalUploadArchivePath(
-        datastore,
         backupDir,
         parsed.uploadRequest.object_id,
+        dbFriendly,
       );
       if (!resolvedArchive.ok) {
         return { text: resolvedArchive.message, isError: true };
