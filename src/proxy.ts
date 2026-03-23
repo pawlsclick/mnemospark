@@ -499,17 +499,48 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
 
         const record =
           payload && typeof payload === "object" ? (payload as Record<string, unknown>) : null;
-        const quoteId = typeof record?.quote_id === "string" ? record.quote_id.trim() : "";
         const walletAddress =
           typeof record?.wallet_address === "string" ? record.wallet_address.trim() : "";
+        const isRenewal = record?.renewal === true;
+        const objectKey = typeof record?.object_key === "string" ? record.object_key.trim() : "";
+        let quoteId = typeof record?.quote_id === "string" ? record.quote_id.trim() : "";
         const inlinePayment = record?.payment;
         const inlinePaymentAuthorization = record?.payment_authorization;
-        if (!quoteId || !walletAddress) {
+        if (!walletAddress) {
           logProxyEvent("warn", "proxy_payment_settle_missing_fields");
           emitProxyTerminalFromStatus(correlation, 400, { reason: "missing_fields" });
           sendJson(res, 400, {
             error: "Bad request",
-            message: "Missing required fields: quote_id, wallet_address",
+            message: "Missing required field: wallet_address",
+          });
+          return;
+        }
+        if (isRenewal) {
+          if (quoteId) {
+            logProxyEvent("warn", "proxy_payment_settle_renewal_with_quote_id");
+            emitProxyTerminalFromStatus(correlation, 400, { reason: "renewal_with_quote_id" });
+            sendJson(res, 400, {
+              error: "Bad request",
+              message: "renewal requests must not include quote_id",
+            });
+            return;
+          }
+          if (!objectKey) {
+            logProxyEvent("warn", "proxy_payment_settle_missing_fields");
+            emitProxyTerminalFromStatus(correlation, 400, { reason: "missing_fields" });
+            sendJson(res, 400, {
+              error: "Bad request",
+              message: "Missing required field: object_key (renewal mode)",
+            });
+            return;
+          }
+          quoteId = `renewal:${objectKey}`;
+        } else if (!quoteId) {
+          logProxyEvent("warn", "proxy_payment_settle_missing_fields");
+          emitProxyTerminalFromStatus(correlation, 400, { reason: "missing_fields" });
+          sendJson(res, 400, {
+            error: "Bad request",
+            message: "Missing required field: quote_id (or use renewal: true with object_key)",
           });
           return;
         }
@@ -595,6 +626,8 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
               : inlinePaymentAuthorization !== undefined
                 ? (inlinePaymentAuthorization as Record<string, unknown>)
                 : undefined,
+          renewal: isRenewal,
+          objectKey: isRenewal ? objectKey : undefined,
         });
         logProxyEvent("info", "proxy_payment_settle_backend_response", {
           status: backendResponse.status,

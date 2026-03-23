@@ -26,10 +26,12 @@
 
 ### Payment settle (scheduled / manual)
 
-`payment-settle --quote-id <quote-id> --wallet-address <addr> [--object-id <id>] [--object-key <key>] [--storage-price <n>]`
+**Quote path (upload prep):** `payment-settle --quote-id <quote-id> --wallet-address <addr> [--object-id <id>] [--object-key <key>] [--storage-price <n>]`
 
-- Purpose: call the same proxy + x402 payment settlement path as upload (for monthly cron lines stored after upload).
-- Required: `--quote-id`, `--wallet-address` (configured private key must match the address).
+**Monthly renewal (no new quote):** `payment-settle --renewal --object-key <key> --wallet-address <addr> [--object-id <id>] [--storage-price <n>]`
+
+- Purpose: call the same proxy + x402 payment settlement path as upload. Cron lines after upload use **renewal** mode so the backend reads price from active inventory (no `QUOTES_TABLE` row).
+- Required: `--wallet-address` and either `--quote-id` or (`--renewal` and `--object-key`). The configured private key must match the address.
 
 ### List
 

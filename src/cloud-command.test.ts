@@ -422,7 +422,8 @@ describe("cloud command", () => {
       config: {},
     });
     expect(result.isError).toBe(true);
-    expect(result.text).toContain("--quote-id and --wallet-address");
+    expect(result.text).toContain("--wallet-address");
+    expect(result.text).toContain("--quote-id | --renewal");
   });
 
   it("rejects payment-settle on wallet address mismatch", async () => {
@@ -738,7 +739,7 @@ describe("cloud command", () => {
       const cronId = cronIdMatch?.[1];
       expect(cronId).toBeTruthy();
       expect(result.text).toContain("monthly");
-      expect(result.text).toContain("32-day deadline");
+      expect(result.text).toContain("3rd (UTC)");
       expect(result.text).toContain(`/mnemospark_cloud ls --wallet-address \`${walletAddress}\``);
       expect(result.text).toContain("Thank you for using mnemospark!");
       expect(result.text).toContain("pluggedin@mnemospark.ai");
@@ -755,7 +756,8 @@ describe("cloud command", () => {
       expect(cronEntry.storagePrice).toBe(2.75);
       expect(cronEntry.schedule).toBe("0 0 1 * *");
       expect(String(cronEntry.command)).toContain("/mnemospark_cloud payment-settle");
-      expect(String(cronEntry.command)).toContain("quote-abc123");
+      expect(String(cronEntry.command)).toContain("--renewal");
+      expect(String(cronEntry.command)).toContain("obj-upload-001.tar.gz.enc");
 
       const archiveExists = await stat(archivePath);
       expect(archiveExists.isFile()).toBe(true);
@@ -1512,7 +1514,7 @@ describe("cloud command", () => {
         createdAt: "2026-02-25 20:10:00",
         schedule: "0 0 1 * *",
         command:
-          '/mnemospark_cloud payment-settle --quote-id "quote-abc123" --wallet-address "0x1234abcd" --object-id "obj-001" --object-key "backup/archive.tar.gz" --storage-price "2.75"',
+          '/mnemospark_cloud payment-settle --renewal --wallet-address "0x1234abcd" --object-id "obj-001" --object-key "backup/archive.tar.gz" --storage-price "2.75"',
         quoteId: "quote-abc123",
         storagePrice: 2.75,
         walletAddress: "0x1234abcd",

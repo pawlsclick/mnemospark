@@ -52,7 +52,7 @@ import {
 import type { OpenClawPluginCommandDefinition } from "./types.js";
 import { createPaymentFetch, type PaymentFetchResult } from "./x402.js";
 import { isValidWalletPrivateKey } from "./wallet-key.js";
-import { createCloudDatastore, type QuoteLookup } from "./cloud-datastore.js";
+import { createCloudDatastore, type CronJobRow, type QuoteLookup } from "./cloud-datastore.js";
 import { appendJsonlEvent } from "./cloud-jsonl.js";
 import type { RequestCorrelation } from "./cloud-correlation.js";
 
@@ -63,8 +63,6 @@ const CRON_TABLE_SUBPATH = join(".openclaw", "mnemospark", "crontab.txt");
 const BLOCKRUN_WALLET_KEY_SUBPATH = join(".openclaw", "blockrun", "wallet.key");
 const MNEMOSPARK_WALLET_KEY_SUBPATH = join(".openclaw", "mnemospark", "wallet", "wallet.key");
 const INLINE_UPLOAD_MAX_BYTES = 4_500_000;
-const PAYMENT_REMINDER_INTERVAL_DAYS = 30;
-const PAYMENT_DELETE_DEADLINE_DAYS = 32;
 // Standard cron cannot express "every 30 days" from an arbitrary date. */30 in day-of-month
 // means days 1 and 31, so in 31-day months it fires twice one day apart (e.g. Jan 31, Feb 1).
 // Use 1st of each month so the job runs once per month.
@@ -82,7 +80,8 @@ const REQUIRED_PRICE_STORAGE =
   "--wallet-address, --object-id, --object-id-hash, --gb, --provider, --region";
 const REQUIRED_UPLOAD = "--quote-id, --wallet-address, --object-id, --object-id-hash";
 const REQUIRED_BACKUP = "<file|directory> and --name <friendly-name>";
-const REQUIRED_PAYMENT_SETTLE = "--quote-id and --wallet-address";
+const REQUIRED_PAYMENT_SETTLE = "--wallet-address and (--quote-id | --renewal with --object-key)";
+const PAYMENT_SETTLE_BOOLEAN_FLAGS = new Set(["renewal"]);
 const REQUIRED_STORAGE_OBJECT =
   "--wallet-address and one of (--object-key | --name [--latest|--at])";
 const REQUIRED_LS =
@@ -93,6 +92,7 @@ const PAYMENT_SETTLE_FLAG_NAMES = new Set([
   "object-id",
   "object-key",
   "storage-price",
+  "renewal",
 ]);
 const BOOLEAN_SELECTOR_FLAGS = new Set(["latest"]);
 const BOOLEAN_ASYNC_FLAGS = new Set(["async"]);
@@ -134,9 +134,9 @@ const CLOUD_HELP_TEXT = [
   "  Purpose: upload an encrypted object using a valid quote-id.",
   "  Required: " + REQUIRED_UPLOAD,
   "",
-  "• `/mnemospark_cloud payment-settle --quote-id <quote-id> --wallet-address <addr> [--object-id <id>] [--object-key <key>] [--storage-price <n>]`",
-  "  Purpose: settle storage payment for a quote (e.g. monthly cron). Uses the same proxy + x402 path as upload pre-settlement.",
-  "  Required: --quote-id, --wallet-address (wallet private key must match the address).",
+  "• `/mnemospark_cloud payment-settle (--quote-id <quote-id> | --renewal --object-key <key>) --wallet-address <addr> [--object-id <id>] [--storage-price <n>]`",
+  "  Purpose: settle storage payment before upload (quote) or on the monthly cron (renewal, no new quote). Uses the same proxy + x402 path as upload pre-settlement.",
+  "  Required: " + REQUIRED_PAYMENT_SETTLE + " (wallet private key must match the address).",
   "",
   "• `/mnemospark_cloud ls --wallet-address <addr> [--object-key <key> | --name <friendly-name> | omit both to list bucket] [--latest|--at <timestamp>]`",
   "  Purpose: stat one object or list all keys in the wallet bucket (S3).",
@@ -187,8 +187,9 @@ type UploadCommandRequest = {
 };
 
 type PaymentSettleCommandRequest = {
-  quote_id: string;
   wallet_address: string;
+  renewal?: boolean;
+  quote_id?: string;
   object_id?: string;
   object_key?: string;
   storage_price?: number;
@@ -663,7 +664,7 @@ function parseCloudArgs(args?: string): ParsedCloudArgs {
   }
 
   if (subcommand === "payment-settle") {
-    const flags = parseNamedFlags(rest);
+    const flags = parseNamedFlags(rest, PAYMENT_SETTLE_BOOLEAN_FLAGS);
     if (!flags) {
       return { mode: "payment-settle-invalid" };
     }
@@ -672,9 +673,21 @@ function parseCloudArgs(args?: string): ParsedCloudArgs {
         return { mode: "payment-settle-invalid" };
       }
     }
-    const quoteId = flags["quote-id"]?.trim();
     const walletAddress = flags["wallet-address"]?.trim();
-    if (!quoteId || !walletAddress) {
+    if (!walletAddress) {
+      return { mode: "payment-settle-invalid" };
+    }
+    const isRenewal = flags.renewal === "true";
+    const quoteId = flags["quote-id"]?.trim();
+    const objectKey = flags["object-key"]?.trim();
+    if (isRenewal) {
+      if (quoteId) {
+        return { mode: "payment-settle-invalid" };
+      }
+      if (!objectKey) {
+        return { mode: "payment-settle-invalid" };
+      }
+    } else if (!quoteId) {
       return { mode: "payment-settle-invalid" };
     }
     let storagePrice: number | undefined;
@@ -689,10 +702,11 @@ function parseCloudArgs(args?: string): ParsedCloudArgs {
     return {
       mode: "payment-settle",
       paymentSettleRequest: {
-        quote_id: quoteId,
         wallet_address: walletAddress,
+        renewal: isRenewal || undefined,
+        quote_id: quoteId || undefined,
         object_id: flags["object-id"]?.trim() || undefined,
-        object_key: flags["object-key"]?.trim() || undefined,
+        object_key: objectKey || undefined,
         storage_price: storagePrice,
       },
     };
@@ -1111,7 +1125,6 @@ function quoteCronArgument(value: string | number): string {
 }
 
 function buildStoragePaymentCronCommand(job: {
-  quoteId: string;
   walletAddress: string;
   objectId: string;
   objectKey: string;
@@ -1120,8 +1133,7 @@ function buildStoragePaymentCronCommand(job: {
   return [
     "/mnemospark_cloud",
     "payment-settle",
-    "--quote-id",
-    quoteCronArgument(job.quoteId),
+    "--renewal",
     "--wallet-address",
     quoteCronArgument(job.walletAddress),
     "--object-id",
@@ -1196,7 +1208,6 @@ async function createStoragePaymentCronJob(
     createdAt,
     schedule: PAYMENT_CRON_SCHEDULE,
     command: buildStoragePaymentCronCommand({
-      quoteId: upload.quote_id,
       walletAddress: upload.addr,
       objectId: upload.object_id,
       objectKey: upload.object_key,
@@ -1437,7 +1448,7 @@ function formatStorageUploadUserMessage(upload: StorageUploadResponse, cronJobId
   return [
     `Your file \`${upload.object_id}\` with key \`${upload.object_key}\` has been stored using \`${upload.provider}\` in folder \`${upload.bucket_name}\` in region \`${upload.location}\``,
     "",
-    `A cron job \`${cronJobId}\` has been configured to send payment monthly (on the 1st) for storage services. If payment is not sent, your \`${upload.object_id}\` will be deleted after the ${PAYMENT_DELETE_DEADLINE_DAYS}-day deadline (${PAYMENT_REMINDER_INTERVAL_DAYS}-day billing interval + 2-day grace period).`,
+    `A cron job \`${cronJobId}\` has been configured to send renewal payment monthly (1st of the month, UTC), matching backend calendar billing. The object is skipped for deletion in its first UTC calendar month after upload; after that, if renewal is missing for a month, housekeeping may remove the object shortly after the 3rd (UTC).`,
     "",
     "To view your cloud storage run the command:",
     "",
@@ -1986,13 +1997,30 @@ function parseTransIdFromPaymentSettleBody(bodyText: string): string | null {
   }
 }
 
+function parseQuoteIdFromPaymentSettleBody(bodyText: string): string | null {
+  const trimmed = bodyText.trim();
+  if (!trimmed.startsWith("{")) {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(trimmed) as { quote_id?: unknown };
+    const q = parsed.quote_id;
+    return typeof q === "string" && q.trim() ? q.trim() : null;
+  } catch {
+    return null;
+  }
+}
+
 async function resolveAmountForPaymentSettle(
-  quoteId: string,
+  quoteId: string | undefined,
   storagePriceFromFlag: number | undefined,
   datastore: Awaited<ReturnType<typeof createCloudDatastore>>,
 ): Promise<number> {
   if (storagePriceFromFlag !== undefined && Number.isFinite(storagePriceFromFlag)) {
     return storagePriceFromFlag;
+  }
+  if (!quoteId) {
+    return 0;
   }
   const quoteLookup = await datastore.findQuoteById(quoteId);
   if (quoteLookup && Number.isFinite(quoteLookup.storagePrice)) {
@@ -2003,6 +2031,24 @@ async function resolveAmountForPaymentSettle(
     return payment.amount;
   }
   return 0;
+}
+
+async function resolveCronRowForPaymentSettle(
+  req: PaymentSettleCommandRequest,
+  datastore: Awaited<ReturnType<typeof createCloudDatastore>>,
+): Promise<CronJobRow | null> {
+  if (req.renewal) {
+    const key = req.object_key?.trim();
+    if (!key) {
+      return null;
+    }
+    return datastore.findCronJobRowByObjectKey(key);
+  }
+  const qid = req.quote_id?.trim();
+  if (!qid) {
+    return null;
+  }
+  return datastore.findCronByQuoteId(qid);
 }
 
 async function emitPaymentSettleClientObservationBestEffort(params: {
@@ -2175,7 +2221,7 @@ async function runCloudCommandHandler(
 
   if (parsed.mode === "payment-settle-invalid") {
     return {
-      text: `Cannot settle payment: required arguments are ${REQUIRED_PAYMENT_SETTLE}. Optional: --object-id, --object-key, --storage-price.`,
+      text: `Cannot settle payment: required arguments are ${REQUIRED_PAYMENT_SETTLE}. Optional: --object-id, --storage-price.`,
       isError: true,
     };
   }
@@ -2373,11 +2419,14 @@ async function runCloudCommandHandler(
     const settleFetch = createPayment(walletKey).fetch;
     const objectId = req.object_id;
     const objectKey = req.object_key;
+    const logQuoteId =
+      req.quote_id?.trim() ||
+      (req.renewal && objectKey?.trim() ? `renewal:${objectKey.trim()}` : "");
 
     await emitPaymentSettleClientObservationBestEffort({
       phase: "start",
       correlation,
-      quoteId: req.quote_id,
+      quoteId: logQuoteId,
       walletAddress: req.wallet_address,
       objectId,
       objectKey,
@@ -2386,10 +2435,12 @@ async function runCloudCommandHandler(
 
     let settleResult: BackendSettleForwardResult;
     try {
-      settleResult = await requestPaymentSettleViaProxy(req.quote_id, req.wallet_address, {
+      settleResult = await requestPaymentSettleViaProxy(req.quote_id ?? "", req.wallet_address, {
         ...options.proxySettleOptions,
         correlation,
         fetchImpl: (input, init) => settleFetch(input, init),
+        renewal: req.renewal === true,
+        objectKey: req.object_key,
       });
     } catch (err) {
       const amountErr = await resolveAmountForPaymentSettle(
@@ -2398,7 +2449,7 @@ async function runCloudCommandHandler(
         datastore,
       );
       await datastore.upsertPayment({
-        quote_id: req.quote_id,
+        quote_id: logQuoteId || req.quote_id?.trim() || "payment-settle-error",
         wallet_address: req.wallet_address,
         trans_id: null,
         amount: amountErr,
@@ -2406,7 +2457,7 @@ async function runCloudCommandHandler(
         status: "settle_failed",
         settled_at: null,
       });
-      const cronErr = await datastore.findCronByQuoteId(req.quote_id);
+      const cronErr = await resolveCronRowForPaymentSettle(req, datastore);
       if (cronErr) {
         await datastore.upsertCronJob({ ...cronErr, status: "active" });
       }
@@ -2414,7 +2465,7 @@ async function runCloudCommandHandler(
       await emitPaymentSettleClientObservationBestEffort({
         phase: "result",
         correlation,
-        quoteId: req.quote_id,
+        quoteId: logQuoteId,
         walletAddress: req.wallet_address,
         objectId,
         objectKey,
@@ -2424,7 +2475,13 @@ async function runCloudCommandHandler(
       return { text: `Payment settle failed: ${msg}`, isError: true };
     }
 
-    const amount = await resolveAmountForPaymentSettle(req.quote_id, req.storage_price, datastore);
+    const ledgerQuoteIdFromBody = parseQuoteIdFromPaymentSettleBody(settleResult.bodyText ?? "");
+    const ledgerQuoteId = ledgerQuoteIdFromBody || req.quote_id?.trim() || logQuoteId;
+    const amount = await resolveAmountForPaymentSettle(
+      req.renewal ? undefined : req.quote_id,
+      req.storage_price,
+      datastore,
+    );
     const transId =
       settleResult.status === 200
         ? parseTransIdFromPaymentSettleBody(settleResult.bodyText ?? "")
@@ -2432,7 +2489,7 @@ async function runCloudCommandHandler(
 
     if (settleResult.status === 200) {
       await datastore.upsertPayment({
-        quote_id: req.quote_id,
+        quote_id: ledgerQuoteId,
         wallet_address: req.wallet_address,
         trans_id: transId,
         amount,
@@ -2440,14 +2497,14 @@ async function runCloudCommandHandler(
         status: "settled",
         settled_at: new Date().toISOString(),
       });
-      const cronRow = await datastore.findCronByQuoteId(req.quote_id);
+      const cronRow = await resolveCronRowForPaymentSettle(req, datastore);
       if (cronRow) {
         await datastore.upsertCronJob({ ...cronRow, status: "active" });
       }
       await emitPaymentSettleClientObservationBestEffort({
         phase: "result",
         correlation,
-        quoteId: req.quote_id,
+        quoteId: ledgerQuoteId,
         walletAddress: req.wallet_address,
         objectId,
         objectKey,
@@ -2455,15 +2512,16 @@ async function runCloudCommandHandler(
         outcomeStatus: "succeeded",
         homeDir: mnemosparkHomeDir,
       });
+      const label = req.renewal ? `object ${req.object_key}` : `quote ${req.quote_id}`;
       return {
         text: transId
-          ? `Payment settled for quote ${req.quote_id} (trans_id: ${transId}).`
-          : `Payment settled for quote ${req.quote_id}.`,
+          ? `Payment settled for ${label} (trans_id: ${transId}).`
+          : `Payment settled for ${label}.`,
       };
     }
 
     await datastore.upsertPayment({
-      quote_id: req.quote_id,
+      quote_id: ledgerQuoteId,
       wallet_address: req.wallet_address,
       trans_id: transId,
       amount,
@@ -2471,14 +2529,14 @@ async function runCloudCommandHandler(
       status: "settle_failed",
       settled_at: null,
     });
-    const cronRowFailed = await datastore.findCronByQuoteId(req.quote_id);
+    const cronRowFailed = await resolveCronRowForPaymentSettle(req, datastore);
     if (cronRowFailed) {
       await datastore.upsertCronJob({ ...cronRowFailed, status: "active" });
     }
     await emitPaymentSettleClientObservationBestEffort({
       phase: "result",
       correlation,
-      quoteId: req.quote_id,
+      quoteId: ledgerQuoteId,
       walletAddress: req.wallet_address,
       objectId,
       objectKey,
