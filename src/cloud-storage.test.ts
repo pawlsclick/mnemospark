@@ -55,6 +55,8 @@ describe("sanitizeFriendlyNameForLocalBasename", () => {
   it("throws on empty or invalid names", () => {
     expect(() => sanitizeFriendlyNameForLocalBasename("")).toThrow();
     expect(() => sanitizeFriendlyNameForLocalBasename("..")).toThrow();
+    expect(() => sanitizeFriendlyNameForLocalBasename(".\x01")).toThrow();
+    expect(() => sanitizeFriendlyNameForLocalBasename("..\x01")).toThrow();
   });
 });
 

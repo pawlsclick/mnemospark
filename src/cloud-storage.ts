@@ -167,7 +167,7 @@ export function sanitizeFriendlyNameForLocalBasename(raw: string): string {
   }
   // eslint-disable-next-line no-control-regex -- intentional strip of C0 control chars for filenames
   const noCtrl = segment.replace(/[\x00-\x1f]/g, "").trim();
-  if (!noCtrl) {
+  if (!noCtrl || noCtrl === "." || noCtrl === "..") {
     throw new Error("Invalid friendly name for local file path");
   }
   return noCtrl.length > MAX_LOCAL_FRIENDLY_BASENAME_LEN
