@@ -1422,13 +1422,9 @@ function envMeansExplicitRemoveOrKeep(value: string | undefined): boolean | null
 }
 
 function shouldRemoveLocalBackupAfterUpload(): boolean {
-  const primary = envMeansExplicitRemoveOrKeep(process.env.MNEMOSPARK_REMOVE_BACKUP_FILE);
-  if (primary !== null) {
-    return primary;
-  }
-  const legacy = envMeansExplicitRemoveOrKeep(process.env.MNEMOSPARK_DELETE_BACKUP_AFTER_UPLOAD);
-  if (legacy !== null) {
-    return legacy;
+  const parsed = envMeansExplicitRemoveOrKeep(process.env.MNEMOSPARK_REMOVE_BACKUP_FILE);
+  if (parsed !== null) {
+    return parsed;
   }
   return true;
 }

@@ -790,9 +790,7 @@ describe("cloud command", () => {
 
     let createPaymentFetchCalls = 0;
     const previousRemove = process.env.MNEMOSPARK_REMOVE_BACKUP_FILE;
-    const previousLegacy = process.env.MNEMOSPARK_DELETE_BACKUP_AFTER_UPLOAD;
     delete process.env.MNEMOSPARK_REMOVE_BACKUP_FILE;
-    delete process.env.MNEMOSPARK_DELETE_BACKUP_AFTER_UPLOAD;
 
     const uploadResponseCleanup = {
       quote_id: "quote-cleanup",
@@ -856,11 +854,6 @@ describe("cloud command", () => {
         delete process.env.MNEMOSPARK_REMOVE_BACKUP_FILE;
       } else {
         process.env.MNEMOSPARK_REMOVE_BACKUP_FILE = previousRemove;
-      }
-      if (previousLegacy === undefined) {
-        delete process.env.MNEMOSPARK_DELETE_BACKUP_AFTER_UPLOAD;
-      } else {
-        process.env.MNEMOSPARK_DELETE_BACKUP_AFTER_UPLOAD = previousLegacy;
       }
     }
   });
