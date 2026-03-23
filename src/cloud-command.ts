@@ -1125,7 +1125,6 @@ function quoteCronArgument(value: string | number): string {
 }
 
 function buildStoragePaymentCronCommand(job: {
-  quoteId: string;
   walletAddress: string;
   objectId: string;
   objectKey: string;
@@ -1209,7 +1208,6 @@ async function createStoragePaymentCronJob(
     createdAt,
     schedule: PAYMENT_CRON_SCHEDULE,
     command: buildStoragePaymentCronCommand({
-      quoteId: upload.quote_id,
       walletAddress: upload.addr,
       objectId: upload.object_id,
       objectKey: upload.object_key,

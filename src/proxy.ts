@@ -517,11 +517,12 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
         }
         if (isRenewal) {
           if (quoteId) {
+            logProxyEvent("warn", "proxy_payment_settle_renewal_with_quote_id");
+            emitProxyTerminalFromStatus(correlation, 400, { reason: "renewal_with_quote_id" });
             sendJson(res, 400, {
               error: "Bad request",
               message: "renewal requests must not include quote_id",
             });
-            emitProxyTerminalFromStatus(correlation, 400, { reason: "renewal_with_quote_id" });
             return;
           }
           if (!objectKey) {
