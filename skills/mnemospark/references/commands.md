@@ -4,9 +4,11 @@
 
 ### Backup
 
-`backup <file|directory> [--name <friendly-name>] [--async] [--orchestrator <inline|subagent>] [--timeout-seconds <n>]`
+`backup <file|directory> --name <friendly-name> [--async] [--orchestrator <inline|subagent>] [--timeout-seconds <n>]`
 
-- Purpose: create a local tar+gzip backup artifact and index metadata.
+- Purpose: create a local tar+gzip backup artifact under `~/.openclaw/mnemospark/backup/` and index metadata in SQLite.
+- **Required:** `--name <friendly-name>` (stored in `state.db`; on-disk filename is a sanitized single path segment derived from it).
+- Duplicate `--name` values that resolve to the same on-disk basename will fail with an “already exists” error.
 - `--timeout-seconds <n>` only applies when `--async --orchestrator subagent`.
 
 ### Price storage quote
@@ -18,6 +20,8 @@
 `upload --quote-id <quote-id> --wallet-address <addr> --object-id <id> --object-id-hash <hash> [--name <friendly-name>] [--async] [--orchestrator <inline|subagent>] [--timeout-seconds <n>]`
 
 - Purpose: upload encrypted object for a valid quote.
+- Local archive path: prefers `backup/<sanitized-friendly-name>` from SQLite (see `backup` + `friendly_names`); falls back to legacy `backup/<object-id>` if that file exists.
+- Optional `--name` must exactly match the friendly name in SQLite for that `object_id` (validation only; not sent to the backend).
 - `--timeout-seconds <n>` only applies when `--async --orchestrator subagent`.
 
 ### Payment settle (scheduled / manual)
@@ -35,7 +39,8 @@
 
 `download --wallet-address <addr> [--object-key <object-key> | --name <friendly-name>] [--latest|--at <timestamp>] [--async] [--orchestrator <inline|subagent>] [--timeout-seconds <n>]`
 
-- Purpose: download object content to local filesystem.
+- Purpose: download object content to local filesystem (default directory `~/.openclaw/mnemospark/downloads/`, overridable with `MNEMOSPARK_DOWNLOAD_DIR`).
+- When SQLite has a friendly name for the object, the saved file basename is the sanitized friendly name; otherwise the layout follows `object_key` as before. The backend still receives only `object_id` / `object_key` semantics via the API.
 - `--timeout-seconds <n>` only applies when `--async --orchestrator subagent`.
 
 ### Delete

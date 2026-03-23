@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **Breaking:** `/mnemospark_cloud backup` requires `--name <friendly-name>`. The backup artifact under `~/.openclaw/mnemospark/backup/` is named from a sanitized form of that string (not `object_id`). Upload locates the file using the friendly name in SQLite first, then falls back to the legacy path keyed by `object_id` if present.
+- **Breaking:** After a successful upload, the local backup archive is removed by default. Set `MNEMOSPARK_REMOVE_BACKUP_FILE` to `0`, `false`, `no`, or `n` to keep the file. When `MNEMOSPARK_REMOVE_BACKUP_FILE` is unset, `MNEMOSPARK_DELETE_BACKUP_AFTER_UPLOAD` is still honored (`1`/`true`/… removes, `0`/`false`/… keeps); if both are unset, the archive is removed (previously it was kept).
+- Download writes under `~/.openclaw/mnemospark/downloads/` using the sanitized friendly basename when SQLite has a friendly name for the object; `object_key` remains the storage/API identifier and is not sent as a renamed download to the backend.
+
 ## [0.7.0](https://github.com/pawlsclick/mnemospark/compare/v0.6.0...v0.7.0) (2026-03-22)
 
 

@@ -12,8 +12,10 @@ import {
   forwardStorageDownloadToBackend,
   forwardStorageLsToBackend,
   jsonBodyForLsRequest,
+  parseProxyStorageDownloadPayload,
   parseStorageLsResponse,
   requestStorageLsViaProxy,
+  sanitizeFriendlyNameForLocalBasename,
   type BackendStorageForwardResult,
   type StorageObjectRequest,
 } from "./cloud-storage.js";
@@ -43,6 +45,42 @@ function encryptAesGcm(plaintext: Buffer, key: Buffer): Buffer {
   const tag = cipher.getAuthTag();
   return Buffer.concat([nonce, ciphertext, tag]);
 }
+
+describe("sanitizeFriendlyNameForLocalBasename", () => {
+  it("uses the last path segment and strips control characters", () => {
+    expect(sanitizeFriendlyNameForLocalBasename("my backup")).toBe("my backup");
+    expect(sanitizeFriendlyNameForLocalBasename("a/b/c")).toBe("c");
+  });
+
+  it("throws on empty or invalid names", () => {
+    expect(() => sanitizeFriendlyNameForLocalBasename("")).toThrow();
+    expect(() => sanitizeFriendlyNameForLocalBasename("..")).toThrow();
+  });
+});
+
+describe("parseProxyStorageDownloadPayload", () => {
+  it("parses backend fields and optional mnemospark_local_filename", () => {
+    expect(
+      parseProxyStorageDownloadPayload({
+        wallet_address: "0xabc",
+        object_key: "k1",
+      }),
+    ).toEqual({
+      request: { wallet_address: "0xabc", object_key: "k1" },
+    });
+    expect(
+      parseProxyStorageDownloadPayload({
+        wallet_address: "0xabc",
+        object_key: "k1",
+        mnemospark_local_filename: "friendly.bin",
+      }),
+    ).toEqual({
+      request: { wallet_address: "0xabc", object_key: "k1" },
+      localBasename: "friendly.bin",
+    });
+    expect(parseProxyStorageDownloadPayload({})).toBeNull();
+  });
+});
 
 describe("formatBytesForDisplay", () => {
   it("uses decimal SI units and handles zero", () => {
@@ -278,6 +316,31 @@ describe("cloud storage transport", () => {
     expect(fetchedPresignedUrl).toBe("https://example.com/presigned-download");
     expect(result.filePath).toBe(join(outputDir, "downloads", "file.txt"));
     expect(await readFile(result.filePath, "utf-8")).toBe("hello from object store");
+  });
+
+  it("uses localOutputBasename for on-disk path when provided", async () => {
+    const outputDir = await mkdtemp(join(tmpdir(), "mnemospark_cloud-storage-basename-"));
+    sandboxDirs.push(outputDir);
+
+    const backendResponse: BackendStorageForwardResult = {
+      status: 200,
+      bodyText: JSON.stringify({
+        download_url: "https://example.com/presigned-download",
+        object_key: "cloud/key.tar.gz.enc",
+      }),
+      bodyBuffer: Buffer.from("{}"),
+      contentType: "application/json",
+    };
+
+    const result = await downloadStorageToDisk(SAMPLE_REQUEST, backendResponse, {
+      outputDir,
+      localOutputBasename: "my-friendly-backup",
+      fetchImpl: async () =>
+        new Response("x", { status: 200, headers: { "Content-Type": "application/octet-stream" } }),
+    });
+
+    expect(result.filePath).toBe(join(outputDir, "my-friendly-backup"));
+    expect(await readFile(result.filePath, "utf-8")).toBe("x");
   });
 
   it("decrypts presigned download bytes when wrapped DEK metadata is present", async () => {

@@ -37,6 +37,7 @@ import {
   forwardStorageDownloadToBackend,
   forwardStorageLsToBackend,
   parseStorageLsRequestPayload,
+  parseProxyStorageDownloadPayload,
   parseStorageObjectRequest,
 } from "./cloud-storage.js";
 import { appendJsonlEvent } from "./cloud-jsonl.js";
@@ -1074,8 +1075,8 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
           return;
         }
 
-        const requestPayload = parseStorageObjectRequest(payload);
-        if (!requestPayload) {
+        const parsedDownload = parseProxyStorageDownloadPayload(payload);
+        if (!parsedDownload) {
           logProxyEvent("warn", "proxy_download_missing_fields");
           emitProxyTerminalFromStatus(correlation, 400, { reason: "missing_fields" });
           sendJson(res, 400, {
@@ -1084,6 +1085,9 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
           });
           return;
         }
+
+        const requestPayload = parsedDownload.request;
+        const downloadLocalBasename = parsedDownload.localBasename;
 
         correlation.wallet_address = requestPayload.wallet_address;
         correlation.object_key = requestPayload.object_key;
@@ -1154,6 +1158,9 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
 
         const downloadResult = await downloadStorageToDisk(requestPayload, backendResponse, {
           outputDir: resolveDownloadOutputDir(),
+          ...(downloadLocalBasename?.trim()
+            ? { localOutputBasename: downloadLocalBasename.trim() }
+            : {}),
         });
         logProxyEvent("info", "proxy_download_written_to_disk", {
           key: downloadResult.key,

@@ -127,6 +127,7 @@ export type CloudDatastore = {
     walletAddress: string,
     objectKey: string,
   ) => Promise<string | null>;
+  findLatestFriendlyNameForObjectId: (objectId: string) => Promise<string | null>;
   findCronAndPaymentForObjectKey: (
     walletAddress: string,
     objectKey: string,
@@ -749,6 +750,19 @@ export async function createCloudDatastore(homeDir?: string): Promise<CloudDatas
           )
           .get(w, obj.object_id) as { friendly_name: string } | undefined;
         return byObj?.friendly_name ?? null;
+      }, null),
+    findLatestFriendlyNameForObjectId: async (objectId) =>
+      safe(() => {
+        const row = db!
+          .prepare(
+            `SELECT friendly_name
+             FROM friendly_names
+             WHERE object_id = ? AND is_active = 1
+             ORDER BY created_at DESC
+             LIMIT 1`,
+          )
+          .get(objectId.trim()) as { friendly_name: string } | undefined;
+        return row?.friendly_name ?? null;
       }, null),
     findCronAndPaymentForObjectKey: async (walletAddress, objectKey) =>
       safe(() => {

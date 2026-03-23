@@ -55,6 +55,8 @@ async function seedQuotedStorageInSqlite(
     storagePrice: number;
     provider?: string;
     region?: string;
+    /** When set, inserts a friendly_names row for upload path / name resolution. */
+    friendlyName?: string;
   },
 ): Promise<void> {
   const datastore = await createCloudDatastore(homeDir);
@@ -77,6 +79,15 @@ async function seedQuotedStorageInSqlite(
     network: null,
     status: "quoted",
   });
+  if (params.friendlyName?.trim()) {
+    await datastore.upsertFriendlyName({
+      friendly_name: params.friendlyName.trim(),
+      object_id: params.objectId,
+      object_key: null,
+      quote_id: params.quoteId,
+      wallet_address: params.walletAddress,
+    });
+  }
 }
 
 describe("expandTilde", () => {
@@ -220,12 +231,13 @@ describe("cloud command", () => {
     const result = await command.handler({
       channel: "test",
       isAuthorizedSender: true,
-      args: `backup "${sourcePathWithSpaces}"`,
-      commandBody: `backup "${sourcePathWithSpaces}"`,
+      args: `backup "${sourcePathWithSpaces}" --name "source file"`,
+      commandBody: `backup "${sourcePathWithSpaces}" --name "source file"`,
       config: {},
     });
 
     expect(result.isError).not.toBe(true);
+    expect(result.text).toContain("friendly-name:");
     expect(result.text).toContain("object-id:");
     expect(result.text).toContain("object-id-hash:");
     expect(result.text).toContain("object-size:");
@@ -283,8 +295,8 @@ describe("cloud command", () => {
     const result = await command.handler({
       channel: "test",
       isAuthorizedSender: true,
-      args: "backup /tmp/something",
-      commandBody: "backup /tmp/something",
+      args: "backup /tmp/something --name mybackup",
+      commandBody: "backup /tmp/something --name mybackup",
       config: {},
     });
 
@@ -618,7 +630,7 @@ describe("cloud command", () => {
     expect(failCompleted?.http_status).toBe(402);
   });
 
-  it("handles /mnemospark cloud upload, builds encrypted payload, logs upload response, and keeps archive by default", async () => {
+  it("handles /mnemospark cloud upload, builds encrypted payload, logs upload response, and keeps archive when MNEMOSPARK_REMOVE_BACKUP_FILE=0", async () => {
     const { homeDir, tmpBackupDir } = await createSandbox();
     const walletKey = `0x${"11".repeat(32)}` as const;
     const walletAddress = privateKeyToAccount(walletKey).address;
@@ -635,7 +647,11 @@ describe("cloud command", () => {
       objectId,
       objectHash,
       storagePrice: 2.75,
+      friendlyName: "legacy-upload",
     });
+
+    const previousRemove = process.env.MNEMOSPARK_REMOVE_BACKUP_FILE;
+    process.env.MNEMOSPARK_REMOVE_BACKUP_FILE = "0";
 
     let createPaymentFetchCalls = 0;
     let capturedBody: Record<string, unknown> | undefined;
@@ -690,62 +706,69 @@ describe("cloud command", () => {
       },
     });
 
-    const result = await command.handler({
-      channel: "test",
-      isAuthorizedSender: true,
-      args: [
-        "upload",
-        "--quote-id quote-abc123",
-        `--wallet-address ${walletAddress}`,
-        `--object-id ${objectId}`,
-        `--object-id-hash ${objectHash}`,
-      ].join(" "),
-      commandBody: "upload",
-      config: {},
-    });
+    try {
+      const result = await command.handler({
+        channel: "test",
+        isAuthorizedSender: true,
+        args: [
+          "upload",
+          "--quote-id quote-abc123",
+          `--wallet-address ${walletAddress}`,
+          `--object-id ${objectId}`,
+          `--object-id-hash ${objectHash}`,
+        ].join(" "),
+        commandBody: "upload",
+        config: {},
+      });
 
-    expect(createPaymentFetchCalls).toBe(0);
-    expect(capturedIdempotency).toBe("idempotency-123");
-    expect(capturedBody?.quoted_storage_price).toBe(2.75);
-    const payload = capturedBody?.payload as Record<string, unknown>;
-    expect(payload.mode).toBe("inline");
-    expect(typeof payload.content_base64).toBe("string");
-    expect(result.isError).not.toBe(true);
-    if (!result.text) {
-      throw new Error("Expected upload response text");
+      expect(createPaymentFetchCalls).toBe(0);
+      expect(capturedIdempotency).toBe("idempotency-123");
+      expect(capturedBody?.quoted_storage_price).toBe(2.75);
+      const payload = capturedBody?.payload as Record<string, unknown>;
+      expect(payload.mode).toBe("inline");
+      expect(typeof payload.content_base64).toBe("string");
+      expect(result.isError).not.toBe(true);
+      if (!result.text) {
+        throw new Error("Expected upload response text");
+      }
+      expect(result.text).toContain(
+        "Your file `obj-upload-001` with key `obj-upload-001.tar.gz.enc` has been stored using `aws` in folder `mnemospark-1234` in region `us-east-1`",
+      );
+      const cronIdMatch = result.text.match(/A cron job `([^`]+)` has been configured/);
+      const cronId = cronIdMatch?.[1];
+      expect(cronId).toBeTruthy();
+      expect(result.text).toContain("monthly");
+      expect(result.text).toContain("32-day deadline");
+      expect(result.text).toContain(`/mnemospark_cloud ls --wallet-address \`${walletAddress}\``);
+      expect(result.text).toContain("Thank you for using mnemospark!");
+      expect(result.text).toContain("pluggedin@mnemospark.ai");
+
+      const cronTablePath = join(homeDir, ".openclaw", "mnemospark", "crontab.txt");
+      const cronTableContent = await readFile(cronTablePath, "utf-8");
+      const cronEntryLine = cronTableContent.trim().split("\n").at(-1);
+      expect(cronEntryLine).toBeTruthy();
+      const cronEntry = JSON.parse(cronEntryLine ?? "{}") as Record<string, unknown>;
+      expect(cronEntry.cronId).toBe(cronId);
+      expect(cronEntry.objectId).toBe(objectId);
+      expect(cronEntry.objectKey).toBe("obj-upload-001.tar.gz.enc");
+      expect(cronEntry.quoteId).toBe("quote-abc123");
+      expect(cronEntry.storagePrice).toBe(2.75);
+      expect(cronEntry.schedule).toBe("0 0 1 * *");
+      expect(String(cronEntry.command)).toContain("/mnemospark_cloud payment-settle");
+      expect(String(cronEntry.command)).toContain("quote-abc123");
+
+      const archiveExists = await stat(archivePath);
+      expect(archiveExists.isFile()).toBe(true);
+    } finally {
+      if (previousRemove === undefined) {
+        delete process.env.MNEMOSPARK_REMOVE_BACKUP_FILE;
+      } else {
+        process.env.MNEMOSPARK_REMOVE_BACKUP_FILE = previousRemove;
+      }
     }
-    expect(result.text).toContain(
-      "Your file `obj-upload-001` with key `obj-upload-001.tar.gz.enc` has been stored using `aws` in folder `mnemospark-1234` in region `us-east-1`",
-    );
-    const cronIdMatch = result.text.match(/A cron job `([^`]+)` has been configured/);
-    const cronId = cronIdMatch?.[1];
-    expect(cronId).toBeTruthy();
-    expect(result.text).toContain("monthly");
-    expect(result.text).toContain("32-day deadline");
-    expect(result.text).toContain(`/mnemospark_cloud ls --wallet-address \`${walletAddress}\``);
-    expect(result.text).toContain("Thank you for using mnemospark!");
-    expect(result.text).toContain("pluggedin@mnemospark.ai");
-
-    const cronTablePath = join(homeDir, ".openclaw", "mnemospark", "crontab.txt");
-    const cronTableContent = await readFile(cronTablePath, "utf-8");
-    const cronEntryLine = cronTableContent.trim().split("\n").at(-1);
-    expect(cronEntryLine).toBeTruthy();
-    const cronEntry = JSON.parse(cronEntryLine ?? "{}") as Record<string, unknown>;
-    expect(cronEntry.cronId).toBe(cronId);
-    expect(cronEntry.objectId).toBe(objectId);
-    expect(cronEntry.objectKey).toBe("obj-upload-001.tar.gz.enc");
-    expect(cronEntry.quoteId).toBe("quote-abc123");
-    expect(cronEntry.storagePrice).toBe(2.75);
-    expect(cronEntry.schedule).toBe("0 0 1 * *");
-    expect(String(cronEntry.command)).toContain("/mnemospark_cloud payment-settle");
-    expect(String(cronEntry.command)).toContain("quote-abc123");
-
-    // By default, local backup archive should remain on disk.
-    const archiveExists = await stat(archivePath);
-    expect(archiveExists.isFile()).toBe(true);
   });
 
-  it("optionally deletes local backup archive after successful /mnemospark cloud upload when flag is set", async () => {
+  it("removes local backup archive after successful /mnemospark cloud upload by default", async () => {
     const { homeDir, tmpBackupDir } = await createSandbox();
     const walletKey = `0x${"44".repeat(32)}` as const;
     const walletAddress = privateKeyToAccount(walletKey).address;
@@ -762,11 +785,14 @@ describe("cloud command", () => {
       objectId,
       objectHash,
       storagePrice: 2.75,
+      friendlyName: "cleanup-legacy",
     });
 
     let createPaymentFetchCalls = 0;
-    const previousEnv = process.env.MNEMOSPARK_DELETE_BACKUP_AFTER_UPLOAD;
-    process.env.MNEMOSPARK_DELETE_BACKUP_AFTER_UPLOAD = "1";
+    const previousRemove = process.env.MNEMOSPARK_REMOVE_BACKUP_FILE;
+    const previousLegacy = process.env.MNEMOSPARK_DELETE_BACKUP_AFTER_UPLOAD;
+    delete process.env.MNEMOSPARK_REMOVE_BACKUP_FILE;
+    delete process.env.MNEMOSPARK_DELETE_BACKUP_AFTER_UPLOAD;
 
     const uploadResponseCleanup = {
       quote_id: "quote-cleanup",
@@ -826,10 +852,15 @@ describe("cloud command", () => {
 
       await expect(stat(archivePath)).rejects.toThrow();
     } finally {
-      if (previousEnv === undefined) {
+      if (previousRemove === undefined) {
+        delete process.env.MNEMOSPARK_REMOVE_BACKUP_FILE;
+      } else {
+        process.env.MNEMOSPARK_REMOVE_BACKUP_FILE = previousRemove;
+      }
+      if (previousLegacy === undefined) {
         delete process.env.MNEMOSPARK_DELETE_BACKUP_AFTER_UPLOAD;
       } else {
-        process.env.MNEMOSPARK_DELETE_BACKUP_AFTER_UPLOAD = previousEnv;
+        process.env.MNEMOSPARK_DELETE_BACKUP_AFTER_UPLOAD = previousLegacy;
       }
     }
   });
@@ -850,6 +881,7 @@ describe("cloud command", () => {
       objectId,
       objectHash,
       storagePrice: 2.75,
+      friendlyName: "balance-fail",
     });
 
     const command = createCloudCommand({
@@ -906,6 +938,7 @@ describe("cloud command", () => {
       objectHash,
       storagePrice: 2.75,
       region: "[REDACTED]",
+      friendlyName: "presigned-confirm",
     });
 
     let capturedConfirmRequest: Record<string, unknown> | undefined;
@@ -1032,6 +1065,7 @@ describe("cloud command", () => {
       objectHash,
       storagePrice: 2.75,
       region: "[REDACTED]",
+      friendlyName: "presigned-fail",
     });
 
     const command = createCloudCommand({
@@ -1150,6 +1184,7 @@ describe("cloud command", () => {
       objectId,
       objectHash,
       storagePrice: 2.75,
+      friendlyName: "presigned-no-url",
     });
 
     let capturedBody: Record<string, unknown> | undefined;
@@ -1861,7 +1896,7 @@ describe("cloud command", () => {
     const result = await command.handler({
       channel: "test",
       isAuthorizedSender: true,
-      args: "backup /tmp/source --async --orchestrator subagent",
+      args: "backup /tmp/source --name subagent-backup --async --orchestrator subagent",
       commandBody: "backup",
       config: {},
     });
