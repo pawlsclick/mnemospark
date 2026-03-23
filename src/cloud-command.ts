@@ -1410,7 +1410,7 @@ function envMeansExplicitRemoveOrKeep(value: string | undefined): boolean | null
   if (n === "1" || n === "true" || n === "yes" || n === "y") {
     return true;
   }
-  return null;
+  return false;
 }
 
 function shouldRemoveLocalBackupAfterUpload(): boolean {
