@@ -112,6 +112,23 @@ The blockchain transaction is the payment record.
 
 ---
 
+## Environment variables
+
+Optional unless noted. All names use the `MNEMOSPARK_` prefix.
+
+| Variable                          | Purpose                                                                                                                                                                                                                                   |
+| --------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `MNEMOSPARK_BACKEND_API_BASE_URL` | Base URL for the mnemospark backend API (required for the local HTTP proxy to forward storage calls). Example: `https://{api-id}.execute-api.{region}.amazonaws.com/{stage}`.                                                             |
+| `MNEMOSPARK_PROXY_PORT`           | TCP port for the mnemospark HTTP proxy (default `7120`).                                                                                                                                                                                  |
+| `MNEMOSPARK_DOWNLOAD_DIR`         | Directory where the proxy writes downloaded objects (default `~/.openclaw/mnemospark/downloads/`).                                                                                                                                        |
+| `MNEMOSPARK_WALLET_KEY`           | Path to the wallet private key file when not using the default `~/.openclaw/mnemospark/wallet/wallet.key`.                                                                                                                                |
+| `MNEMOSPARK_REMOVE_BACKUP_FILE`   | After a **successful** cloud upload, delete the local backup archive under `~/.openclaw/mnemospark/backup/`. **Default when unset:** remove the file. Set to `0`, `false`, `no`, or `n` to keep it; `1`, `true`, `yes`, or `y` to remove. |
+| `MNEMOSPARK_DISABLED`             | Set to `true` or `1` to disable plugin registration.                                                                                                                                                                                      |
+| `MNEMOSPARK_DISABLE_SQLITE`       | Set to `1` to disable local SQLite (`state.db`); cloud commands that need local state will fail.                                                                                                                                          |
+| `MNEMOSPARK_SQLITE_STRICT`        | Set to `1` so certain SQLite consistency checks (e.g. friendly-name verification after upload) throw instead of warning.                                                                                                                  |
+
+---
+
 ## Typical Workflow
 
 1. Install plugin
