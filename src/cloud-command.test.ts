@@ -744,20 +744,32 @@ describe("cloud command", () => {
       expect(result.text).toContain("Thank you for using mnemospark!");
       expect(result.text).toContain("pluggedin@mnemospark.ai");
 
-      const cronTablePath = join(homeDir, ".openclaw", "mnemospark", "crontab.txt");
-      const cronTableContent = await readFile(cronTablePath, "utf-8");
-      const cronEntryLine = cronTableContent.trim().split("\n").at(-1);
-      expect(cronEntryLine).toBeTruthy();
-      const cronEntry = JSON.parse(cronEntryLine ?? "{}") as Record<string, unknown>;
-      expect(cronEntry.cronId).toBe(cronId);
-      expect(cronEntry.objectId).toBe(objectId);
-      expect(cronEntry.objectKey).toBe("obj-upload-001.tar.gz.enc");
-      expect(cronEntry.quoteId).toBe("quote-abc123");
-      expect(cronEntry.storagePrice).toBe(2.75);
-      expect(cronEntry.schedule).toBe("0 0 1 * *");
-      expect(String(cronEntry.command)).toContain("/mnemospark_cloud payment-settle");
-      expect(String(cronEntry.command)).toContain("--renewal");
-      expect(String(cronEntry.command)).toContain("obj-upload-001.tar.gz.enc");
+      const cronJobsPath = join(homeDir, ".openclaw", "cron", "jobs.json");
+      const cronJobs = JSON.parse(await readFile(cronJobsPath, "utf-8")) as Array<
+        Record<string, unknown>
+      >;
+      const cronEntry = cronJobs.at(-1);
+      expect(cronEntry).toBeTruthy();
+      expect(cronEntry?.jobId).toBe(cronId);
+      expect(cronEntry?.name).toBe("Mnemospark Monthly Renewal");
+      expect((cronEntry?.schedule as Record<string, unknown>)?.kind).toBe("cron");
+      expect((cronEntry?.schedule as Record<string, unknown>)?.expr).toBe("0 0 1 * *");
+      expect((cronEntry?.schedule as Record<string, unknown>)?.tz).toBe("UTC");
+      expect((cronEntry?.payload as Record<string, unknown>)?.kind).toBe("agentTurn");
+      expect(String((cronEntry?.payload as Record<string, unknown>)?.message)).toContain(
+        "/mnemospark_cloud payment-settle",
+      );
+      expect(String((cronEntry?.payload as Record<string, unknown>)?.message)).toContain(
+        "--renewal",
+      );
+      expect(String((cronEntry?.payload as Record<string, unknown>)?.message)).toContain(
+        "obj-upload-001.tar.gz.enc",
+      );
+      expect(cronEntry?.sessionTarget).toBe("isolated");
+      expect((cronEntry?.delivery as Record<string, unknown>)?.mode).toBe("announce");
+      expect((cronEntry?.delivery as Record<string, unknown>)?.text).toBe(
+        "Thank you for using mnemospark cloud storage. Your renewal has been processed.",
+      );
 
       const archiveExists = await stat(archivePath);
       expect(archiveExists.isFile()).toBe(true);
@@ -1505,25 +1517,31 @@ describe("cloud command", () => {
     let capturedRequest: Record<string, unknown> | undefined;
     const cronId = "cron-delete-001";
 
-    const cronTablePath = join(homeDir, ".openclaw", "mnemospark", "crontab.txt");
-    await mkdir(join(homeDir, ".openclaw", "mnemospark"), { recursive: true });
+    const cronJobsPath = join(homeDir, ".openclaw", "cron", "jobs.json");
+    await mkdir(join(homeDir, ".openclaw", "cron"), { recursive: true });
     await writeFile(
-      cronTablePath,
-      `${JSON.stringify({
-        cronId,
-        createdAt: "2026-02-25 20:10:00",
-        schedule: "0 0 1 * *",
-        command:
-          '/mnemospark_cloud payment-settle --renewal --wallet-address "0x1234abcd" --object-id "obj-001" --object-key "backup/archive.tar.gz" --storage-price "2.75"',
-        quoteId: "quote-abc123",
-        storagePrice: 2.75,
-        walletAddress: "0x1234abcd",
-        objectId: "obj-001",
-        objectKey: "backup/archive.tar.gz",
-        provider: "aws",
-        bucketName: "wallet-bucket-001",
-        location: "us-east-1",
-      })}\n`,
+      cronJobsPath,
+      `${JSON.stringify(
+        [
+          {
+            jobId: cronId,
+            name: "Mnemospark Monthly Renewal",
+            schedule: { kind: "cron", expr: "0 0 1 * *", tz: "UTC" },
+            payload: {
+              kind: "agentTurn",
+              message:
+                '/mnemospark_cloud payment-settle --renewal --wallet-address "0x1234abcd" --object-id "obj-001" --object-key "backup/archive.tar.gz" --storage-price "2.75"',
+            },
+            sessionTarget: "isolated",
+            delivery: {
+              mode: "announce",
+              text: "Thank you for using mnemospark cloud storage. Your renewal has been processed.",
+            },
+          },
+        ],
+        null,
+        2,
+      )}\n`,
       "utf-8",
     );
 
@@ -1561,8 +1579,8 @@ describe("cloud command", () => {
       ].join("\n"),
     );
 
-    const cronTableContent = await readFile(cronTablePath, "utf-8");
-    expect(cronTableContent.trim()).toBe("");
+    const cronJobs = JSON.parse(await readFile(cronJobsPath, "utf-8")) as unknown[];
+    expect(cronJobs).toEqual([]);
 
     const eventsPath = join(homeDir, ".openclaw", "mnemospark", "events.jsonl");
     const deleteEvent = JSON.parse(
@@ -2269,9 +2287,9 @@ describe("cloud command", () => {
 
   it("returns success when cloud delete succeeds but cron cleanup throws", async () => {
     const { homeDir } = await createSandbox();
-    const cronTablePath = join(homeDir, ".openclaw", "mnemospark", "crontab.txt");
-    await mkdir(join(homeDir, ".openclaw", "mnemospark"), { recursive: true });
-    await mkdir(cronTablePath, { recursive: true });
+    const cronJobsPath = join(homeDir, ".openclaw", "cron", "jobs.json");
+    await mkdir(join(homeDir, ".openclaw", "cron"), { recursive: true });
+    await writeFile(cronJobsPath, "{invalid json", "utf-8");
 
     const command = createCloudCommand({
       mnemosparkHomeDir: homeDir,

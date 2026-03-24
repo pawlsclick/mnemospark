@@ -6,7 +6,7 @@ import {
   randomUUID,
 } from "node:crypto";
 import { createReadStream, statfsSync } from "node:fs";
-import { appendFile, lstat, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { lstat, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { privateKeyToAccount } from "viem/accounts";
@@ -59,7 +59,7 @@ import type { RequestCorrelation } from "./cloud-correlation.js";
 const SUPPORTED_BACKUP_PLATFORMS = new Set<NodeJS.Platform>(["darwin", "linux"]);
 const BACKUP_DIR_SUBPATH = join(".openclaw", "mnemospark", "backup");
 const DEFAULT_BACKUP_DIR = join(homedir(), BACKUP_DIR_SUBPATH);
-const CRON_TABLE_SUBPATH = join(".openclaw", "mnemospark", "crontab.txt");
+const OPENCLAW_CRON_JOBS_SUBPATH = join(".openclaw", "cron", "jobs.json");
 const BLOCKRUN_WALLET_KEY_SUBPATH = join(".openclaw", "blockrun", "wallet.key");
 const MNEMOSPARK_WALLET_KEY_SUBPATH = join(".openclaw", "mnemospark", "wallet", "wallet.key");
 const INLINE_UPLOAD_MAX_BYTES = 4_500_000;
@@ -74,7 +74,7 @@ const QUOTE_VALIDITY_USER_NOTE =
 const MNEMOSPARK_SUPPORT_EMAIL = "pluggedin@mnemospark.ai";
 
 const CLOUD_HELP_FOOTER_STATE =
-  "Local state: mnemospark records quotes, objects, payments, cron jobs, friendly names, and operation metadata in ~/.openclaw/mnemospark/state.db (SQLite). For troubleshooting and correlation, commands and the HTTP proxy append structured JSON lines to ~/.openclaw/mnemospark/events.jsonl. Monthly storage billing jobs are listed in ~/.openclaw/mnemospark/crontab.txt for your system scheduler.";
+  "Local state: mnemospark records quotes, objects, payments, cron jobs, friendly names, and operation metadata in ~/.openclaw/mnemospark/state.db (SQLite). For troubleshooting and correlation, commands and the HTTP proxy append structured JSON lines to ~/.openclaw/mnemospark/events.jsonl. Monthly storage billing jobs are listed in ~/.openclaw/cron/jobs.json for OpenClaw scheduling.";
 
 const REQUIRED_PRICE_STORAGE =
   "--wallet-address, --object-id, --object-id-hash, --gb, --provider, --region";
@@ -802,8 +802,8 @@ function parseCloudArgs(args?: string): ParsedCloudArgs {
   return { mode: "unknown" };
 }
 
-function resolveCronTablePath(homeDir?: string): string {
-  return join(homeDir ?? homedir(), CRON_TABLE_SUBPATH);
+function resolveOpenClawCronJobsPath(homeDir?: string): string {
+  return join(homeDir ?? homedir(), OPENCLAW_CRON_JOBS_SUBPATH);
 }
 
 async function calculateInputSizeBytes(targetPath: string): Promise<number> {
@@ -1006,112 +1006,123 @@ type StoragePaymentCronJob = {
   location: string;
 };
 
-function formatTimestamp(date: Date): string {
-  const pad = (value: number): string => value.toString().padStart(2, "0");
-  return [
-    date.getFullYear().toString(),
-    "-",
-    pad(date.getMonth() + 1),
-    "-",
-    pad(date.getDate()),
-    " ",
-    pad(date.getHours()),
-    ":",
-    pad(date.getMinutes()),
-    ":",
-    pad(date.getSeconds()),
-  ].join("");
-}
+type OpenClawCronSchedule = {
+  kind: "cron";
+  expr: string;
+  tz: string;
+};
 
-function parseStoragePaymentCronJobLine(line: string): StoragePaymentCronJob | null {
-  const trimmed = line.trim();
-  if (!trimmed) {
+type OpenClawCronPayload = {
+  kind: "agentTurn";
+  message: string;
+};
+
+type OpenClawCronDelivery = {
+  mode: "announce";
+  text: string;
+};
+
+type OpenClawCronJobEntry = {
+  jobId: string;
+  name: string;
+  schedule: OpenClawCronSchedule;
+  payload: OpenClawCronPayload;
+  sessionTarget: "isolated";
+  delivery: OpenClawCronDelivery;
+};
+
+type OpenClawCronJobForLookup = {
+  jobId: string;
+  message: string;
+};
+
+function parseOpenClawCronJobForLookup(value: unknown): OpenClawCronJobForLookup | null {
+  if (!value || typeof value !== "object") {
     return null;
   }
-
-  let payload: unknown;
-  try {
-    payload = JSON.parse(trimmed);
-  } catch {
+  const record = value as Record<string, unknown>;
+  const jobId = typeof record.jobId === "string" ? record.jobId.trim() : "";
+  const payloadRaw = record.payload;
+  if (!jobId || !payloadRaw || typeof payloadRaw !== "object") {
     return null;
   }
-
-  if (!payload || typeof payload !== "object") {
-    return null;
-  }
-  const record = payload as Record<string, unknown>;
-
-  const cronId = typeof record.cronId === "string" ? record.cronId.trim() : "";
-  const createdAt = typeof record.createdAt === "string" ? record.createdAt.trim() : "";
-  const schedule = typeof record.schedule === "string" ? record.schedule.trim() : "";
-  const command = typeof record.command === "string" ? record.command.trim() : "";
-  const quoteId = typeof record.quoteId === "string" ? record.quoteId.trim() : "";
-  const storagePrice = typeof record.storagePrice === "number" ? record.storagePrice : Number.NaN;
-  const walletAddress = typeof record.walletAddress === "string" ? record.walletAddress.trim() : "";
-  const objectId = typeof record.objectId === "string" ? record.objectId.trim() : "";
-  const objectKey = typeof record.objectKey === "string" ? record.objectKey.trim() : "";
-  const provider = typeof record.provider === "string" ? record.provider.trim() : "";
-  const bucketName = typeof record.bucketName === "string" ? record.bucketName.trim() : "";
-  const location = typeof record.location === "string" ? record.location.trim() : "";
-
-  if (
-    !cronId ||
-    !createdAt ||
-    !schedule ||
-    !command ||
-    !quoteId ||
-    !Number.isFinite(storagePrice) ||
-    storagePrice <= 0 ||
-    !walletAddress ||
-    !objectId ||
-    !objectKey ||
-    !provider ||
-    !bucketName ||
-    !location
-  ) {
+  const payloadRecord = payloadRaw as Record<string, unknown>;
+  const payloadKind = payloadRecord.kind;
+  const payloadMessage =
+    typeof payloadRecord.message === "string" ? payloadRecord.message.trim() : "";
+  if (payloadKind !== "agentTurn" || !payloadMessage) {
     return null;
   }
 
   return {
-    cronId,
-    createdAt,
-    schedule,
-    command,
-    quoteId,
-    storagePrice,
-    walletAddress,
-    objectId,
-    objectKey,
-    provider,
-    bucketName,
-    location,
+    jobId,
+    message: payloadMessage,
   };
 }
 
-/** Latest matching cron job line in crontab.txt for an object key (scan from end of file). */
-async function findCronJobInCrontabByObjectKey(
-  objectKey: string,
+function parseOpenClawCronJobId(value: unknown): string | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+  const record = value as Record<string, unknown>;
+  const jobId = typeof record.jobId === "string" ? record.jobId.trim() : "";
+  return jobId || null;
+}
+
+async function readOpenClawCronJobs(
   homeDir?: string,
-): Promise<{ cronId: string; objectId: string; objectKey: string } | null> {
-  const cronTablePath = resolveCronTablePath(homeDir);
+): Promise<{ path: string; rawJobs: unknown[] }> {
+  const jobsPath = resolveOpenClawCronJobsPath(homeDir);
   let content: string;
   try {
-    content = await readFile(cronTablePath, "utf-8");
+    content = await readFile(jobsPath, "utf-8");
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return null;
+      return { path: jobsPath, rawJobs: [] };
     }
     throw error;
   }
-  const lines = content
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0);
-  for (let idx = lines.length - 1; idx >= 0; idx -= 1) {
-    const parsed = parseStoragePaymentCronJobLine(lines[idx]);
+
+  if (!content.trim()) {
+    return { path: jobsPath, rawJobs: [] };
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(content);
+  } catch {
+    return { path: jobsPath, rawJobs: [] };
+  }
+  if (!Array.isArray(parsed)) {
+    return { path: jobsPath, rawJobs: [] };
+  }
+
+  return {
+    path: jobsPath,
+    rawJobs: parsed,
+  };
+}
+
+async function writeOpenClawCronJobs(jobsPath: string, rawJobs: unknown[]): Promise<void> {
+  await mkdir(dirname(jobsPath), { recursive: true });
+  await writeFile(jobsPath, `${JSON.stringify(rawJobs, null, 2)}\n`, "utf-8");
+}
+
+/** Latest matching OpenClaw cron job in jobs.json for an object key (scan from end of file). */
+async function findCronJobInOpenClawCronJobsByObjectKey(
+  objectKey: string,
+  homeDir?: string,
+): Promise<{ cronId: string; objectId: string; objectKey: string } | null> {
+  const { rawJobs } = await readOpenClawCronJobs(homeDir);
+  for (let idx = rawJobs.length - 1; idx >= 0; idx -= 1) {
+    const cronJob = parseOpenClawCronJobForLookup(rawJobs[idx]);
+    if (!cronJob) {
+      continue;
+    }
+    const parsed = parseStoragePaymentCronCommand(cronJob.message);
     if (parsed && parsed.objectKey === objectKey) {
       return {
-        cronId: parsed.cronId,
+        cronId: cronJob.jobId,
         objectId: parsed.objectId,
         objectKey: parsed.objectKey,
       };
@@ -1145,53 +1156,77 @@ function buildStoragePaymentCronCommand(job: {
   ].join(" ");
 }
 
+function parseStoragePaymentCronCommand(
+  command: string,
+): { objectId: string; objectKey: string } | null {
+  const objectIdMatch = command.match(/--object-id\s+("([^"\\]|\\.)*"|'([^'\\]|\\.)*'|\S+)/);
+  const objectKeyMatch = command.match(/--object-key\s+("([^"\\]|\\.)*"|'([^'\\]|\\.)*'|\S+)/);
+  if (!objectIdMatch || !objectKeyMatch) {
+    return null;
+  }
+
+  const parseToken = (token: string): string | null => {
+    const trimmed = token.trim();
+    if (!trimmed) {
+      return null;
+    }
+    if (trimmed.startsWith('"') && trimmed.endsWith('"')) {
+      try {
+        return JSON.parse(trimmed);
+      } catch {
+        return trimmed.slice(1, -1);
+      }
+    }
+    if (trimmed.startsWith("'") && trimmed.endsWith("'")) {
+      return trimmed.slice(1, -1);
+    }
+    return trimmed;
+  };
+
+  const objectId = parseToken(objectIdMatch[1] ?? "");
+  const objectKey = parseToken(objectKeyMatch[1] ?? "");
+  if (!objectId || !objectKey) {
+    return null;
+  }
+
+  return { objectId, objectKey };
+}
+
 async function appendStoragePaymentCronJob(
   cronJob: StoragePaymentCronJob,
   homeDir?: string,
 ): Promise<string> {
-  const cronTablePath = resolveCronTablePath(homeDir);
-  await mkdir(dirname(cronTablePath), { recursive: true });
-  await appendFile(cronTablePath, `${JSON.stringify(cronJob)}\n`, "utf-8");
-  return cronTablePath;
+  const { path: jobsPath, rawJobs } = await readOpenClawCronJobs(homeDir);
+  const openClawJob: OpenClawCronJobEntry = {
+    jobId: cronJob.cronId,
+    name: "Mnemospark Monthly Renewal",
+    schedule: {
+      kind: "cron",
+      expr: PAYMENT_CRON_SCHEDULE,
+      tz: "UTC",
+    },
+    payload: {
+      kind: "agentTurn",
+      message: cronJob.command,
+    },
+    sessionTarget: "isolated",
+    delivery: {
+      mode: "announce",
+      text: "Thank you for using mnemospark cloud storage. Your renewal has been processed.",
+    },
+  };
+  rawJobs.push(openClawJob);
+  await writeOpenClawCronJobs(jobsPath, rawJobs);
+  return jobsPath;
 }
 
 async function removeStoragePaymentCronJob(cronId: string, homeDir?: string): Promise<boolean> {
-  const cronTablePath = resolveCronTablePath(homeDir);
-
-  let content: string;
-  try {
-    content = await readFile(cronTablePath, "utf-8");
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return false;
-    }
-    throw error;
-  }
-
-  const lines = content.split(/\r?\n/);
-  let removed = false;
-  const keptLines: string[] = [];
-
-  for (const line of lines) {
-    const trimmed = line.trim();
-    if (!trimmed) {
-      continue;
-    }
-    const parsed = parseStoragePaymentCronJobLine(trimmed);
-    if (parsed && parsed.cronId === cronId) {
-      removed = true;
-      continue;
-    }
-    keptLines.push(trimmed);
-  }
-
-  if (!removed) {
+  const { path: jobsPath, rawJobs } = await readOpenClawCronJobs(homeDir);
+  const nextJobs = rawJobs.filter((job) => parseOpenClawCronJobId(job) !== cronId);
+  if (nextJobs.length === rawJobs.length) {
     return false;
   }
-
-  await mkdir(dirname(cronTablePath), { recursive: true });
-  const nextContent = keptLines.length > 0 ? `${keptLines.join("\n")}\n` : "";
-  await writeFile(cronTablePath, nextContent, "utf-8");
+  await writeOpenClawCronJobs(jobsPath, nextJobs);
   return true;
 }
 
@@ -1202,10 +1237,9 @@ async function createStoragePaymentCronJob(
   nowDateFn: () => Date = () => new Date(),
 ): Promise<StoragePaymentCronJob> {
   const cronId = randomUUID();
-  const createdAt = formatTimestamp(nowDateFn());
   const cronJob: StoragePaymentCronJob = {
     cronId,
-    createdAt,
+    createdAt: nowDateFn().toISOString(),
     schedule: PAYMENT_CRON_SCHEDULE,
     command: buildStoragePaymentCronCommand({
       walletAddress: upload.addr,
@@ -3630,7 +3664,7 @@ async function runCloudCommandHandler(
         };
       }
       if (!cronEntry) {
-        cronEntry = await findCronJobInCrontabByObjectKey(
+        cronEntry = await findCronJobInOpenClawCronJobsByObjectKey(
           resolvedRequest.object_key,
           mnemosparkHomeDir,
         );
