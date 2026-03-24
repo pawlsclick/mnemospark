@@ -59,7 +59,6 @@ import type { RequestCorrelation } from "./cloud-correlation.js";
 const SUPPORTED_BACKUP_PLATFORMS = new Set<NodeJS.Platform>(["darwin", "linux"]);
 const BACKUP_DIR_SUBPATH = join(".openclaw", "mnemospark", "backup");
 const DEFAULT_BACKUP_DIR = join(homedir(), BACKUP_DIR_SUBPATH);
-const OPENCLAW_CRON_JOBS_SUBPATH = join(".openclaw", "cron", "jobs.json");
 const BLOCKRUN_WALLET_KEY_SUBPATH = join(".openclaw", "blockrun", "wallet.key");
 const MNEMOSPARK_WALLET_KEY_SUBPATH = join(".openclaw", "mnemospark", "wallet", "wallet.key");
 const INLINE_UPLOAD_MAX_BYTES = 4_500_000;
@@ -803,10 +802,6 @@ function parseCloudArgs(args?: string): ParsedCloudArgs {
   return { mode: "unknown" };
 }
 
-function resolveOpenClawCronJobsPath(homeDir?: string): string {
-  return join(homeDir ?? homedir(), OPENCLAW_CRON_JOBS_SUBPATH);
-}
-
 async function calculateInputSizeBytes(targetPath: string): Promise<number> {
   const targetStats = await lstat(targetPath);
   if (targetStats.isFile() || targetStats.isSymbolicLink()) {
@@ -1043,12 +1038,13 @@ type OpenClawCronAdapter = {
   list: () => Promise<OpenClawCronJobForLookup[]>;
 };
 
-function parseOpenClawCronJobForLookup(value: unknown): OpenClawCronJobForLookup | null {
+function normalizeOpenClawCronJobForLookup(value: unknown): OpenClawCronJobForLookup | null {
   if (!value || typeof value !== "object") {
     return null;
   }
   const record = value as Record<string, unknown>;
-  const jobId = typeof record.jobId === "string" ? record.jobId.trim() : "";
+  const jobIdRaw = typeof record.jobId === "string" ? record.jobId : record.id;
+  const jobId = typeof jobIdRaw === "string" ? jobIdRaw.trim() : "";
   const payloadRaw = record.payload;
   if (!jobId || !payloadRaw || typeof payloadRaw !== "object") {
     return null;
@@ -1067,75 +1063,100 @@ function parseOpenClawCronJobForLookup(value: unknown): OpenClawCronJobForLookup
   };
 }
 
-function parseOpenClawCronJobId(value: unknown): string | null {
-  if (!value || typeof value !== "object") {
-    return null;
-  }
-  const record = value as Record<string, unknown>;
-  const jobId = typeof record.jobId === "string" ? record.jobId.trim() : "";
-  return jobId || null;
+type OpenClawCliResult = { stdout: string; stderr: string };
+
+async function runOpenClawCli(args: string[], homeDir?: string): Promise<OpenClawCliResult> {
+  return await new Promise<OpenClawCliResult>((resolvePromise, rejectPromise) => {
+    let stdout = "";
+    let stderr = "";
+    const child = spawn("openclaw", args, {
+      stdio: ["ignore", "pipe", "pipe"],
+      env: {
+        ...process.env,
+        HOME: homeDir ?? process.env.HOME,
+      },
+    });
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk.toString();
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk.toString();
+    });
+    child.on("error", rejectPromise);
+    child.on("close", (code) => {
+      if (code === 0) {
+        resolvePromise({ stdout, stderr });
+        return;
+      }
+      rejectPromise(
+        new Error(
+          stderr.trim() ||
+            stdout.trim() ||
+            `openclaw ${args.join(" ")} exited with code ${code ?? "unknown"}`,
+        ),
+      );
+    });
+  });
 }
 
-async function readOpenClawCronJobsFromFile(
-  homeDir?: string,
-): Promise<{ path: string; rawJobs: unknown[] }> {
-  const jobsPath = resolveOpenClawCronJobsPath(homeDir);
-  let content: string;
-  try {
-    content = await readFile(jobsPath, "utf-8");
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return { path: jobsPath, rawJobs: [] };
-    }
-    throw error;
+function parseOpenClawCliJson<T>(stdout: string, commandLabel: string): T {
+  const trimmed = stdout.trim();
+  if (!trimmed) {
+    throw new Error(`openclaw ${commandLabel} returned empty JSON output`);
   }
-
-  if (!content.trim()) {
-    return { path: jobsPath, rawJobs: [] };
-  }
-
-  let parsed: unknown;
   try {
-    parsed = JSON.parse(content);
+    return JSON.parse(trimmed) as T;
   } catch {
-    return { path: jobsPath, rawJobs: [] };
+    throw new Error(`openclaw ${commandLabel} returned invalid JSON output`);
   }
-  if (!Array.isArray(parsed)) {
-    return { path: jobsPath, rawJobs: [] };
-  }
-
-  return {
-    path: jobsPath,
-    rawJobs: parsed,
-  };
 }
 
-async function writeOpenClawCronJobsToFile(jobsPath: string, rawJobs: unknown[]): Promise<void> {
-  await mkdir(dirname(jobsPath), { recursive: true });
-  await writeFile(jobsPath, `${JSON.stringify(rawJobs, null, 2)}\n`, "utf-8");
-}
-
-function createFileBackedOpenClawCronAdapter(homeDir?: string): OpenClawCronAdapter {
+function createOpenClawCliCronAdapter(homeDir?: string): OpenClawCronAdapter {
   return {
     add: async (job) => {
-      const { path: jobsPath, rawJobs } = await readOpenClawCronJobsFromFile(homeDir);
-      rawJobs.push(job);
-      await writeOpenClawCronJobsToFile(jobsPath, rawJobs);
-      return { jobId: job.jobId };
+      const { stdout } = await runOpenClawCli(
+        [
+          "cron",
+          "add",
+          "--name",
+          job.name,
+          "--cron",
+          job.schedule.expr,
+          "--tz",
+          job.schedule.tz,
+          "--session",
+          job.sessionTarget,
+          "--message",
+          job.payload.message,
+          "--announce",
+          "--description",
+          job.delivery.text,
+          "--json",
+        ],
+        homeDir,
+      );
+      const payload = parseOpenClawCliJson<Record<string, unknown>>(stdout, "cron add");
+      const createdIdRaw = typeof payload.id === "string" ? payload.id : payload.jobId;
+      const createdId = typeof createdIdRaw === "string" ? createdIdRaw.trim() : "";
+      if (!createdId) {
+        throw new Error("openclaw cron add did not return a job id");
+      }
+      return { jobId: createdId };
     },
     remove: async (jobId) => {
-      const { path: jobsPath, rawJobs } = await readOpenClawCronJobsFromFile(homeDir);
-      const nextJobs = rawJobs.filter((job) => parseOpenClawCronJobId(job) !== jobId);
-      if (nextJobs.length === rawJobs.length) {
-        return false;
+      const { stdout } = await runOpenClawCli(["cron", "rm", jobId, "--json"], homeDir);
+      const payload = parseOpenClawCliJson<Record<string, unknown>>(stdout, "cron rm");
+      if (typeof payload.removed === "boolean") {
+        return payload.removed;
       }
-      await writeOpenClawCronJobsToFile(jobsPath, nextJobs);
       return true;
     },
     list: async () => {
-      const { rawJobs } = await readOpenClawCronJobsFromFile(homeDir);
-      return rawJobs
-        .map((entry) => parseOpenClawCronJobForLookup(entry))
+      const { stdout } = await runOpenClawCli(["cron", "list", "--all", "--json"], homeDir);
+      const payload = parseOpenClawCliJson<Record<string, unknown>>(stdout, "cron list");
+      const jobsRaw = Array.isArray(payload.jobs) ? payload.jobs : [];
+      return jobsRaw
+        .map((entry) => normalizeOpenClawCronJobForLookup(entry))
         .filter((entry): entry is OpenClawCronJobForLookup => entry !== null);
     },
   };
@@ -1245,7 +1266,7 @@ async function appendStoragePaymentCronJob(
     },
   };
   await adapter.add(openClawJob);
-  return OPENCLAW_CRON_JOBS_SUBPATH;
+  return "~/.openclaw/cron/jobs.json";
 }
 
 async function removeStoragePaymentCronJob(
@@ -1803,7 +1824,7 @@ export function createCloudCommand(
           mnemosparkHomeDir: options.mnemosparkHomeDir ?? options.backupOptions?.homeDir,
           openClawCronAdapter:
             options.openClawCronAdapter ??
-            createFileBackedOpenClawCronAdapter(
+            createOpenClawCliCronAdapter(
               options.mnemosparkHomeDir ?? options.backupOptions?.homeDir,
             ),
           backupOptions: options.backupOptions,

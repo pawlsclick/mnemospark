@@ -36,6 +36,45 @@ async function createSandbox() {
   return { root, homeDir, tmpBackupDir, sourceDir };
 }
 
+function createInMemoryCronAdapter(seed: Array<{ jobId: string; message: string }> = []) {
+  const jobs = [...seed];
+  return {
+    add: async (job: { jobId?: string; name: string; payload: { message: string } }) => {
+      const generatedId = typeof job.jobId === "string" ? job.jobId : `cron-${jobs.length + 1}`;
+      jobs.push({ jobId: generatedId, message: job.payload.message });
+      return { jobId: generatedId };
+    },
+    remove: async (jobId: string) => {
+      const before = jobs.length;
+      for (let idx = jobs.length - 1; idx >= 0; idx -= 1) {
+        if (jobs[idx].jobId === jobId) {
+          jobs.splice(idx, 1);
+        }
+      }
+      return jobs.length !== before;
+    },
+    list: async () => [...jobs],
+    snapshot: () => [...jobs],
+  };
+}
+
+function withMockCronAdapter(
+  adapter:
+    | ReturnType<typeof createInMemoryCronAdapter>
+    | {
+        add: (job: { jobId?: string; name: string; payload: { message: string } }) => Promise<{
+          jobId: string;
+        }>;
+        remove: (jobId: string) => Promise<boolean>;
+        list: () => Promise<Array<{ jobId: string; message: string }>>;
+      } = createInMemoryCronAdapter(),
+) {
+  return {
+    openClawCronAdapter: adapter,
+    __cronAdapter: "snapshot" in adapter ? adapter : undefined,
+  };
+}
+
 function randomBytesFixture(size: number): Buffer {
   return Buffer.from("0011223344556677".slice(0, size * 2), "hex");
 }
@@ -671,12 +710,14 @@ describe("cloud command", () => {
       location: "us-east-1",
     };
 
+    const cronHooks = withMockCronAdapter();
     const command = createCloudCommand({
       mnemosparkHomeDir: homeDir,
       backupOptions: { tmpDir: tmpBackupDir },
       resolveWalletPrivateKeyFn: async () => walletKey,
       idempotencyKeyFn: () => "idempotency-123",
       nowDateFn: () => new Date(2026, 1, 25, 20, 10, 0),
+      ...cronHooks,
       createPaymentFetchFn: () => {
         createPaymentFetchCalls += 1;
         return {
@@ -744,32 +785,12 @@ describe("cloud command", () => {
       expect(result.text).toContain("Thank you for using mnemospark!");
       expect(result.text).toContain("pluggedin@mnemospark.ai");
 
-      const cronJobsPath = join(homeDir, ".openclaw", "cron", "jobs.json");
-      const cronJobs = JSON.parse(await readFile(cronJobsPath, "utf-8")) as Array<
-        Record<string, unknown>
-      >;
-      const cronEntry = cronJobs.at(-1);
+      const cronEntry = cronHooks.__cronAdapter?.snapshot().at(-1);
       expect(cronEntry).toBeTruthy();
       expect(cronEntry?.jobId).toBe(cronId);
-      expect(cronEntry?.name).toBe("Mnemospark Monthly Renewal");
-      expect((cronEntry?.schedule as Record<string, unknown>)?.kind).toBe("cron");
-      expect((cronEntry?.schedule as Record<string, unknown>)?.expr).toBe("0 0 1 * *");
-      expect((cronEntry?.schedule as Record<string, unknown>)?.tz).toBe("UTC");
-      expect((cronEntry?.payload as Record<string, unknown>)?.kind).toBe("agentTurn");
-      expect(String((cronEntry?.payload as Record<string, unknown>)?.message)).toContain(
-        "/mnemospark_cloud payment-settle",
-      );
-      expect(String((cronEntry?.payload as Record<string, unknown>)?.message)).toContain(
-        "--renewal",
-      );
-      expect(String((cronEntry?.payload as Record<string, unknown>)?.message)).toContain(
-        "obj-upload-001.tar.gz.enc",
-      );
-      expect(cronEntry?.sessionTarget).toBe("isolated");
-      expect((cronEntry?.delivery as Record<string, unknown>)?.mode).toBe("announce");
-      expect((cronEntry?.delivery as Record<string, unknown>)?.text).toBe(
-        "Thank you for using mnemospark cloud storage. Your renewal has been processed.",
-      );
+      expect(cronEntry?.message).toContain("/mnemospark_cloud payment-settle");
+      expect(cronEntry?.message).toContain("--renewal");
+      expect(cronEntry?.message).toContain("obj-upload-001.tar.gz.enc");
 
       const archiveExists = await stat(archivePath);
       expect(archiveExists.isFile()).toBe(true);
@@ -825,6 +846,7 @@ describe("cloud command", () => {
         resolveWalletPrivateKeyFn: async () => walletKey,
         idempotencyKeyFn: () => "idempotency-keep-unrecognized-123",
         nowDateFn: () => new Date(2026, 1, 25, 21, 30, 0),
+        ...withMockCronAdapter(),
         createPaymentFetchFn: () => {
           createPaymentFetchCalls += 1;
           return {
@@ -914,6 +936,7 @@ describe("cloud command", () => {
         resolveWalletPrivateKeyFn: async () => walletKey,
         idempotencyKeyFn: () => "idempotency-cleanup-123",
         nowDateFn: () => new Date(2026, 1, 25, 21, 0, 0),
+        ...withMockCronAdapter(),
         createPaymentFetchFn: () => {
           createPaymentFetchCalls += 1;
           return {
@@ -1017,6 +1040,75 @@ describe("cloud command", () => {
     expect(result.text).toBe("Insufficient USDC balance. Current: $0.10, Required: $2.75");
   });
 
+  it("writes renewal cron through OpenClaw cron adapter", async () => {
+    const { homeDir, tmpBackupDir } = await createSandbox();
+    const walletKey = `0x${"22".repeat(32)}` as const;
+    const walletAddress = privateKeyToAccount(walletKey).address;
+    const objectId = "obj-upload-cron-adapter-001";
+    const archiveContent = "adapter integration content";
+    const objectHash = sha256Hex(archiveContent);
+    await writeFile(join(tmpBackupDir, objectId), archiveContent, "utf-8");
+
+    await mkdir(join(homeDir, ".openclaw", "mnemospark"), { recursive: true });
+    await seedQuotedStorageInSqlite(homeDir, {
+      quoteId: "quote-cron-adapter",
+      walletAddress,
+      objectId,
+      objectHash,
+      storagePrice: 2.75,
+      friendlyName: "cron-adapter-test",
+    });
+
+    const mockCron = createInMemoryCronAdapter();
+    const uploadResponse = {
+      quote_id: "quote-cron-adapter",
+      addr: walletAddress,
+      addr_hash: "addr-hash-cron-adapter",
+      trans_id: "tx-cron-adapter-001",
+      storage_price: 2.75,
+      object_id: objectId,
+      object_key: "obj-upload-cron-adapter-001.tar.gz.enc",
+      provider: "aws",
+      bucket_name: "mnemospark-7777",
+      location: "us-east-1",
+    };
+
+    const command = createCloudCommand({
+      mnemosparkHomeDir: homeDir,
+      backupOptions: { tmpDir: tmpBackupDir },
+      resolveWalletPrivateKeyFn: async () => walletKey,
+      ...withMockCronAdapter(mockCron),
+      proxyUploadOptions: {
+        fetchImpl: async () =>
+          new Response(JSON.stringify(uploadResponse), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+      },
+    });
+
+    const result = await command.handler({
+      channel: "test",
+      isAuthorizedSender: true,
+      args: [
+        "upload",
+        "--quote-id quote-cron-adapter",
+        `--wallet-address ${walletAddress}`,
+        `--object-id ${objectId}`,
+        `--object-id-hash ${objectHash}`,
+      ].join(" "),
+      commandBody: "upload",
+      config: {},
+    });
+
+    expect(result.isError).not.toBe(true);
+    const cronJobs = mockCron.snapshot();
+    expect(cronJobs).toHaveLength(1);
+    expect(cronJobs[0].message).toContain("/mnemospark_cloud payment-settle");
+    expect(cronJobs[0].message).toContain("--renewal");
+    expect(cronJobs[0].message).toContain("obj-upload-cron-adapter-001.tar.gz.enc");
+  });
+
   it("confirms presigned uploads before logging success", async () => {
     const { homeDir, tmpBackupDir } = await createSandbox();
     const walletKey = `0x${"55".repeat(32)}` as const;
@@ -1039,12 +1131,14 @@ describe("cloud command", () => {
 
     let capturedConfirmRequest: Record<string, unknown> | undefined;
     let presignedPutCount = 0;
+    const cronHooks = withMockCronAdapter();
     const command = createCloudCommand({
       mnemosparkHomeDir: homeDir,
       backupOptions: { tmpDir: tmpBackupDir },
       resolveWalletPrivateKeyFn: async () => walletKey,
       idempotencyKeyFn: () => "idemp-presigned-confirm-123",
       nowDateFn: () => new Date(2026, 1, 25, 20, 45, 0),
+      ...cronHooks,
       fetchImpl: async (input, init) => {
         presignedPutCount += 1;
         expect(String(input)).toBe("https://example-presigned-upload.local/put");
@@ -1516,37 +1610,17 @@ describe("cloud command", () => {
     const { homeDir } = await createSandbox();
     let capturedRequest: Record<string, unknown> | undefined;
     const cronId = "cron-delete-001";
-
-    const cronJobsPath = join(homeDir, ".openclaw", "cron", "jobs.json");
-    await mkdir(join(homeDir, ".openclaw", "cron"), { recursive: true });
-    await writeFile(
-      cronJobsPath,
-      `${JSON.stringify(
-        [
-          {
-            jobId: cronId,
-            name: "Mnemospark Monthly Renewal",
-            schedule: { kind: "cron", expr: "0 0 1 * *", tz: "UTC" },
-            payload: {
-              kind: "agentTurn",
-              message:
-                '/mnemospark_cloud payment-settle --renewal --wallet-address "0x1234abcd" --object-id "obj-001" --object-key "backup/archive.tar.gz" --storage-price "2.75"',
-            },
-            sessionTarget: "isolated",
-            delivery: {
-              mode: "announce",
-              text: "Thank you for using mnemospark cloud storage. Your renewal has been processed.",
-            },
-          },
-        ],
-        null,
-        2,
-      )}\n`,
-      "utf-8",
-    );
+    const cronAdapter = createInMemoryCronAdapter([
+      {
+        jobId: cronId,
+        message:
+          '/mnemospark_cloud payment-settle --renewal --wallet-address "0x1234abcd" --object-id "obj-001" --object-key "backup/archive.tar.gz" --storage-price "2.75"',
+      },
+    ]);
 
     const command = createCloudCommand({
       mnemosparkHomeDir: homeDir,
+      openClawCronAdapter: cronAdapter,
       requestStorageDeleteFn: async (request) => {
         capturedRequest = request as Record<string, unknown>;
         return {
@@ -1579,8 +1653,7 @@ describe("cloud command", () => {
       ].join("\n"),
     );
 
-    const cronJobs = JSON.parse(await readFile(cronJobsPath, "utf-8")) as unknown[];
-    expect(cronJobs).toEqual([]);
+    expect(cronAdapter.snapshot()).toEqual([]);
 
     const eventsPath = join(homeDir, ".openclaw", "mnemospark", "events.jsonl");
     const deleteEvent = JSON.parse(
@@ -2287,12 +2360,15 @@ describe("cloud command", () => {
 
   it("returns success when cloud delete succeeds but cron cleanup throws", async () => {
     const { homeDir } = await createSandbox();
-    const cronJobsPath = join(homeDir, ".openclaw", "cron", "jobs.json");
-    await mkdir(join(homeDir, ".openclaw", "cron"), { recursive: true });
-    await writeFile(cronJobsPath, "{invalid json", "utf-8");
-
     const command = createCloudCommand({
       mnemosparkHomeDir: homeDir,
+      ...withMockCronAdapter({
+        add: async (job) => ({ jobId: job.jobId ?? "mock-job-id" }),
+        remove: async () => {
+          throw new Error("cron remove failed");
+        },
+        list: async () => [],
+      }),
       requestStorageDeleteFn: async () => ({
         success: true,
         key: "backup/other.tar.gz",
