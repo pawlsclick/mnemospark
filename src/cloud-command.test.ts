@@ -2369,7 +2369,13 @@ describe("cloud command", () => {
         remove: async () => {
           throw new Error("cron remove failed");
         },
-        list: async () => [],
+        list: async () => [
+          {
+            jobId: "cron-remove-throws-001",
+            message:
+              '/mnemospark_cloud payment-settle --renewal --wallet-address "0x1234abcd" --object-id "obj-throws-001" --object-key "backup/other.tar.gz" --storage-price "2.75"',
+          },
+        ],
       }),
       requestStorageDeleteFn: async () => ({
         success: true,
