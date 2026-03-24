@@ -1,7 +1,7 @@
 {
   "id": "mnemospark",
   "name": "mnemospark",
-  "version": "0.8.1",
+  "version": "0.8.2",
   "description": "mnemospark is an OpenClaw plugin that gives agentic systems instant, secure access to cloud storage, compute, and proprietary datasets paid via x402 with USDC on Base. Wallet and go.",
   "configSchema": {
     "type": "object",
