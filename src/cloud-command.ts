@@ -1215,7 +1215,7 @@ function buildStoragePaymentCronCommand(job: StoragePaymentRenewalJobFields): st
 
 function buildOpenClawRenewalAgentMessage(openClawHome: string, renewalArgs: string): string {
   const cliPath = join(openClawHome, ".openclaw/extensions/mnemospark/dist/cli.js");
-  return `Run Mnemospark monthly renewal: node ${cliPath} cloud ${renewalArgs}`;
+  return `Execute: node ${cliPath} cloud ${renewalArgs}`;
 }
 
 function parseStoragePaymentCronCommand(
