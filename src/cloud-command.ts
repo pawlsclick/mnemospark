@@ -1246,7 +1246,7 @@ function parseStoragePaymentCronCommand(
 async function appendStoragePaymentCronJob(
   cronJob: StoragePaymentCronJob,
   adapter: OpenClawCronAdapter,
-): Promise<string> {
+): Promise<{ jobId: string }> {
   const openClawJob: OpenClawCronJobEntry = {
     jobId: cronJob.cronId,
     name: "Mnemospark Monthly Renewal",
@@ -1265,8 +1265,7 @@ async function appendStoragePaymentCronJob(
       text: "Thank you for using mnemospark cloud storage. Your renewal has been processed.",
     },
   };
-  const { jobId } = await adapter.add(openClawJob);
-  return jobId;
+  return adapter.add(openClawJob);
 }
 
 async function removeStoragePaymentCronJob(
@@ -1282,9 +1281,9 @@ async function createStoragePaymentCronJob(
   openClawCronAdapter: OpenClawCronAdapter,
   nowDateFn: () => Date = () => new Date(),
 ): Promise<StoragePaymentCronJob> {
-  const cronId = randomUUID();
+  const provisionalCronId = randomUUID();
   const cronJob: StoragePaymentCronJob = {
-    cronId,
+    cronId: provisionalCronId,
     createdAt: nowDateFn().toISOString(),
     schedule: PAYMENT_CRON_SCHEDULE,
     command: buildStoragePaymentCronCommand({
@@ -1303,8 +1302,12 @@ async function createStoragePaymentCronJob(
     location: upload.location,
   };
 
-  const createdCronId = await appendStoragePaymentCronJob(cronJob, openClawCronAdapter);
-  return { ...cronJob, cronId: createdCronId };
+  const created = await appendStoragePaymentCronJob(cronJob, openClawCronAdapter);
+  // Use the actual OpenClaw job id so datastore and delete cleanup stay in sync.
+  if (created.jobId?.trim()) {
+    cronJob.cronId = created.jobId.trim();
+  }
+  return cronJob;
 }
 
 async function readWalletKeyIfPresent(walletPath: string): Promise<`0x${string}` | null> {
