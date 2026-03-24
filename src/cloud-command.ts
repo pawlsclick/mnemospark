@@ -6,7 +6,7 @@ import {
   randomUUID,
 } from "node:crypto";
 import { createReadStream, statfsSync } from "node:fs";
-import { appendFile, lstat, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { lstat, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { privateKeyToAccount } from "viem/accounts";
@@ -59,7 +59,6 @@ import type { RequestCorrelation } from "./cloud-correlation.js";
 const SUPPORTED_BACKUP_PLATFORMS = new Set<NodeJS.Platform>(["darwin", "linux"]);
 const BACKUP_DIR_SUBPATH = join(".openclaw", "mnemospark", "backup");
 const DEFAULT_BACKUP_DIR = join(homedir(), BACKUP_DIR_SUBPATH);
-const CRON_TABLE_SUBPATH = join(".openclaw", "mnemospark", "crontab.txt");
 const BLOCKRUN_WALLET_KEY_SUBPATH = join(".openclaw", "blockrun", "wallet.key");
 const MNEMOSPARK_WALLET_KEY_SUBPATH = join(".openclaw", "mnemospark", "wallet", "wallet.key");
 const INLINE_UPLOAD_MAX_BYTES = 4_500_000;
@@ -74,7 +73,7 @@ const QUOTE_VALIDITY_USER_NOTE =
 const MNEMOSPARK_SUPPORT_EMAIL = "pluggedin@mnemospark.ai";
 
 const CLOUD_HELP_FOOTER_STATE =
-  "Local state: mnemospark records quotes, objects, payments, cron jobs, friendly names, and operation metadata in ~/.openclaw/mnemospark/state.db (SQLite). For troubleshooting and correlation, commands and the HTTP proxy append structured JSON lines to ~/.openclaw/mnemospark/events.jsonl. Monthly storage billing jobs are listed in ~/.openclaw/mnemospark/crontab.txt for your system scheduler.";
+  "Local state: mnemospark records quotes, objects, payments, cron jobs, friendly names, and operation metadata in ~/.openclaw/mnemospark/state.db (SQLite). For troubleshooting and correlation, commands and the HTTP proxy append structured JSON lines to ~/.openclaw/mnemospark/events.jsonl. Monthly storage billing jobs are listed in ~/.openclaw/cron/jobs.json for OpenClaw scheduling.";
 
 const REQUIRED_PRICE_STORAGE =
   "--wallet-address, --object-id, --object-id-hash, --gb, --provider, --region";
@@ -350,6 +349,7 @@ type CreateCloudCommandOptions = {
     request: StorageObjectRequest,
     options?: ProxyStorageOptions,
   ) => Promise<StorageDeleteResponse>;
+  openClawCronAdapter?: OpenClawCronAdapter;
   subagentOrchestrator?: MnemosparkSubagentOrchestrator;
   proxyStorageOptions?: ProxyStorageOptions;
   mnemosparkHomeDir?: string;
@@ -802,10 +802,6 @@ function parseCloudArgs(args?: string): ParsedCloudArgs {
   return { mode: "unknown" };
 }
 
-function resolveCronTablePath(homeDir?: string): string {
-  return join(homeDir ?? homedir(), CRON_TABLE_SUBPATH);
-}
-
 async function calculateInputSizeBytes(targetPath: string): Promise<number> {
   const targetStats = await lstat(targetPath);
   if (targetStats.isFile() || targetStats.isSymbolicLink()) {
@@ -1006,112 +1002,178 @@ type StoragePaymentCronJob = {
   location: string;
 };
 
-function formatTimestamp(date: Date): string {
-  const pad = (value: number): string => value.toString().padStart(2, "0");
-  return [
-    date.getFullYear().toString(),
-    "-",
-    pad(date.getMonth() + 1),
-    "-",
-    pad(date.getDate()),
-    " ",
-    pad(date.getHours()),
-    ":",
-    pad(date.getMinutes()),
-    ":",
-    pad(date.getSeconds()),
-  ].join("");
-}
+type OpenClawCronSchedule = {
+  kind: "cron";
+  expr: string;
+  tz: string;
+};
 
-function parseStoragePaymentCronJobLine(line: string): StoragePaymentCronJob | null {
-  const trimmed = line.trim();
-  if (!trimmed) {
+type OpenClawCronPayload = {
+  kind: "agentTurn";
+  message: string;
+};
+
+type OpenClawCronDelivery = {
+  mode: "announce";
+  text: string;
+};
+
+type OpenClawCronJobEntry = {
+  jobId: string;
+  name: string;
+  schedule: OpenClawCronSchedule;
+  payload: OpenClawCronPayload;
+  sessionTarget: "isolated";
+  delivery: OpenClawCronDelivery;
+};
+
+type OpenClawCronJobForLookup = {
+  jobId: string;
+  message: string;
+};
+
+type OpenClawCronAdapter = {
+  add: (job: OpenClawCronJobEntry) => Promise<{ jobId: string }>;
+  remove: (jobId: string) => Promise<boolean>;
+  list: () => Promise<OpenClawCronJobForLookup[]>;
+};
+
+function normalizeOpenClawCronJobForLookup(value: unknown): OpenClawCronJobForLookup | null {
+  if (!value || typeof value !== "object") {
     return null;
   }
-
-  let payload: unknown;
-  try {
-    payload = JSON.parse(trimmed);
-  } catch {
+  const record = value as Record<string, unknown>;
+  const jobIdRaw = typeof record.jobId === "string" ? record.jobId : record.id;
+  const jobId = typeof jobIdRaw === "string" ? jobIdRaw.trim() : "";
+  const payloadRaw = record.payload;
+  if (!jobId || !payloadRaw || typeof payloadRaw !== "object") {
     return null;
   }
-
-  if (!payload || typeof payload !== "object") {
-    return null;
-  }
-  const record = payload as Record<string, unknown>;
-
-  const cronId = typeof record.cronId === "string" ? record.cronId.trim() : "";
-  const createdAt = typeof record.createdAt === "string" ? record.createdAt.trim() : "";
-  const schedule = typeof record.schedule === "string" ? record.schedule.trim() : "";
-  const command = typeof record.command === "string" ? record.command.trim() : "";
-  const quoteId = typeof record.quoteId === "string" ? record.quoteId.trim() : "";
-  const storagePrice = typeof record.storagePrice === "number" ? record.storagePrice : Number.NaN;
-  const walletAddress = typeof record.walletAddress === "string" ? record.walletAddress.trim() : "";
-  const objectId = typeof record.objectId === "string" ? record.objectId.trim() : "";
-  const objectKey = typeof record.objectKey === "string" ? record.objectKey.trim() : "";
-  const provider = typeof record.provider === "string" ? record.provider.trim() : "";
-  const bucketName = typeof record.bucketName === "string" ? record.bucketName.trim() : "";
-  const location = typeof record.location === "string" ? record.location.trim() : "";
-
-  if (
-    !cronId ||
-    !createdAt ||
-    !schedule ||
-    !command ||
-    !quoteId ||
-    !Number.isFinite(storagePrice) ||
-    storagePrice <= 0 ||
-    !walletAddress ||
-    !objectId ||
-    !objectKey ||
-    !provider ||
-    !bucketName ||
-    !location
-  ) {
+  const payloadRecord = payloadRaw as Record<string, unknown>;
+  const payloadKind = payloadRecord.kind;
+  const payloadMessage =
+    typeof payloadRecord.message === "string" ? payloadRecord.message.trim() : "";
+  if (payloadKind !== "agentTurn" || !payloadMessage) {
     return null;
   }
 
   return {
-    cronId,
-    createdAt,
-    schedule,
-    command,
-    quoteId,
-    storagePrice,
-    walletAddress,
-    objectId,
-    objectKey,
-    provider,
-    bucketName,
-    location,
+    jobId,
+    message: payloadMessage,
   };
 }
 
-/** Latest matching cron job line in crontab.txt for an object key (scan from end of file). */
-async function findCronJobInCrontabByObjectKey(
-  objectKey: string,
-  homeDir?: string,
-): Promise<{ cronId: string; objectId: string; objectKey: string } | null> {
-  const cronTablePath = resolveCronTablePath(homeDir);
-  let content: string;
-  try {
-    content = await readFile(cronTablePath, "utf-8");
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return null;
-    }
-    throw error;
+type OpenClawCliResult = { stdout: string; stderr: string };
+
+async function runOpenClawCli(args: string[], homeDir?: string): Promise<OpenClawCliResult> {
+  return await new Promise<OpenClawCliResult>((resolvePromise, rejectPromise) => {
+    let stdout = "";
+    let stderr = "";
+    const child = spawn("openclaw", args, {
+      stdio: ["ignore", "pipe", "pipe"],
+      env: {
+        ...process.env,
+        HOME: homeDir ?? process.env.HOME,
+      },
+    });
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk.toString();
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk.toString();
+    });
+    child.on("error", rejectPromise);
+    child.on("close", (code) => {
+      if (code === 0) {
+        resolvePromise({ stdout, stderr });
+        return;
+      }
+      rejectPromise(
+        new Error(
+          stderr.trim() ||
+            stdout.trim() ||
+            `openclaw ${args.join(" ")} exited with code ${code ?? "unknown"}`,
+        ),
+      );
+    });
+  });
+}
+
+function parseOpenClawCliJson<T>(stdout: string, commandLabel: string): T {
+  const trimmed = stdout.trim();
+  if (!trimmed) {
+    throw new Error(`openclaw ${commandLabel} returned empty JSON output`);
   }
-  const lines = content
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0);
-  for (let idx = lines.length - 1; idx >= 0; idx -= 1) {
-    const parsed = parseStoragePaymentCronJobLine(lines[idx]);
+  try {
+    return JSON.parse(trimmed) as T;
+  } catch {
+    throw new Error(`openclaw ${commandLabel} returned invalid JSON output`);
+  }
+}
+
+function createOpenClawCliCronAdapter(homeDir?: string): OpenClawCronAdapter {
+  return {
+    add: async (job) => {
+      const { stdout } = await runOpenClawCli(
+        [
+          "cron",
+          "add",
+          "--name",
+          job.name,
+          "--cron",
+          job.schedule.expr,
+          "--tz",
+          job.schedule.tz,
+          "--session",
+          job.sessionTarget,
+          "--message",
+          job.payload.message,
+          "--announce",
+          "--description",
+          job.delivery.text,
+          "--json",
+        ],
+        homeDir,
+      );
+      const payload = parseOpenClawCliJson<Record<string, unknown>>(stdout, "cron add");
+      const createdIdRaw = typeof payload.id === "string" ? payload.id : payload.jobId;
+      const createdId = typeof createdIdRaw === "string" ? createdIdRaw.trim() : "";
+      if (!createdId) {
+        throw new Error("openclaw cron add did not return a job id");
+      }
+      return { jobId: createdId };
+    },
+    remove: async (jobId) => {
+      const { stdout } = await runOpenClawCli(["cron", "rm", jobId, "--json"], homeDir);
+      const payload = parseOpenClawCliJson<Record<string, unknown>>(stdout, "cron rm");
+      if (typeof payload.removed === "boolean") {
+        return payload.removed;
+      }
+      return true;
+    },
+    list: async () => {
+      const { stdout } = await runOpenClawCli(["cron", "list", "--all", "--json"], homeDir);
+      const payload = parseOpenClawCliJson<Record<string, unknown>>(stdout, "cron list");
+      const jobsRaw = Array.isArray(payload.jobs) ? payload.jobs : [];
+      return jobsRaw
+        .map((entry) => normalizeOpenClawCronJobForLookup(entry))
+        .filter((entry): entry is OpenClawCronJobForLookup => entry !== null);
+    },
+  };
+}
+
+/** Latest matching OpenClaw cron job in jobs.json for an object key (scan from end of file). */
+async function findCronJobInOpenClawCronJobsByObjectKey(
+  objectKey: string,
+  adapter: OpenClawCronAdapter,
+): Promise<{ cronId: string; objectId: string; objectKey: string } | null> {
+  const cronJobs = await adapter.list();
+  for (let idx = cronJobs.length - 1; idx >= 0; idx -= 1) {
+    const cronJob = cronJobs[idx];
+    const parsed = parseStoragePaymentCronCommand(cronJob.message);
     if (parsed && parsed.objectKey === objectKey) {
       return {
-        cronId: parsed.cronId,
+        cronId: cronJob.jobId,
         objectId: parsed.objectId,
         objectKey: parsed.objectKey,
       };
@@ -1145,67 +1207,84 @@ function buildStoragePaymentCronCommand(job: {
   ].join(" ");
 }
 
-async function appendStoragePaymentCronJob(
-  cronJob: StoragePaymentCronJob,
-  homeDir?: string,
-): Promise<string> {
-  const cronTablePath = resolveCronTablePath(homeDir);
-  await mkdir(dirname(cronTablePath), { recursive: true });
-  await appendFile(cronTablePath, `${JSON.stringify(cronJob)}\n`, "utf-8");
-  return cronTablePath;
+function parseStoragePaymentCronCommand(
+  command: string,
+): { objectId: string; objectKey: string } | null {
+  const objectIdMatch = command.match(/--object-id\s+("([^"\\]|\\.)*"|'([^'\\]|\\.)*'|\S+)/);
+  const objectKeyMatch = command.match(/--object-key\s+("([^"\\]|\\.)*"|'([^'\\]|\\.)*'|\S+)/);
+  if (!objectIdMatch || !objectKeyMatch) {
+    return null;
+  }
+
+  const parseToken = (token: string): string | null => {
+    const trimmed = token.trim();
+    if (!trimmed) {
+      return null;
+    }
+    if (trimmed.startsWith('"') && trimmed.endsWith('"')) {
+      try {
+        return JSON.parse(trimmed);
+      } catch {
+        return trimmed.slice(1, -1);
+      }
+    }
+    if (trimmed.startsWith("'") && trimmed.endsWith("'")) {
+      return trimmed.slice(1, -1);
+    }
+    return trimmed;
+  };
+
+  const objectId = parseToken(objectIdMatch[1] ?? "");
+  const objectKey = parseToken(objectKeyMatch[1] ?? "");
+  if (!objectId || !objectKey) {
+    return null;
+  }
+
+  return { objectId, objectKey };
 }
 
-async function removeStoragePaymentCronJob(cronId: string, homeDir?: string): Promise<boolean> {
-  const cronTablePath = resolveCronTablePath(homeDir);
+async function appendStoragePaymentCronJob(
+  cronJob: StoragePaymentCronJob,
+  adapter: OpenClawCronAdapter,
+): Promise<{ jobId: string }> {
+  const openClawJob: OpenClawCronJobEntry = {
+    jobId: cronJob.cronId,
+    name: "Mnemospark Monthly Renewal",
+    schedule: {
+      kind: "cron",
+      expr: PAYMENT_CRON_SCHEDULE,
+      tz: "UTC",
+    },
+    payload: {
+      kind: "agentTurn",
+      message: cronJob.command,
+    },
+    sessionTarget: "isolated",
+    delivery: {
+      mode: "announce",
+      text: "Thank you for using mnemospark cloud storage. Your renewal has been processed.",
+    },
+  };
+  return adapter.add(openClawJob);
+}
 
-  let content: string;
-  try {
-    content = await readFile(cronTablePath, "utf-8");
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return false;
-    }
-    throw error;
-  }
-
-  const lines = content.split(/\r?\n/);
-  let removed = false;
-  const keptLines: string[] = [];
-
-  for (const line of lines) {
-    const trimmed = line.trim();
-    if (!trimmed) {
-      continue;
-    }
-    const parsed = parseStoragePaymentCronJobLine(trimmed);
-    if (parsed && parsed.cronId === cronId) {
-      removed = true;
-      continue;
-    }
-    keptLines.push(trimmed);
-  }
-
-  if (!removed) {
-    return false;
-  }
-
-  await mkdir(dirname(cronTablePath), { recursive: true });
-  const nextContent = keptLines.length > 0 ? `${keptLines.join("\n")}\n` : "";
-  await writeFile(cronTablePath, nextContent, "utf-8");
-  return true;
+async function removeStoragePaymentCronJob(
+  cronId: string,
+  adapter: OpenClawCronAdapter,
+): Promise<boolean> {
+  return adapter.remove(cronId);
 }
 
 async function createStoragePaymentCronJob(
   upload: StorageUploadResponse,
   storagePrice: number,
-  homeDir?: string,
+  openClawCronAdapter: OpenClawCronAdapter,
   nowDateFn: () => Date = () => new Date(),
 ): Promise<StoragePaymentCronJob> {
-  const cronId = randomUUID();
-  const createdAt = formatTimestamp(nowDateFn());
+  const provisionalCronId = randomUUID();
   const cronJob: StoragePaymentCronJob = {
-    cronId,
-    createdAt,
+    cronId: provisionalCronId,
+    createdAt: nowDateFn().toISOString(),
     schedule: PAYMENT_CRON_SCHEDULE,
     command: buildStoragePaymentCronCommand({
       walletAddress: upload.addr,
@@ -1223,7 +1302,11 @@ async function createStoragePaymentCronJob(
     location: upload.location,
   };
 
-  await appendStoragePaymentCronJob(cronJob, homeDir);
+  const created = await appendStoragePaymentCronJob(cronJob, openClawCronAdapter);
+  // Use the actual OpenClaw job id so datastore and delete cleanup stay in sync.
+  if (created.jobId?.trim()) {
+    cronJob.cronId = created.jobId.trim();
+  }
   return cronJob;
 }
 
@@ -1742,6 +1825,11 @@ export function createCloudCommand(
           requestPaymentSettleViaProxyFn:
             options.requestPaymentSettleViaProxyFn ?? requestPaymentSettleViaProxy,
           mnemosparkHomeDir: options.mnemosparkHomeDir ?? options.backupOptions?.homeDir,
+          openClawCronAdapter:
+            options.openClawCronAdapter ??
+            createOpenClawCliCronAdapter(
+              options.mnemosparkHomeDir ?? options.backupOptions?.homeDir,
+            ),
           backupOptions: options.backupOptions,
           proxyQuoteOptions: options.proxyQuoteOptions,
           proxyUploadOptions: options.proxyUploadOptions,
@@ -1781,6 +1869,7 @@ type RunCloudCommandHandlerOptions = {
   requestPaymentSettleViaProxyFn: NonNullable<
     CreateCloudCommandOptions["requestPaymentSettleViaProxyFn"]
   >;
+  openClawCronAdapter: NonNullable<CreateCloudCommandOptions["openClawCronAdapter"]>;
   mnemosparkHomeDir: string | undefined;
   backupOptions: CreateCloudCommandOptions["backupOptions"];
   proxyQuoteOptions: CreateCloudCommandOptions["proxyQuoteOptions"];
@@ -2168,6 +2257,7 @@ async function runCloudCommandHandler(
   const requestStorageDownload = options.requestStorageDownloadFn;
   const requestStorageDelete = options.requestStorageDeleteFn;
   const requestPaymentSettleViaProxy = options.requestPaymentSettleViaProxyFn;
+  const openClawCronAdapter = options.openClawCronAdapter;
   const subagentOrchestrator = options.subagentOrchestrator;
 
   if (parsed.mode === "help" || parsed.mode === "unknown") {
@@ -3253,7 +3343,7 @@ async function runCloudCommandHandler(
       const cronJob = await createStoragePaymentCronJob(
         finalizedUploadResponse,
         cronStoragePrice,
-        mnemosparkHomeDir,
+        openClawCronAdapter,
         nowDateFn,
       );
       await datastore.upsertObject({
@@ -3630,15 +3720,15 @@ async function runCloudCommandHandler(
         };
       }
       if (!cronEntry) {
-        cronEntry = await findCronJobInCrontabByObjectKey(
+        cronEntry = await findCronJobInOpenClawCronJobsByObjectKey(
           resolvedRequest.object_key,
-          mnemosparkHomeDir,
+          openClawCronAdapter,
         );
       }
       if (cronEntry) {
         const fileCronDeleted = await removeStoragePaymentCronJob(
           cronEntry.cronId,
-          mnemosparkHomeDir,
+          openClawCronAdapter,
         );
         const dbCronDeleted = await datastore.removeCronJob(cronEntry.cronId);
         cronDeleted = fileCronDeleted || dbCronDeleted;
