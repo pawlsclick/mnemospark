@@ -1671,9 +1671,11 @@ describe("cloud command", () => {
   it("handles /mnemospark cloud delete when no cron job exists for object key", async () => {
     const { homeDir } = await createSandbox();
     let capturedRequest: Record<string, unknown> | undefined;
+    const cronHooks = withMockCronAdapter();
 
     const command = createCloudCommand({
       mnemosparkHomeDir: homeDir,
+      ...cronHooks,
       requestStorageDeleteFn: async (request) => {
         capturedRequest = request as Record<string, unknown>;
         return {
