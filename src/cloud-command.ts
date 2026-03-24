@@ -350,6 +350,7 @@ type CreateCloudCommandOptions = {
     request: StorageObjectRequest,
     options?: ProxyStorageOptions,
   ) => Promise<StorageDeleteResponse>;
+  openClawCronAdapter?: OpenClawCronAdapter;
   subagentOrchestrator?: MnemosparkSubagentOrchestrator;
   proxyStorageOptions?: ProxyStorageOptions;
   mnemosparkHomeDir?: string;
@@ -1036,6 +1037,12 @@ type OpenClawCronJobForLookup = {
   message: string;
 };
 
+type OpenClawCronAdapter = {
+  add: (job: OpenClawCronJobEntry) => Promise<{ jobId: string }>;
+  remove: (jobId: string) => Promise<boolean>;
+  list: () => Promise<OpenClawCronJobForLookup[]>;
+};
+
 function parseOpenClawCronJobForLookup(value: unknown): OpenClawCronJobForLookup | null {
   if (!value || typeof value !== "object") {
     return null;
@@ -1069,7 +1076,7 @@ function parseOpenClawCronJobId(value: unknown): string | null {
   return jobId || null;
 }
 
-async function readOpenClawCronJobs(
+async function readOpenClawCronJobsFromFile(
   homeDir?: string,
 ): Promise<{ path: string; rawJobs: unknown[] }> {
   const jobsPath = resolveOpenClawCronJobsPath(homeDir);
@@ -1103,22 +1110,45 @@ async function readOpenClawCronJobs(
   };
 }
 
-async function writeOpenClawCronJobs(jobsPath: string, rawJobs: unknown[]): Promise<void> {
+async function writeOpenClawCronJobsToFile(jobsPath: string, rawJobs: unknown[]): Promise<void> {
   await mkdir(dirname(jobsPath), { recursive: true });
   await writeFile(jobsPath, `${JSON.stringify(rawJobs, null, 2)}\n`, "utf-8");
+}
+
+function createFileBackedOpenClawCronAdapter(homeDir?: string): OpenClawCronAdapter {
+  return {
+    add: async (job) => {
+      const { path: jobsPath, rawJobs } = await readOpenClawCronJobsFromFile(homeDir);
+      rawJobs.push(job);
+      await writeOpenClawCronJobsToFile(jobsPath, rawJobs);
+      return { jobId: job.jobId };
+    },
+    remove: async (jobId) => {
+      const { path: jobsPath, rawJobs } = await readOpenClawCronJobsFromFile(homeDir);
+      const nextJobs = rawJobs.filter((job) => parseOpenClawCronJobId(job) !== jobId);
+      if (nextJobs.length === rawJobs.length) {
+        return false;
+      }
+      await writeOpenClawCronJobsToFile(jobsPath, nextJobs);
+      return true;
+    },
+    list: async () => {
+      const { rawJobs } = await readOpenClawCronJobsFromFile(homeDir);
+      return rawJobs
+        .map((entry) => parseOpenClawCronJobForLookup(entry))
+        .filter((entry): entry is OpenClawCronJobForLookup => entry !== null);
+    },
+  };
 }
 
 /** Latest matching OpenClaw cron job in jobs.json for an object key (scan from end of file). */
 async function findCronJobInOpenClawCronJobsByObjectKey(
   objectKey: string,
-  homeDir?: string,
+  adapter: OpenClawCronAdapter,
 ): Promise<{ cronId: string; objectId: string; objectKey: string } | null> {
-  const { rawJobs } = await readOpenClawCronJobs(homeDir);
-  for (let idx = rawJobs.length - 1; idx >= 0; idx -= 1) {
-    const cronJob = parseOpenClawCronJobForLookup(rawJobs[idx]);
-    if (!cronJob) {
-      continue;
-    }
+  const cronJobs = await adapter.list();
+  for (let idx = cronJobs.length - 1; idx >= 0; idx -= 1) {
+    const cronJob = cronJobs[idx];
     const parsed = parseStoragePaymentCronCommand(cronJob.message);
     if (parsed && parsed.objectKey === objectKey) {
       return {
@@ -1194,9 +1224,8 @@ function parseStoragePaymentCronCommand(
 
 async function appendStoragePaymentCronJob(
   cronJob: StoragePaymentCronJob,
-  homeDir?: string,
+  adapter: OpenClawCronAdapter,
 ): Promise<string> {
-  const { path: jobsPath, rawJobs } = await readOpenClawCronJobs(homeDir);
   const openClawJob: OpenClawCronJobEntry = {
     jobId: cronJob.cronId,
     name: "Mnemospark Monthly Renewal",
@@ -1215,25 +1244,21 @@ async function appendStoragePaymentCronJob(
       text: "Thank you for using mnemospark cloud storage. Your renewal has been processed.",
     },
   };
-  rawJobs.push(openClawJob);
-  await writeOpenClawCronJobs(jobsPath, rawJobs);
-  return jobsPath;
+  await adapter.add(openClawJob);
+  return OPENCLAW_CRON_JOBS_SUBPATH;
 }
 
-async function removeStoragePaymentCronJob(cronId: string, homeDir?: string): Promise<boolean> {
-  const { path: jobsPath, rawJobs } = await readOpenClawCronJobs(homeDir);
-  const nextJobs = rawJobs.filter((job) => parseOpenClawCronJobId(job) !== cronId);
-  if (nextJobs.length === rawJobs.length) {
-    return false;
-  }
-  await writeOpenClawCronJobs(jobsPath, nextJobs);
-  return true;
+async function removeStoragePaymentCronJob(
+  cronId: string,
+  adapter: OpenClawCronAdapter,
+): Promise<boolean> {
+  return adapter.remove(cronId);
 }
 
 async function createStoragePaymentCronJob(
   upload: StorageUploadResponse,
   storagePrice: number,
-  homeDir?: string,
+  openClawCronAdapter: OpenClawCronAdapter,
   nowDateFn: () => Date = () => new Date(),
 ): Promise<StoragePaymentCronJob> {
   const cronId = randomUUID();
@@ -1257,7 +1282,7 @@ async function createStoragePaymentCronJob(
     location: upload.location,
   };
 
-  await appendStoragePaymentCronJob(cronJob, homeDir);
+  await appendStoragePaymentCronJob(cronJob, openClawCronAdapter);
   return cronJob;
 }
 
@@ -1776,6 +1801,11 @@ export function createCloudCommand(
           requestPaymentSettleViaProxyFn:
             options.requestPaymentSettleViaProxyFn ?? requestPaymentSettleViaProxy,
           mnemosparkHomeDir: options.mnemosparkHomeDir ?? options.backupOptions?.homeDir,
+          openClawCronAdapter:
+            options.openClawCronAdapter ??
+            createFileBackedOpenClawCronAdapter(
+              options.mnemosparkHomeDir ?? options.backupOptions?.homeDir,
+            ),
           backupOptions: options.backupOptions,
           proxyQuoteOptions: options.proxyQuoteOptions,
           proxyUploadOptions: options.proxyUploadOptions,
@@ -1815,6 +1845,7 @@ type RunCloudCommandHandlerOptions = {
   requestPaymentSettleViaProxyFn: NonNullable<
     CreateCloudCommandOptions["requestPaymentSettleViaProxyFn"]
   >;
+  openClawCronAdapter: NonNullable<CreateCloudCommandOptions["openClawCronAdapter"]>;
   mnemosparkHomeDir: string | undefined;
   backupOptions: CreateCloudCommandOptions["backupOptions"];
   proxyQuoteOptions: CreateCloudCommandOptions["proxyQuoteOptions"];
@@ -2202,6 +2233,7 @@ async function runCloudCommandHandler(
   const requestStorageDownload = options.requestStorageDownloadFn;
   const requestStorageDelete = options.requestStorageDeleteFn;
   const requestPaymentSettleViaProxy = options.requestPaymentSettleViaProxyFn;
+  const openClawCronAdapter = options.openClawCronAdapter;
   const subagentOrchestrator = options.subagentOrchestrator;
 
   if (parsed.mode === "help" || parsed.mode === "unknown") {
@@ -3287,7 +3319,7 @@ async function runCloudCommandHandler(
       const cronJob = await createStoragePaymentCronJob(
         finalizedUploadResponse,
         cronStoragePrice,
-        mnemosparkHomeDir,
+        openClawCronAdapter,
         nowDateFn,
       );
       await datastore.upsertObject({
@@ -3666,13 +3698,13 @@ async function runCloudCommandHandler(
       if (!cronEntry) {
         cronEntry = await findCronJobInOpenClawCronJobsByObjectKey(
           resolvedRequest.object_key,
-          mnemosparkHomeDir,
+          openClawCronAdapter,
         );
       }
       if (cronEntry) {
         const fileCronDeleted = await removeStoragePaymentCronJob(
           cronEntry.cronId,
-          mnemosparkHomeDir,
+          openClawCronAdapter,
         );
         const dbCronDeleted = await datastore.removeCronJob(cronEntry.cronId);
         cronDeleted = fileCronDeleted || dbCronDeleted;
