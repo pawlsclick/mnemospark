@@ -788,7 +788,7 @@ describe("cloud command", () => {
       const cronEntry = cronHooks.__cronAdapter?.snapshot().at(-1);
       expect(cronEntry).toBeTruthy();
       expect(cronEntry?.jobId).toBe(cronId);
-      expect(cronEntry?.message).toContain("Run Mnemospark monthly renewal");
+      expect(cronEntry?.message).toContain("Execute:");
       expect(cronEntry?.message).toContain("node");
       expect(cronEntry?.message).toContain(
         join(homeDir, ".openclaw/extensions/mnemospark/dist/cli.js"),
@@ -1109,7 +1109,7 @@ describe("cloud command", () => {
     expect(result.isError).not.toBe(true);
     const cronJobs = mockCron.snapshot();
     expect(cronJobs).toHaveLength(1);
-    expect(cronJobs[0].message).toContain("Run Mnemospark monthly renewal");
+    expect(cronJobs[0].message).toContain("Execute:");
     expect(cronJobs[0].message).toContain("node");
     expect(cronJobs[0].message).toContain(
       join(homeDir, ".openclaw/extensions/mnemospark/dist/cli.js"),
@@ -1623,7 +1623,7 @@ describe("cloud command", () => {
     const cronAdapter = createInMemoryCronAdapter([
       {
         jobId: cronId,
-        message: `Run Mnemospark monthly renewal: node ${join(homeDir, ".openclaw/extensions/mnemospark/dist/cli.js")} cloud payment-settle --renewal --wallet-address "0x1234abcd" --object-id "obj-001" --object-key "backup/archive.tar.gz" --storage-price "2.75"`,
+        message: `Execute: node ${join(homeDir, ".openclaw/extensions/mnemospark/dist/cli.js")} cloud payment-settle --renewal --wallet-address "0x1234abcd" --object-id "obj-001" --object-key "backup/archive.tar.gz" --storage-price "2.75"`,
       },
     ]);
 
@@ -2381,7 +2381,7 @@ describe("cloud command", () => {
         list: async () => [
           {
             jobId: "cron-remove-throws-001",
-            message: `Run Mnemospark monthly renewal: node ${join(homeDir, ".openclaw/extensions/mnemospark/dist/cli.js")} cloud payment-settle --renewal --wallet-address "0x1234abcd" --object-id "obj-throws-001" --object-key "backup/other.tar.gz" --storage-price "2.75"`,
+            message: `Execute: node ${join(homeDir, ".openclaw/extensions/mnemospark/dist/cli.js")} cloud payment-settle --renewal --wallet-address "0x1234abcd" --object-id "obj-throws-001" --object-key "backup/other.tar.gz" --storage-price "2.75"`,
           },
         ],
       }),
