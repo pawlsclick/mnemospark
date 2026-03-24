@@ -1186,14 +1186,16 @@ function quoteCronArgument(value: string | number): string {
   return JSON.stringify(String(value));
 }
 
-function buildStoragePaymentCronCommand(job: {
+type StoragePaymentRenewalJobFields = {
   walletAddress: string;
   objectId: string;
   objectKey: string;
   storagePrice: number;
-}): string {
+};
+
+/** Args after `cloud` for `node …/cli.js cloud …` (same shape as slash command without `/mnemospark_cloud`). */
+function buildStoragePaymentRenewalArgs(job: StoragePaymentRenewalJobFields): string {
   return [
-    "/mnemospark_cloud",
     "payment-settle",
     "--renewal",
     "--wallet-address",
@@ -1205,6 +1207,15 @@ function buildStoragePaymentCronCommand(job: {
     "--storage-price",
     quoteCronArgument(job.storagePrice),
   ].join(" ");
+}
+
+function buildStoragePaymentCronCommand(job: StoragePaymentRenewalJobFields): string {
+  return `/mnemospark_cloud ${buildStoragePaymentRenewalArgs(job)}`;
+}
+
+function buildOpenClawRenewalAgentMessage(openClawHome: string, renewalArgs: string): string {
+  const cliPath = join(openClawHome, ".openclaw/extensions/mnemospark/dist/cli.js");
+  return `Run Mnemospark monthly renewal: node ${cliPath} cloud ${renewalArgs}`;
 }
 
 function parseStoragePaymentCronCommand(
@@ -1246,6 +1257,7 @@ function parseStoragePaymentCronCommand(
 async function appendStoragePaymentCronJob(
   cronJob: StoragePaymentCronJob,
   adapter: OpenClawCronAdapter,
+  payloadMessage: string,
 ): Promise<{ jobId: string }> {
   const openClawJob: OpenClawCronJobEntry = {
     jobId: cronJob.cronId,
@@ -1257,7 +1269,7 @@ async function appendStoragePaymentCronJob(
     },
     payload: {
       kind: "agentTurn",
-      message: cronJob.command,
+      message: payloadMessage,
     },
     sessionTarget: "isolated",
     delivery: {
@@ -1279,19 +1291,22 @@ async function createStoragePaymentCronJob(
   upload: StorageUploadResponse,
   storagePrice: number,
   openClawCronAdapter: OpenClawCronAdapter,
+  openClawHomeDir: string,
   nowDateFn: () => Date = () => new Date(),
 ): Promise<StoragePaymentCronJob> {
+  const renewalFields: StoragePaymentRenewalJobFields = {
+    walletAddress: upload.addr,
+    objectId: upload.object_id,
+    objectKey: upload.object_key,
+    storagePrice,
+  };
+  const renewalArgs = buildStoragePaymentRenewalArgs(renewalFields);
   const provisionalCronId = randomUUID();
   const cronJob: StoragePaymentCronJob = {
     cronId: provisionalCronId,
     createdAt: nowDateFn().toISOString(),
     schedule: PAYMENT_CRON_SCHEDULE,
-    command: buildStoragePaymentCronCommand({
-      walletAddress: upload.addr,
-      objectId: upload.object_id,
-      objectKey: upload.object_key,
-      storagePrice,
-    }),
+    command: buildStoragePaymentCronCommand(renewalFields),
     quoteId: upload.quote_id,
     storagePrice,
     walletAddress: upload.addr,
@@ -1302,7 +1317,8 @@ async function createStoragePaymentCronJob(
     location: upload.location,
   };
 
-  const created = await appendStoragePaymentCronJob(cronJob, openClawCronAdapter);
+  const payloadMessage = buildOpenClawRenewalAgentMessage(openClawHomeDir, renewalArgs);
+  const created = await appendStoragePaymentCronJob(cronJob, openClawCronAdapter, payloadMessage);
   // Use the actual OpenClaw job id so datastore and delete cleanup stay in sync.
   if (created.jobId?.trim()) {
     cronJob.cronId = created.jobId.trim();
@@ -3344,6 +3360,7 @@ async function runCloudCommandHandler(
         finalizedUploadResponse,
         cronStoragePrice,
         openClawCronAdapter,
+        mnemosparkHomeDir ?? homedir(),
         nowDateFn,
       );
       await datastore.upsertObject({
