@@ -1265,8 +1265,8 @@ async function appendStoragePaymentCronJob(
       text: "Thank you for using mnemospark cloud storage. Your renewal has been processed.",
     },
   };
-  await adapter.add(openClawJob);
-  return "~/.openclaw/cron/jobs.json";
+  const { jobId } = await adapter.add(openClawJob);
+  return jobId;
 }
 
 async function removeStoragePaymentCronJob(
@@ -1303,8 +1303,8 @@ async function createStoragePaymentCronJob(
     location: upload.location,
   };
 
-  await appendStoragePaymentCronJob(cronJob, openClawCronAdapter);
-  return cronJob;
+  const createdCronId = await appendStoragePaymentCronJob(cronJob, openClawCronAdapter);
+  return { ...cronJob, cronId: createdCronId };
 }
 
 async function readWalletKeyIfPresent(walletPath: string): Promise<`0x${string}` | null> {
