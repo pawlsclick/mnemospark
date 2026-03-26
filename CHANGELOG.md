@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.0](https://github.com/pawlsclick/mnemospark/compare/v0.8.3...v0.9.0) (2026-03-26)
+
+
+### Features
+
+* **mnemospark_cloud:** surface async command output in op-status ([#83](https://github.com/pawlsclick/mnemospark/issues/83)) ([ff63266](https://github.com/pawlsclick/mnemospark/commit/ff6326668c2c818d384523681717747d07baae53))
+
 ## [0.8.3](https://github.com/pawlsclick/mnemospark/compare/v0.8.2...v0.8.3) (2026-03-24)
 
 
