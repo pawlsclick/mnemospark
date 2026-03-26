@@ -1480,29 +1480,29 @@ async function prepareUploadPayload(
     const encryptedTempPath = join(tmpdir(), `mnemospark-upload-${randomUUID()}.enc`);
     try {
       await encryptPlaintextFileToAesGcmPath(archivePath, dek, encryptedTempPath);
+      const encStat = await stat(encryptedTempPath);
+      const payloadHash = await sha256File(encryptedTempPath);
+
+      const payload: UploadPayload = {
+        mode: "presigned",
+        content_base64: undefined,
+        content_sha256: payloadHash,
+        content_length_bytes: encStat.size,
+        wrapped_dek: wrappedDek.toString("base64"),
+        encryption_algorithm: "AES-256-GCM",
+        bucket_name_hint: bucketNameForWallet(walletAddress),
+        key_store_path_hint: keyPath,
+      };
+
+      return {
+        payload,
+        encryptedContent: null,
+        encryptedTempPath,
+      };
     } catch (err) {
       await rm(encryptedTempPath, { force: true }).catch(() => {});
       throw err;
     }
-    const encStat = await stat(encryptedTempPath);
-    const payloadHash = await sha256File(encryptedTempPath);
-
-    const payload: UploadPayload = {
-      mode: "presigned",
-      content_base64: undefined,
-      content_sha256: payloadHash,
-      content_length_bytes: encStat.size,
-      wrapped_dek: wrappedDek.toString("base64"),
-      encryption_algorithm: "AES-256-GCM",
-      bucket_name_hint: bucketNameForWallet(walletAddress),
-      key_store_path_hint: keyPath,
-    };
-
-    return {
-      payload,
-      encryptedContent: null,
-      encryptedTempPath,
-    };
   }
 
   const plaintext = await readFile(archivePath);
