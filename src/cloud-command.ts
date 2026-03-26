@@ -5,10 +5,12 @@ import {
   randomBytes as randomBytesNode,
   randomUUID,
 } from "node:crypto";
-import { createReadStream, statfsSync } from "node:fs";
+import { createReadStream, createWriteStream, statfsSync } from "node:fs";
 import { lstat, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
+import { Readable } from "node:stream";
+import { finished } from "node:stream/promises";
 import { privateKeyToAccount } from "viem/accounts";
 
 import {
@@ -62,6 +64,8 @@ const DEFAULT_BACKUP_DIR = join(homedir(), BACKUP_DIR_SUBPATH);
 const BLOCKRUN_WALLET_KEY_SUBPATH = join(".openclaw", "blockrun", "wallet.key");
 const MNEMOSPARK_WALLET_KEY_SUBPATH = join(".openclaw", "mnemospark", "wallet", "wallet.key");
 const INLINE_UPLOAD_MAX_BYTES = 4_500_000;
+/** Node `fs.readFile` rejects files larger than this (ERR_FS_FILE_TOO_LARGE). */
+const NODE_FS_MAX_READFILE_BYTES = 2147483648;
 // Standard cron cannot express "every 30 days" from an arbitrary date. */30 in day-of-month
 // means days 1 and 31, so in 31-day months it fires twice one day apart (e.g. Jan 31, Feb 1).
 // Use 1st of each month so the job runs once per month.
@@ -1371,7 +1375,7 @@ function bucketNameForWallet(walletAddress: string): string {
   return `mnemospark-${walletShortHash(walletAddress)}`;
 }
 
-function encryptAesGcm(
+export function encryptAesGcm(
   plaintext: Buffer,
   key: Buffer,
   randomFn: (size: number) => Buffer = randomBytesNode,
@@ -1384,6 +1388,49 @@ function encryptAesGcm(
   const ciphertext = Buffer.concat([cipher.update(plaintext), cipher.final()]);
   const tag = cipher.getAuthTag();
   return Buffer.concat([nonce, ciphertext, tag]);
+}
+
+/**
+ * Stream plaintext from disk through AES-256-GCM and write `nonce || ciphertext || tag`
+ * to `outPath`. Same wire format as {@link encryptAesGcm}.
+ */
+export async function encryptPlaintextFileToAesGcmPath(
+  plaintextPath: string,
+  dek: Buffer,
+  outPath: string,
+  randomFn: (size: number) => Buffer = randomBytesNode,
+): Promise<void> {
+  if (dek.length !== 32) {
+    throw new Error("Expected 32-byte AES key");
+  }
+  const nonce = randomFn(AES_GCM_NONCE_BYTES);
+  const cipher = createCipheriv("aes-256-gcm", dek, nonce);
+  const writeStream = createWriteStream(outPath, { flags: "w" });
+  writeStream.write(nonce);
+  try {
+    for await (const chunk of createReadStream(plaintextPath)) {
+      const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      const out = cipher.update(buf);
+      if (out.length) {
+        await new Promise<void>((resolve, reject) => {
+          writeStream.write(out, (err) => (err ? reject(err) : resolve()));
+        });
+      }
+    }
+    const final = cipher.final();
+    const tag = cipher.getAuthTag();
+    await new Promise<void>((resolve, reject) => {
+      writeStream.write(final, (err) => (err ? reject(err) : resolve()));
+    });
+    await new Promise<void>((resolve, reject) => {
+      writeStream.write(tag, (err) => (err ? reject(err) : resolve()));
+    });
+    writeStream.end();
+    await finished(writeStream);
+  } catch (err) {
+    writeStream.destroy();
+    throw err;
+  }
 }
 
 async function loadOrCreateKek(
@@ -1409,7 +1456,10 @@ async function loadOrCreateKek(
 
 type PreparedUploadPayload = {
   payload: UploadPayload;
-  encryptedContent: Buffer;
+  /** Set when the archive was small enough to buffer; null when using {@link encryptedTempPath}. */
+  encryptedContent: Buffer | null;
+  /** Encrypted ciphertext file (presigned path); remove after upload completes. */
+  encryptedTempPath?: string;
 };
 
 async function prepareUploadPayload(
@@ -1417,12 +1467,46 @@ async function prepareUploadPayload(
   walletAddress: string,
   homeDir?: string,
 ): Promise<PreparedUploadPayload> {
-  const plaintext = await readFile(archivePath);
-  const { kek, keyPath } = await loadOrCreateKek(walletAddress, homeDir);
+  const archiveStat = await stat(archivePath);
+  if (!archiveStat.isFile()) {
+    throw new Error(`Cannot read backup archive: not a file (${archivePath}).`);
+  }
 
+  const { kek, keyPath } = await loadOrCreateKek(walletAddress, homeDir);
   const dek = randomBytesNode(32);
-  const encryptedContent = encryptAesGcm(plaintext, dek);
   const wrappedDek = encryptAesGcm(dek, kek);
+
+  if (archiveStat.size >= NODE_FS_MAX_READFILE_BYTES) {
+    const encryptedTempPath = join(tmpdir(), `mnemospark-upload-${randomUUID()}.enc`);
+    try {
+      await encryptPlaintextFileToAesGcmPath(archivePath, dek, encryptedTempPath);
+    } catch (err) {
+      await rm(encryptedTempPath, { force: true }).catch(() => {});
+      throw err;
+    }
+    const encStat = await stat(encryptedTempPath);
+    const payloadHash = await sha256File(encryptedTempPath);
+
+    const payload: UploadPayload = {
+      mode: "presigned",
+      content_base64: undefined,
+      content_sha256: payloadHash,
+      content_length_bytes: encStat.size,
+      wrapped_dek: wrappedDek.toString("base64"),
+      encryption_algorithm: "AES-256-GCM",
+      bucket_name_hint: bucketNameForWallet(walletAddress),
+      key_store_path_hint: keyPath,
+    };
+
+    return {
+      payload,
+      encryptedContent: null,
+      encryptedTempPath,
+    };
+  }
+
+  const plaintext = await readFile(archivePath);
+  const encryptedContent = encryptAesGcm(plaintext, dek);
   const payloadHash = sha256Buffer(encryptedContent);
 
   const payload: UploadPayload = {
@@ -1445,10 +1529,27 @@ async function prepareUploadPayload(
   };
 }
 
+type PresignedPutFetchInit = RequestInit & { duplex?: "half" };
+
+function presignedPutBodyInit(
+  encryptedContent: Buffer | null,
+  encryptedTempPath: string | undefined,
+): { body: BodyInit; duplex?: "half" } {
+  if (encryptedTempPath?.trim()) {
+    const body = Readable.toWeb(createReadStream(encryptedTempPath)) as unknown as BodyInit;
+    return { body, duplex: "half" };
+  }
+  if (encryptedContent) {
+    return { body: new Uint8Array(encryptedContent) };
+  }
+  throw new Error("Cannot upload storage object: missing encrypted payload body.");
+}
+
 async function uploadPresignedObjectIfNeeded(
   uploadResponse: StorageUploadResponse,
   uploadMode: UploadPayload["mode"],
-  encryptedContent: Buffer,
+  encryptedContent: Buffer | null,
+  encryptedTempPath: string | undefined,
   fetchImpl: FetchLike = fetch,
 ): Promise<void> {
   if (!uploadResponse.upload_url) {
@@ -1463,13 +1564,17 @@ async function uploadPresignedObjectIfNeeded(
     headers.set("content-type", "application/octet-stream");
   }
 
-  const putBody = new Uint8Array(encryptedContent);
-  const firstAttempt = await fetchImpl(uploadResponse.upload_url, {
+  const { body, duplex } = presignedPutBodyInit(encryptedContent, encryptedTempPath);
+  const firstInit: PresignedPutFetchInit = {
     method: "PUT",
     headers,
-    body: putBody,
+    body,
     redirect: "manual",
-  });
+  };
+  if (duplex) {
+    firstInit.duplex = duplex;
+  }
+  const firstAttempt = await fetchImpl(uploadResponse.upload_url, firstInit);
 
   if (firstAttempt.ok) {
     return;
@@ -1484,11 +1589,17 @@ async function uploadPresignedObjectIfNeeded(
   ) {
     const location = firstAttempt.headers.get("location")?.trim();
     if (location) {
-      const redirectedAttempt = await fetchImpl(location, {
+      const retryBody = presignedPutBodyInit(encryptedContent, encryptedTempPath);
+      const retryInit: PresignedPutFetchInit = {
         method: "PUT",
         headers,
-        body: putBody,
-      });
+        body: retryBody.body,
+        redirect: "manual",
+      };
+      if (retryBody.duplex) {
+        retryInit.duplex = retryBody.duplex;
+      }
+      const redirectedAttempt = await fetchImpl(location, retryInit);
       if (redirectedAttempt.ok) {
         return;
       }
@@ -3200,6 +3311,7 @@ async function runCloudCommandHandler(
       executionContext.forcedOperationId ?? idempotencyKeyFn(),
       executionContext.forcedTraceId,
     );
+    let preparedPayload: PreparedUploadPayload | undefined;
     try {
       const loggedQuote = await datastore.findQuoteById(parsed.uploadRequest.quote_id);
       if (!loggedQuote) {
@@ -3286,7 +3398,7 @@ async function runCloudCommandHandler(
         };
       }
 
-      const preparedPayload = await prepareUploadPayload(
+      preparedPayload = await prepareUploadPayload(
         archivePath,
         parsed.uploadRequest.wallet_address,
         mnemosparkHomeDir,
@@ -3336,6 +3448,7 @@ async function runCloudCommandHandler(
         uploadResponse,
         preparedPayload.payload.mode,
         preparedPayload.encryptedContent,
+        preparedPayload.encryptedTempPath,
         fetchImpl,
       );
       let finalizedUploadResponse = uploadResponse;
@@ -3488,6 +3601,10 @@ async function runCloudCommandHandler(
         text: uploadErrorMessage ?? "Cannot upload storage object",
         isError: true,
       };
+    } finally {
+      if (preparedPayload?.encryptedTempPath) {
+        await rm(preparedPayload.encryptedTempPath, { force: true }).catch(() => {});
+      }
     }
   }
 
