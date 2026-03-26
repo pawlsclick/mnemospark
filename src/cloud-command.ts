@@ -3072,7 +3072,7 @@ async function runCloudCommandHandler(
       await emitCloudEventBestEffort(
         "backup.completed",
         {
-          operation_id: executionContext.forcedOperationId?.trim() ?? randomUUID(),
+          operation_id: executionContext.forcedOperationId?.trim() || randomUUID(),
           object_id: result.objectId,
           status: "succeeded",
           details: {
