@@ -13,7 +13,7 @@
 
 ### Price storage quote
 
-`price-storage --wallet-address <addr> --object-id <id> --object-id-hash <hash> --gb <gb> --provider <provider> --region <region>`
+`price-storage --wallet-address <addr> --object-id <id> --object-id-hash <hash> --gb <gb> --provider aws --region us-east-1` (defaults; override `--provider` / `--region` for other regions)
 
 ### Upload
 

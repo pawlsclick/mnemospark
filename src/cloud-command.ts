@@ -125,8 +125,8 @@ const CLOUD_HELP_TEXT = [
   "  Purpose: create a local tar+gzip archive under ~/.openclaw/mnemospark/backup (filename from sanitized friendly name) and record metadata in SQLite for later price-storage and upload.",
   "  Required: " + REQUIRED_BACKUP,
   "",
-  "• `/mnemospark_cloud price-storage --wallet-address <addr> --object-id <id> --object-id-hash <hash> --gb <gb> --provider <provider> --region <region>`",
-  "  Purpose: request a storage quote before upload.",
+  "• `/mnemospark_cloud price-storage --wallet-address <addr> --object-id <id> --object-id-hash <hash> --gb <gb> --provider aws --region us-east-1`",
+  "  Purpose: request a storage quote before upload (defaults shown; override `--provider` / `--region` for other regions).",
   "  Required: " + REQUIRED_PRICE_STORAGE,
   "",
   "• `/mnemospark_cloud upload --quote-id <quote-id> --wallet-address <addr> --object-id <id> --object-id-hash <hash> [--name <friendly-name>] [--async] [--orchestrator <inline|subagent>] [--timeout-seconds <n>]`",
@@ -1666,13 +1666,17 @@ function quoteLookupMatchesPriceStorageResponse(
   );
 }
 
+/** Default provider/region for the copy-paste `price-storage` line after backup (single source of truth for docs/tests). */
+export const DEFAULT_BACKUP_QUOTE_PROVIDER = "aws";
+export const DEFAULT_BACKUP_QUOTE_REGION = "us-east-1";
+
 function formatBackupSuccessUserMessage(
   result: BackupObjectResult,
   walletAddress: string,
   friendlyName: string,
 ): string {
   const hash = result.objectIdHash.replace(/\s/g, "");
-  const priceStorageLine = `/mnemospark_cloud price-storage --wallet-address \`${walletAddress}\` --object-id \`${result.objectId}\` --object-id-hash \`${hash}\` --gb \`${result.objectSizeGb}\` --provider <provider> --region <region>`;
+  const priceStorageLine = `/mnemospark_cloud price-storage --wallet-address \`${walletAddress}\` --object-id \`${result.objectId}\` --object-id-hash \`${hash}\` --gb \`${result.objectSizeGb}\` --provider ${DEFAULT_BACKUP_QUOTE_PROVIDER} --region ${DEFAULT_BACKUP_QUOTE_REGION}`;
   return [
     `Backup archive: \`${result.archivePath}\``,
     "",
@@ -1681,9 +1685,11 @@ function formatBackupSuccessUserMessage(
     `object-id-hash: ${hash}`,
     `object-size: ${result.objectSizeGb}`,
     "",
-    "Next, request a storage quote. Replace `<provider>` and `<region>` (one line):",
+    "Next, request a storage quote.",
     "",
     priceStorageLine,
+    "",
+    `The default region is ${DEFAULT_BACKUP_QUOTE_REGION}. Change the command parameters to switch regions (not required).`,
     "",
     "Region examples (merge into the command above):",
     "North America: `--provider aws --region us-east-1`",
@@ -2382,8 +2388,9 @@ async function runCloudCommandHandler(
     timeout_seconds: number | null;
     error_code: string | null;
     error_message: string | null;
-  }): { text: string; isError: boolean } => ({
-    text: [
+    result_text: string | null;
+  }): { text: string; isError: boolean } => {
+    const meta = [
       `operation-id: ${operation.operation_id}`,
       `type: ${operation.type}`,
       `status: ${operation.status}`,
@@ -2398,12 +2405,19 @@ async function runCloudCommandHandler(
       operation.error_message ? `error-message: ${operation.error_message}` : null,
     ]
       .filter((v): v is string => Boolean(v))
-      .join("\n"),
-    isError:
-      operation.status === "failed" ||
-      operation.status === "cancelled" ||
-      operation.status === "timed_out",
-  });
+      .join("\n");
+    const withResult =
+      operation.status === "succeeded" && operation.result_text?.trim()
+        ? `${meta}\n\n${operation.result_text}`
+        : meta;
+    return {
+      text: withResult,
+      isError:
+        operation.status === "failed" ||
+        operation.status === "cancelled" ||
+        operation.status === "timed_out",
+    };
+  };
 
   if (parsed.mode === "op-status") {
     let operation = await datastore.findOperationById(parsed.operationId);
@@ -2774,7 +2788,7 @@ async function runCloudCommandHandler(
                 mnemosparkHomeDir,
               );
             },
-            onCompleted: async (sessionId) => {
+            onCompleted: async (sessionId, result) => {
               await datastore.upsertOperation({
                 operation_id: operationId,
                 type: opType,
@@ -2787,6 +2801,7 @@ async function runCloudCommandHandler(
                 status: "succeeded",
                 error_code: null,
                 error_message: null,
+                result_text: result.isError ? null : result.text,
               });
               await emitOperationEventBestEffort(
                 "operation.completed",
@@ -2970,6 +2985,7 @@ async function runCloudCommandHandler(
           status: result.isError ? "failed" : "succeeded",
           error_code: result.isError ? "ASYNC_FAILED" : null,
           error_message: result.isError ? result.text : null,
+          result_text: result.isError ? null : result.text,
         });
         await emitOperationEventBestEffort(
           "operation.completed",
@@ -3056,7 +3072,7 @@ async function runCloudCommandHandler(
       await emitCloudEventBestEffort(
         "backup.completed",
         {
-          operation_id: randomUUID(),
+          operation_id: executionContext.forcedOperationId?.trim() || randomUUID(),
           object_id: result.objectId,
           status: "succeeded",
           details: {

@@ -21,7 +21,7 @@ Use this skill for mnemospark cloud backup/storage workflows, async operation tr
 3. Use `--orchestrator subagent` when explicit subagent session tracking/cancel support is required.
 4. If timeout control is needed, require `--timeout-seconds <n>` with `--orchestrator subagent`.
 5. Return `operation-id` immediately for async commands.
-6. Poll with `/mnemospark_cloud op-status --operation-id <id>` until terminal status.
+6. Poll with `/mnemospark_cloud op-status --operation-id <id>` until terminal status; on **succeeded**, the status message includes the same full user-visible output as a synchronous run (e.g. backup `price-storage` line, upload confirmation, download path).
 7. Use `/mnemospark_cloud op-status --operation-id <id> --cancel` for subagent cancellation.
 8. Use SQLite (`state.db`) as source of truth; use JSONL streams for correlation and audit context.
 9. On ambiguity with `--name`, require `--latest` or `--at`.
@@ -30,7 +30,7 @@ Use this skill for mnemospark cloud backup/storage workflows, async operation tr
 ## Command catalog
 
 - `/mnemospark_cloud backup <file|directory> [--name <friendly-name>] [--async] [--orchestrator <inline|subagent>] [--timeout-seconds <n>]`
-- `/mnemospark_cloud price-storage --wallet-address <addr> --object-id <id> --object-id-hash <hash> --gb <gb> --provider <provider> --region <region>`
+- `/mnemospark_cloud price-storage --wallet-address <addr> --object-id <id> --object-id-hash <hash> --gb <gb> --provider aws --region us-east-1` (override for other regions)
 - `/mnemospark_cloud upload --quote-id <quote-id> --wallet-address <addr> --object-id <id> --object-id-hash <hash> [--name <friendly-name>] [--async] [--orchestrator <inline|subagent>] [--timeout-seconds <n>]`
 - `/mnemospark_cloud payment-settle --quote-id <quote-id> --wallet-address <addr> [--object-id <id>] [--object-key <key>] [--storage-price <n>]`
 - `/mnemospark_cloud ls --wallet-address <addr> [--object-key <object-key> | --name <friendly-name>] [--latest|--at <timestamp>]`

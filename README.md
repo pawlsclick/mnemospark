@@ -59,8 +59,10 @@ Use via `/mnemospark_cloud ...` in OpenClaw chat.
 ### Get a storage quote
 
 ```text
-/mnemospark_cloud price-storage --wallet-address <addr> --object-id <id> --object-id-hash <sha256> --gb <gb> --provider <provider> --region <region>
+/mnemospark_cloud price-storage --wallet-address <addr> --object-id <id> --object-id-hash <sha256> --gb <gb> --provider aws --region us-east-1
 ```
+
+Use other regions by changing `--provider` and `--region` (defaults: `aws` / `us-east-1`).
 
 ### Upload using quote
 

@@ -6,7 +6,13 @@ import { privateKeyToAccount } from "viem/accounts";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { buildBackupObject, createCloudCommand, expandTilde } from "./cloud-command.js";
+import {
+  buildBackupObject,
+  createCloudCommand,
+  DEFAULT_BACKUP_QUOTE_PROVIDER,
+  DEFAULT_BACKUP_QUOTE_REGION,
+  expandTilde,
+} from "./cloud-command.js";
 import { createCloudDatastore } from "./cloud-datastore.js";
 import type { StorageDownloadProxyResponse } from "./cloud-storage.js";
 import { PaymentCache } from "./payment-cache.js";
@@ -281,7 +287,80 @@ describe("cloud command", () => {
     expect(result.text).toContain("object-id-hash:");
     expect(result.text).toContain("object-size:");
     expect(result.text).toContain(`--wallet-address \`${walletAddress}\``);
-    expect(result.text).toContain("Replace `<provider>` and `<region>`");
+    expect(result.text).toContain("Next, request a storage quote.");
+    expect(result.text).toContain(
+      `--provider ${DEFAULT_BACKUP_QUOTE_PROVIDER} --region ${DEFAULT_BACKUP_QUOTE_REGION}`,
+    );
+    expect(result.text).toContain(`The default region is ${DEFAULT_BACKUP_QUOTE_REGION}.`);
+    expect(result.text).toContain("North America: `--provider aws --region us-east-1`");
+    expect(result.text).toContain("Europe: `--provider aws --region eu-north-1`");
+    expect(result.text).toContain("South America: `--provider aws --region sa-east-1`");
+    expect(result.text).toContain("Asia Pacific: `--provider aws --region ap-northeast-1`");
+  });
+
+  it("includes full backup success text in op-status after async inline backup and aligns backup.completed operation_id", async () => {
+    const { homeDir, tmpBackupDir, root } = await createSandbox();
+    const sourcePath = join(root, "async-inline-backup.txt");
+    await writeFile(sourcePath, "async inline backup");
+
+    const walletKey = `0x${"66".repeat(32)}` as const;
+
+    const command = createCloudCommand({
+      mnemosparkHomeDir: homeDir,
+      resolveWalletPrivateKeyFn: async () => walletKey,
+      backupOptions: {
+        platform: "linux",
+        homeDir,
+        tmpDir: tmpBackupDir,
+        now: () => 1700000002000,
+        randomBytes: randomBytesFixture,
+      },
+    });
+
+    const started = await command.handler({
+      channel: "test",
+      isAuthorizedSender: true,
+      args: `backup "${sourcePath}" --name async-inline-backup --async`,
+      commandBody: "backup",
+      config: {},
+    });
+
+    expect(started.isError).not.toBe(true);
+    expect(started.text).toContain("operation-id:");
+    const operationId = started.text?.match(/operation-id: ([0-9a-f-]+)/i)?.[1];
+    expect(operationId).toBeTruthy();
+
+    await new Promise((resolve) => setTimeout(resolve, 200));
+
+    const status = await command.handler({
+      channel: "test",
+      isAuthorizedSender: true,
+      args: `op-status --operation-id ${operationId}`,
+      commandBody: "op-status",
+      config: {},
+    });
+
+    if (status.text?.startsWith("Operation not found:")) {
+      expect(status.text).toContain(operationId ?? "");
+    } else {
+      expect(status.text).toContain("status: succeeded");
+      expect(status.text).toContain("Next, request a storage quote.");
+      expect(status.text).toContain(
+        `--provider ${DEFAULT_BACKUP_QUOTE_PROVIDER} --region ${DEFAULT_BACKUP_QUOTE_REGION}`,
+      );
+      expect(status.text).toContain("North America: `--provider aws --region us-east-1`");
+    }
+
+    const eventsPath = join(homeDir, ".openclaw", "mnemospark", "events.jsonl");
+    const eventsContent = await readFile(eventsPath, "utf-8");
+    const backupCompleted = eventsContent
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as { event_type?: string; operation_id?: string })
+      .find((e) => e.event_type === "backup.completed");
+    if (operationId && backupCompleted?.operation_id) {
+      expect(backupCompleted.operation_id).toBe(operationId);
+    }
   });
 
   it("preserves quoted backup friendly names and writes events.jsonl under the mnemospark home subdirectory", async () => {
@@ -1990,6 +2069,150 @@ describe("cloud command", () => {
     }
   });
 
+  it("includes upload success body in op-status after async inline upload completes", async () => {
+    const { homeDir, tmpBackupDir } = await createSandbox();
+    const walletKey = `0x${"11".repeat(32)}` as const;
+    const walletAddress = privateKeyToAccount(walletKey).address;
+    const objectId = "obj-async-upload-001";
+    const archiveContent = "async upload archive";
+    const objectHash = sha256Hex(archiveContent);
+    const archivePath = join(tmpBackupDir, objectId);
+    await writeFile(archivePath, archiveContent, "utf-8");
+
+    await mkdir(join(homeDir, ".openclaw", "mnemospark"), { recursive: true });
+    await seedQuotedStorageInSqlite(homeDir, {
+      quoteId: "quote-async-upload",
+      walletAddress,
+      objectId,
+      objectHash,
+      storagePrice: 2.75,
+      friendlyName: "async-upload-fn",
+    });
+
+    const uploadResponseBody = {
+      quote_id: "quote-async-upload",
+      addr: walletAddress,
+      addr_hash: "addr-hash-au",
+      trans_id: "tx-au-001",
+      storage_price: 2.75,
+      object_id: objectId,
+      object_key: "obj-async-upload-001.tar.gz.enc",
+      provider: "aws",
+      bucket_name: "mnemospark-async",
+      location: "us-east-1",
+    };
+
+    const command = createCloudCommand({
+      mnemosparkHomeDir: homeDir,
+      backupOptions: { tmpDir: tmpBackupDir },
+      resolveWalletPrivateKeyFn: async () => walletKey,
+      idempotencyKeyFn: () => "idempotency-async-upload",
+      nowDateFn: () => new Date(2026, 1, 25, 20, 10, 0),
+      ...withMockCronAdapter(),
+      createPaymentFetchFn: () => {
+        return {
+          fetch: async () =>
+            new Response(JSON.stringify(uploadResponseBody), {
+              status: 200,
+              headers: { "Content-Type": "application/json" },
+            }),
+          cache: new PaymentCache(),
+        };
+      },
+      proxyUploadOptions: {
+        fetchImpl: async () =>
+          new Response(JSON.stringify(uploadResponseBody), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+      },
+    });
+
+    const started = await command.handler({
+      channel: "test",
+      isAuthorizedSender: true,
+      args: [
+        "upload",
+        "--quote-id quote-async-upload",
+        `--wallet-address ${walletAddress}`,
+        `--object-id ${objectId}`,
+        `--object-id-hash ${objectHash}`,
+        "--async",
+      ].join(" "),
+      commandBody: "upload",
+      config: {},
+    });
+
+    expect(started.isError).toBeUndefined();
+    const operationId = started.text?.match(/operation-id: ([0-9a-f-]+)/i)?.[1];
+    expect(operationId).toBeTruthy();
+
+    await new Promise((resolve) => setTimeout(resolve, 200));
+
+    const status = await command.handler({
+      channel: "test",
+      isAuthorizedSender: true,
+      args: `op-status --operation-id ${operationId}`,
+      commandBody: "op-status",
+      config: {},
+    });
+
+    if (status.text?.startsWith("Operation not found:")) {
+      expect(status.text).toContain(operationId ?? "");
+    } else {
+      expect(status.text).toContain("status: succeeded");
+      expect(status.text).toContain("Thank you for using mnemospark!");
+      expect(status.text).toContain("Your file `obj-async-upload-001`");
+    }
+  });
+
+  it("includes download success line in op-status after async inline download completes", async () => {
+    const { homeDir } = await createSandbox();
+    const command = createCloudCommand({
+      mnemosparkHomeDir: homeDir,
+      requestStorageDownloadFn: async () => ({
+        success: true,
+        key: "backup/archive.tar.gz",
+        file_path: "/tmp/dl/archive.tar.gz",
+      }),
+    });
+
+    const started = await command.handler({
+      channel: "test",
+      isAuthorizedSender: true,
+      args: [
+        "download",
+        "--wallet-address 0x1234abcd",
+        "--object-key backup/archive.tar.gz",
+        "--async",
+      ].join(" "),
+      commandBody: "download",
+      config: {},
+    });
+
+    expect(started.isError).toBeUndefined();
+    const operationId = started.text?.match(/operation-id: ([0-9a-f-]+)/i)?.[1];
+    expect(operationId).toBeTruthy();
+
+    await new Promise((resolve) => setTimeout(resolve, 120));
+
+    const status = await command.handler({
+      channel: "test",
+      isAuthorizedSender: true,
+      args: `op-status --operation-id ${operationId}`,
+      commandBody: "op-status",
+      config: {},
+    });
+
+    if (status.text?.startsWith("Operation not found:")) {
+      expect(status.text).toContain(operationId ?? "");
+    } else {
+      expect(status.text).toContain("status: succeeded");
+      expect(status.text).toContain("orchestrator: inline");
+      expect(status.text).toContain("downloaded to /tmp/dl/archive.tar.gz");
+    }
+  });
+
   it("supports subagent orchestration metadata and lifecycle events", async () => {
     const { homeDir } = await createSandbox();
     const command = createCloudCommand({
@@ -2043,6 +2266,7 @@ describe("cloud command", () => {
       expect(status.text).toContain("subagent-session-id:");
       expect(status.text).toContain("timeout-seconds: 5");
       expect(status.text).toContain("status: succeeded");
+      expect(status.text).toContain("downloaded to");
     }
 
     const eventsPath = join(homeDir, ".openclaw", "mnemospark", "events.jsonl");
@@ -2137,6 +2361,7 @@ describe("cloud command", () => {
     } else {
       expect(status.text).toContain("status: succeeded");
       expect(status.text).toContain("subagent-session-id: session-sync-hooks");
+      expect(status.text).toContain("ok");
     }
 
     const eventsPath = join(homeDir, ".openclaw", "mnemospark", "events.jsonl");
