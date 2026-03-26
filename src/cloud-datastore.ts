@@ -53,6 +53,8 @@ export type OperationRow = {
   status: string;
   error_code: string | null;
   error_message: string | null;
+  /** User-visible command output on async success; persisted for op-status. */
+  result_text?: string | null;
 };
 
 export type QuoteLookup = {
@@ -111,6 +113,7 @@ export type CloudDatastore = {
     status: string;
     error_code: string | null;
     error_message: string | null;
+    result_text: string | null;
     started_at: string | null;
     finished_at: string | null;
     updated_at: string;
@@ -305,6 +308,7 @@ export async function createCloudDatastore(homeDir?: string): Promise<CloudDatas
     addOperationsColumn("subagent_session_id", "TEXT");
     addOperationsColumn("timeout_seconds", "INTEGER");
     addOperationsColumn("cancel_requested_at", "TEXT");
+    addOperationsColumn("result_text", "TEXT");
 
     nextDb
       .prepare(
@@ -557,8 +561,8 @@ export async function createCloudDatastore(homeDir?: string): Promise<CloudDatas
         const terminalStatuses = new Set(["succeeded", "failed", "cancelled", "timed_out"]);
         db!
           .prepare(
-            `INSERT INTO operations(operation_id, type, object_id, quote_id, trace_id, orchestrator, subagent_session_id, timeout_seconds, cancel_requested_at, status, error_code, error_message, started_at, finished_at, created_at, updated_at)
-           VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            `INSERT INTO operations(operation_id, type, object_id, quote_id, trace_id, orchestrator, subagent_session_id, timeout_seconds, cancel_requested_at, status, error_code, error_message, result_text, started_at, finished_at, created_at, updated_at)
+           VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(operation_id) DO UPDATE SET
              type=excluded.type,
              object_id=COALESCE(excluded.object_id, operations.object_id),
@@ -571,6 +575,7 @@ export async function createCloudDatastore(homeDir?: string): Promise<CloudDatas
              status=excluded.status,
              error_code=excluded.error_code,
              error_message=excluded.error_message,
+             result_text=COALESCE(excluded.result_text, operations.result_text),
              started_at=COALESCE(excluded.started_at, operations.started_at),
              finished_at=COALESCE(excluded.finished_at, operations.finished_at),
              updated_at=excluded.updated_at`,
@@ -588,6 +593,7 @@ export async function createCloudDatastore(homeDir?: string): Promise<CloudDatas
             row.status,
             row.error_code,
             row.error_message,
+            row.result_text ?? null,
             row.status === "started" ? ts : null,
             terminalStatuses.has(row.status) ? ts : null,
             ts,
@@ -599,7 +605,7 @@ export async function createCloudDatastore(homeDir?: string): Promise<CloudDatas
       safe(() => {
         const row = db!
           .prepare(
-            `SELECT operation_id, type, object_id, quote_id, trace_id, orchestrator, subagent_session_id, timeout_seconds, cancel_requested_at, status, error_code, error_message, started_at, finished_at, updated_at
+            `SELECT operation_id, type, object_id, quote_id, trace_id, orchestrator, subagent_session_id, timeout_seconds, cancel_requested_at, status, error_code, error_message, result_text, started_at, finished_at, updated_at
              FROM operations
              WHERE operation_id = ?
              LIMIT 1`,
@@ -618,6 +624,7 @@ export async function createCloudDatastore(homeDir?: string): Promise<CloudDatas
               status: string;
               error_code: string | null;
               error_message: string | null;
+              result_text: string | null;
               started_at: string | null;
               finished_at: string | null;
               updated_at: string;

@@ -286,6 +286,42 @@ describe("cloud datastore", () => {
     expect(operation?.finished_at).toBeTruthy();
   });
 
+  it("stores result_text for async success and preserves it when a later upsert omits result_text", async () => {
+    const datastore = await createCloudDatastore(homeDir);
+
+    if (!sqliteAvailable) {
+      expect(await datastore.findOperationById("op-rt-1")).toBeNull();
+      return;
+    }
+
+    await datastore.upsertOperation({
+      operation_id: "op-rt-1",
+      type: "download",
+      object_id: null,
+      quote_id: null,
+      status: "succeeded",
+      error_code: null,
+      error_message: null,
+      result_text: "File k downloaded to /tmp/x",
+    });
+
+    let row = await datastore.findOperationById("op-rt-1");
+    expect(row?.result_text).toBe("File k downloaded to /tmp/x");
+
+    await datastore.upsertOperation({
+      operation_id: "op-rt-1",
+      type: "download",
+      object_id: null,
+      quote_id: null,
+      status: "succeeded",
+      error_code: null,
+      error_message: null,
+    });
+
+    row = await datastore.findOperationById("op-rt-1");
+    expect(row?.result_text).toBe("File k downloaded to /tmp/x");
+  });
+
   it("findLatestFriendlyNameForObjectKey and findCronAndPaymentForObjectKey join local catalog", async () => {
     const datastore = await createCloudDatastore(homeDir);
     if (!sqliteAvailable) {
