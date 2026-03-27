@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.1](https://github.com/pawlsclick/mnemospark/compare/v0.9.0...v0.9.1) (2026-03-27)
+
+
+### Bug Fixes
+
+* **mnemospark_cloud:** upload archives over 2 GiB ([#85](https://github.com/pawlsclick/mnemospark/issues/85)) ([ac4177d](https://github.com/pawlsclick/mnemospark/commit/ac4177d974132662a95201c4a4070ec9b6f4195d))
+
 ## [0.9.0](https://github.com/pawlsclick/mnemospark/compare/v0.8.3...v0.9.0) (2026-03-26)
 
 
