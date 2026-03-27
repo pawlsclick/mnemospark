@@ -1551,6 +1551,8 @@ async function uploadPresignedObjectIfNeeded(
   encryptedContent: Buffer | null,
   encryptedTempPath: string | undefined,
   fetchImpl: FetchLike = fetch,
+  /** Required for stream PUTs: S3 rejects chunked bodies (Transfer-Encoding) unless length is fixed. */
+  presignedStreamContentLengthBytes?: number,
 ): Promise<void> {
   if (!uploadResponse.upload_url) {
     if (uploadMode === "presigned") {
@@ -1562,6 +1564,13 @@ async function uploadPresignedObjectIfNeeded(
   const headers = new Headers(uploadResponse.upload_headers ?? {});
   if (!headers.has("content-type")) {
     headers.set("content-type", "application/octet-stream");
+  }
+
+  if (encryptedTempPath?.trim()) {
+    const len = presignedStreamContentLengthBytes ?? (await stat(encryptedTempPath.trim())).size;
+    if (!headers.has("content-length")) {
+      headers.set("content-length", String(len));
+    }
   }
 
   const { body, duplex } = presignedPutBodyInit(encryptedContent, encryptedTempPath);
@@ -3449,6 +3458,9 @@ async function runCloudCommandHandler(
         preparedPayload.encryptedContent,
         preparedPayload.encryptedTempPath,
         fetchImpl,
+        preparedPayload.encryptedTempPath
+          ? preparedPayload.payload.content_length_bytes
+          : undefined,
       );
       let finalizedUploadResponse = uploadResponse;
       if (
