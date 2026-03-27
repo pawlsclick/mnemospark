@@ -1594,7 +1594,6 @@ async function uploadPresignedObjectIfNeeded(
         method: "PUT",
         headers,
         body: retryBody.body,
-        redirect: "manual",
       };
       if (retryBody.duplex) {
         retryInit.duplex = retryBody.duplex;
