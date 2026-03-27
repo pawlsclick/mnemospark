@@ -1,5 +1,5 @@
 import { mkdtemp, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { privateKeyToAccount } from "viem/accounts";
@@ -11,8 +11,11 @@ import {
   createCloudCommand,
   DEFAULT_BACKUP_QUOTE_PROVIDER,
   DEFAULT_BACKUP_QUOTE_REGION,
+  encryptAesGcm,
+  encryptPlaintextFileToAesGcmPath,
   expandTilde,
 } from "./cloud-command.js";
+import { AES_GCM_NONCE_BYTES } from "./cloud-storage-crypto.js";
 import { createCloudDatastore } from "./cloud-datastore.js";
 import type { StorageDownloadProxyResponse } from "./cloud-storage.js";
 import { PaymentCache } from "./payment-cache.js";
@@ -134,6 +137,35 @@ async function seedQuotedStorageInSqlite(
     });
   }
 }
+
+describe("encryptPlaintextFileToAesGcmPath", () => {
+  it("matches encryptAesGcm output byte-for-byte for small plaintext", async () => {
+    const root = await mkdtemp(join(tmpdir(), "mnemospark-aes-stream-"));
+    sandboxDirs.push(root);
+    const plainPath = join(root, "plain.bin");
+    const outPath = join(root, "out.enc");
+    const plaintext = Buffer.from("hello streaming upload parity");
+    await writeFile(plainPath, plaintext);
+
+    const dek = randomBytes(32);
+    const fixedNonce = randomBytes(AES_GCM_NONCE_BYTES);
+    let nonceUsed = false;
+    const deterministicNonce = (size: number) => {
+      if (size === AES_GCM_NONCE_BYTES && !nonceUsed) {
+        nonceUsed = true;
+        return fixedNonce;
+      }
+      throw new Error("unexpected RNG request");
+    };
+
+    const expected = encryptAesGcm(plaintext, dek, deterministicNonce);
+    nonceUsed = false;
+    await encryptPlaintextFileToAesGcmPath(plainPath, dek, outPath, deterministicNonce);
+    const actual = await readFile(outPath);
+
+    expect(actual.equals(expected)).toBe(true);
+  });
+});
 
 describe("expandTilde", () => {
   it("expands ~/foo to homedir + /foo", () => {
