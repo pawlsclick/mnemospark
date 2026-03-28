@@ -215,7 +215,7 @@ describe("cloud datastore", () => {
       object_key: "obj-key-1",
       quote_id: "q-1",
       schedule: "0 0 1 * *",
-      command: '/mnemospark_cloud payment-settle --quote-id "q-1"',
+      command: '/mnemospark cloud payment-settle --quote-id "q-1"',
       status: "active",
     });
 

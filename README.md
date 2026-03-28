@@ -47,19 +47,19 @@ openclaw gateway restart
 
 ### 4) Use slash commands in OpenClaw chat
 
-- `/mnemospark_wallet` → wallet status/export/help
-- `/mnemospark_cloud help` → storage command guide
+- `/mnemospark wallet` → wallet status; `/mnemospark wallet help` → commands
+- `/mnemospark cloud help` → storage command guide
 
 ---
 
 ## Core Commands
 
-Use via `/mnemospark_cloud ...` in OpenClaw chat.
+Use via `/mnemospark cloud …` (or `/mnemospark wallet …`) in OpenClaw chat.
 
 ### Get a storage quote
 
 ```text
-/mnemospark_cloud price-storage --wallet-address <addr> --object-id <id> --object-id-hash <sha256> --gb <gb> --provider aws --region us-east-1
+/mnemospark cloud price-storage --wallet-address <addr> --object-id <id> --object-id-hash <sha256> --gb <gb> --provider aws --region us-east-1
 ```
 
 Use other regions by changing `--provider` and `--region` (defaults: `aws` / `us-east-1`).
@@ -67,25 +67,25 @@ Use other regions by changing `--provider` and `--region` (defaults: `aws` / `us
 ### Upload using quote
 
 ```text
-/mnemospark_cloud upload --quote-id <quote-id> --wallet-address <addr> --object-id <id> --object-id-hash <sha256>
+/mnemospark cloud upload --quote-id <quote-id> --wallet-address <addr> --object-id <id> --object-id-hash <sha256>
 ```
 
 ### List objects
 
 ```text
-/mnemospark_cloud ls --wallet-address <addr> --object-key <object-key>
+/mnemospark cloud ls --wallet-address <addr> --object-key <object-key>
 ```
 
 ### Download object
 
 ```text
-/mnemospark_cloud download --wallet-address <addr> --object-key <object-key>
+/mnemospark cloud download --wallet-address <addr> --object-key <object-key>
 ```
 
 ### Delete object
 
 ```text
-/mnemospark_cloud delete --wallet-address <addr> --object-key <object-key>
+/mnemospark cloud delete --wallet-address <addr> --object-key <object-key>
 ```
 
 ---

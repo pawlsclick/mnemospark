@@ -54,16 +54,6 @@ function makeContext(args) {
   };
 }
 
-function ensureWalletExists() {
-  const walletDir = join(homedir(), ".openclaw", "mnemospark", "wallet");
-  const walletFile = join(walletDir, "wallet.key");
-  if (!existsSync(walletFile)) {
-    mkdirSync(walletDir, { recursive: true });
-    const { generatePrivateKey } = await_not_needed();
-    info("No wallet file found; creating a dummy for test purposes");
-  }
-}
-
 // ---------------------------------------------------------------------------
 // 1. Load the plugin
 // ---------------------------------------------------------------------------
@@ -110,44 +100,44 @@ const mockApi = {
 info("Calling plugin.register(mockApi)");
 await plugin.register(mockApi);
 
-// createWalletCommand is async; give it time to resolve.
-await new Promise((r) => setTimeout(r, 1000));
-
 // ---------------------------------------------------------------------------
 // 3. Verify command registrations
 // ---------------------------------------------------------------------------
 info("=== Command Registration ===");
 
 const commandsByName = Object.fromEntries(registeredCommands.map((c) => [c.name, c]));
-const expectedCommands = [
-  { name: "mnemospark_wallet", descIncludes: "wallet" },
-  { name: "mnemospark_cloud", descIncludes: "cloud" },
-];
+const mnemosparkCmd = commandsByName["mnemospark"];
 
-for (const { name, descIncludes } of expectedCommands) {
-  const cmd = commandsByName[name];
-  if (!cmd) {
-    fail(`/${name} — not registered`);
-    continue;
-  }
-  pass(`/${name} — registered`);
+if (!mnemosparkCmd) {
+  fail("/mnemospark — not registered");
+} else {
+  pass("/mnemospark — registered");
+}
 
-  if (typeof cmd.handler !== "function") {
-    fail(`/${name} — handler is not a function`);
+if (registeredCommands.length !== 1) {
+  fail(`Expected exactly one registered command, got ${registeredCommands.length}`);
+} else {
+  pass("Exactly one slash command registered");
+}
+
+if (mnemosparkCmd) {
+  if (typeof mnemosparkCmd.handler !== "function") {
+    fail("/mnemospark — handler is not a function");
   } else {
-    pass(`/${name} — handler is a function`);
-  }
-
-  if (cmd.acceptsArgs !== true) {
-    fail(`/${name} — acceptsArgs should be true`);
-  } else {
-    pass(`/${name} — acceptsArgs is true`);
+    pass("/mnemospark — handler is a function");
   }
 
-  if (!cmd.description.toLowerCase().includes(descIncludes)) {
-    fail(`/${name} — description missing "${descIncludes}"`);
+  if (mnemosparkCmd.acceptsArgs !== true) {
+    fail("/mnemospark — acceptsArgs should be true");
   } else {
-    pass(`/${name} — description contains "${descIncludes}"`);
+    pass("/mnemospark — acceptsArgs is true");
+  }
+
+  const desc = (mnemosparkCmd.description || "").toLowerCase();
+  if (!desc.includes("wallet") || !desc.includes("cloud")) {
+    fail("/mnemospark — description should mention wallet and cloud");
+  } else {
+    pass("/mnemospark — description mentions wallet and cloud");
   }
 }
 
@@ -169,56 +159,63 @@ if (!proxyService) {
 }
 
 // ---------------------------------------------------------------------------
-// 5. Exercise /mnemospark cloud handler
+// 5. Exercise unified /mnemospark handler — root + cloud
 // ---------------------------------------------------------------------------
-info("=== /mnemospark cloud handler tests ===");
+info("=== /mnemospark handler tests ===");
 
-const cloudCmd = commandsByName["mnemospark_cloud"];
-if (cloudCmd) {
-  // 5a. cloud help (empty args)
+if (mnemosparkCmd) {
+  // 5a. root help (empty args)
   {
-    const result = await cloudCmd.handler(makeContext(""));
-    if (!result.text || !result.text.includes("mnemospark Cloud Commands")) {
-      fail("/mnemospark cloud (no args) — did not return help text");
+    const result = await mnemosparkCmd.handler(makeContext(""));
+    if (!result.text || !result.text.includes("mnemospark")) {
+      fail("/mnemospark (no args) — did not return root help text");
     } else {
-      pass("/mnemospark cloud (no args) — returns help text");
+      pass("/mnemospark (no args) — returns root help text");
     }
     if (result.isError) {
-      fail("/mnemospark cloud (no args) — isError should be falsy");
+      fail("/mnemospark (no args) — isError should be falsy");
     } else {
-      pass("/mnemospark cloud (no args) — isError is falsy");
+      pass("/mnemospark (no args) — isError is falsy");
     }
   }
 
-  // 5b. cloud help (explicit)
+  // 5b. cloud help
   {
-    const result = await cloudCmd.handler(makeContext("help"));
-    if (!result.text || !result.text.includes("mnemospark Cloud Commands")) {
-      fail("/mnemospark cloud help — did not return help text");
+    const result = await mnemosparkCmd.handler(makeContext("cloud help"));
+    if (!result.text || !result.text.includes("Cloud Commands")) {
+      fail("/mnemospark cloud help — did not return cloud help text");
     } else {
-      pass("/mnemospark cloud help — returns help text");
+      pass("/mnemospark cloud help — returns cloud help text");
     }
   }
 
-  // 5c. Verify help text lists all expected subcommands
+  // 5c. Verify cloud help lists subcommands
   {
-    const result = await cloudCmd.handler(makeContext("help"));
+    const result = await mnemosparkCmd.handler(makeContext("cloud"));
     const helpText = result.text || "";
     const subcommands = ["backup", "price-storage", "upload", "ls", "download", "delete"];
     for (const sub of subcommands) {
       if (helpText.includes(sub)) {
-        pass(`/mnemospark cloud help — lists "${sub}"`);
+        pass(`/mnemospark cloud — lists "${sub}"`);
       } else {
-        fail(`/mnemospark cloud help — missing "${sub}"`);
+        fail(`/mnemospark cloud — missing "${sub}"`);
       }
     }
+  }
+
+  // Ensure a local wallet exists before backup (resolveWalletKey in cloud backup path).
+  {
+    await mnemosparkCmd.handler(makeContext("wallet help"));
+    pass("/mnemospark wallet help — bootstrap wallet for backup test");
   }
 
   // 5d. cloud backup with a real temp file
   {
     const tmpFile = join(tmpdir(), `mnemospark-slash-test-${Date.now()}.txt`);
     writeFileSync(tmpFile, "slash command test content");
-    const result = await cloudCmd.handler(makeContext(`backup ${tmpFile}`));
+    const result = await mnemosparkCmd.handler(
+      makeContext(`cloud backup ${tmpFile} --name slash-integration-test`),
+    );
     if (result.isError) {
       fail("/mnemospark cloud backup <file> — returned isError");
     } else if (!result.text || !result.text.includes("object-id")) {
@@ -228,9 +225,9 @@ if (cloudCmd) {
     }
   }
 
-  // 5e. cloud price-storage with missing args should return validation error
+  // 5e. cloud price-storage with missing args
   {
-    const result = await cloudCmd.handler(makeContext("price-storage"));
+    const result = await mnemosparkCmd.handler(makeContext("cloud price-storage"));
     if (!result.isError) {
       fail("/mnemospark cloud price-storage (no args) — should be an error");
     } else {
@@ -238,9 +235,9 @@ if (cloudCmd) {
     }
   }
 
-  // 5f. cloud upload with missing args should return validation error
+  // 5f. cloud upload with missing args
   {
-    const result = await cloudCmd.handler(makeContext("upload"));
+    const result = await mnemosparkCmd.handler(makeContext("cloud upload"));
     if (!result.isError) {
       fail("/mnemospark cloud upload (no args) — should be an error");
     } else {
@@ -248,9 +245,9 @@ if (cloudCmd) {
     }
   }
 
-  // 5g. cloud ls with missing args should return validation error
+  // 5g. cloud ls with missing args
   {
-    const result = await cloudCmd.handler(makeContext("ls"));
+    const result = await mnemosparkCmd.handler(makeContext("cloud ls"));
     if (!result.isError) {
       fail("/mnemospark cloud ls (no args) — should be an error");
     } else {
@@ -258,9 +255,9 @@ if (cloudCmd) {
     }
   }
 
-  // 5h. cloud download with missing args should return validation error
+  // 5h. cloud download with missing args
   {
-    const result = await cloudCmd.handler(makeContext("download"));
+    const result = await mnemosparkCmd.handler(makeContext("cloud download"));
     if (!result.isError) {
       fail("/mnemospark cloud download (no args) — should be an error");
     } else {
@@ -268,9 +265,9 @@ if (cloudCmd) {
     }
   }
 
-  // 5i. cloud delete with missing args should return validation error
+  // 5i. cloud delete with missing args
   {
-    const result = await cloudCmd.handler(makeContext("delete"));
+    const result = await mnemosparkCmd.handler(makeContext("cloud delete"));
     if (!result.isError) {
       fail("/mnemospark cloud delete (no args) — should be an error");
     } else {
@@ -278,22 +275,17 @@ if (cloudCmd) {
     }
   }
 
-  // 5j. unknown subcommand returns help text with isError
+  // 5j. unknown top-level token
   {
-    const result = await cloudCmd.handler(makeContext("nonexistent-subcommand"));
+    const result = await mnemosparkCmd.handler(makeContext("nonexistent-subcommand"));
     if (!result.isError) {
-      fail("/mnemospark cloud <unknown> — should set isError");
+      fail("/mnemospark <unknown> — should set isError");
     } else {
-      pass("/mnemospark cloud <unknown> — returns help with isError");
-    }
-    if (!result.text || !result.text.includes("mnemospark Cloud Commands")) {
-      fail("/mnemospark cloud <unknown> — should include help text");
-    } else {
-      pass("/mnemospark cloud <unknown> — includes help text");
+      pass("/mnemospark <unknown> — returns error");
     }
   }
 } else {
-  fail("Skipping /mnemospark cloud handler tests — command not registered");
+  fail("Skipping /mnemospark handler tests — command not registered");
 }
 
 // ---------------------------------------------------------------------------
@@ -301,11 +293,10 @@ if (cloudCmd) {
 // ---------------------------------------------------------------------------
 info("=== /mnemospark wallet handler tests ===");
 
-const walletCmd = commandsByName["mnemospark_wallet"];
-if (walletCmd) {
+if (mnemosparkCmd) {
   // 6a. wallet status (default)
   {
-    const result = await walletCmd.handler(makeContext(""));
+    const result = await mnemosparkCmd.handler(makeContext("wallet"));
     if (!result.text) {
       fail("/mnemospark wallet — returned no text");
     } else if (result.text.includes("No mnemospark wallet found")) {
@@ -320,7 +311,7 @@ if (walletCmd) {
 
   // 6b. wallet export
   {
-    const result = await walletCmd.handler(makeContext("export"));
+    const result = await mnemosparkCmd.handler(makeContext("wallet export"));
     if (!result.text) {
       fail("/mnemospark wallet export — returned no text");
     } else if (result.text.includes("No mnemospark wallet found")) {
@@ -330,6 +321,16 @@ if (walletCmd) {
       pass("/mnemospark wallet export — returns private key export");
     } else {
       fail("/mnemospark wallet export — unexpected response: " + result.text.slice(0, 120));
+    }
+  }
+
+  // 6c. wallet help
+  {
+    const result = await mnemosparkCmd.handler(makeContext("wallet help"));
+    if (!result.text || !result.text.includes("mnemospark Wallet")) {
+      fail("/mnemospark wallet help — did not return wallet help");
+    } else {
+      pass("/mnemospark wallet help — returns wallet help");
     }
   }
 } else {

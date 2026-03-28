@@ -209,11 +209,11 @@ describe("cloud command", () => {
       throw new Error("Expected cloud help text");
     }
 
-    expect(result.text).toContain("/mnemospark_cloud ls --wallet-address <addr>");
+    expect(result.text).toContain("/mnemospark cloud ls --wallet-address <addr>");
     expect(result.text).toContain("omit both to list bucket");
-    expect(result.text).toContain("/mnemospark_cloud download --wallet-address <addr>");
-    expect(result.text).toContain("/mnemospark_cloud delete --wallet-address <addr>");
-    expect(result.text).toContain("/mnemospark_cloud payment-settle");
+    expect(result.text).toContain("/mnemospark cloud download --wallet-address <addr>");
+    expect(result.text).toContain("/mnemospark cloud delete --wallet-address <addr>");
+    expect(result.text).toContain("/mnemospark cloud payment-settle");
     expect(result.text).not.toContain("<s3-key>");
     expect(result.text).not.toContain("s3-key");
     expect(result.text).toContain("configured mnemospark wallet key");
@@ -505,7 +505,7 @@ describe("cloud command", () => {
     expect(result.text).toContain("storage price `$2.75`");
     expect(result.text).toContain("for file `obj-001`");
     expect(result.text).toContain("If you accept this quote, run:");
-    expect(result.text).toContain("/mnemospark_cloud upload --quote-id `quote-abc123`");
+    expect(result.text).toContain("/mnemospark cloud upload --quote-id `quote-abc123`");
     expect(result.text).toContain("--object-id-hash `hash-001`");
     expect(result.text).toContain(
       "Quotes are valid for one hour. Please run price-storage again if you need a new quote.",
@@ -530,9 +530,8 @@ describe("cloud command", () => {
     });
 
     expect(result.isError).toBe(true);
-    expect(result.text).toBe(
-      "Cannot price storage: required arguments are --wallet-address, --object-id, --object-id-hash, --gb, --provider, --region.",
-    );
+    expect(result.text).toContain("Could not parse command arguments");
+    expect(result.text).toContain("Missing required argument");
   });
 
   it("returns Cannot price storage when proxy quote request fails", async () => {
@@ -572,8 +571,8 @@ describe("cloud command", () => {
       config: {},
     });
     expect(result.isError).toBe(true);
-    expect(result.text).toContain("--wallet-address");
-    expect(result.text).toContain("--quote-id | --renewal");
+    expect(result.text).toContain("Could not parse command arguments");
+    expect(result.text).toContain("wallet-address");
   });
 
   it("rejects payment-settle on wallet address mismatch", async () => {
@@ -645,7 +644,7 @@ describe("cloud command", () => {
       object_key: objectKey,
       quote_id: quoteId,
       schedule: "0 0 1 * *",
-      command: "/mnemospark_cloud payment-settle --quote-id x",
+      command: "/mnemospark cloud payment-settle --quote-id x",
       status: "active",
     });
 
@@ -892,7 +891,7 @@ describe("cloud command", () => {
       expect(cronId).toBeTruthy();
       expect(result.text).toContain("monthly");
       expect(result.text).toContain("3rd (UTC)");
-      expect(result.text).toContain(`/mnemospark_cloud ls --wallet-address \`${walletAddress}\``);
+      expect(result.text).toContain(`/mnemospark cloud ls --wallet-address \`${walletAddress}\``);
       expect(result.text).toContain("Thank you for using mnemospark!");
       expect(result.text).toContain("pluggedin@mnemospark.ai");
 
@@ -1566,9 +1565,8 @@ describe("cloud command", () => {
     });
 
     expect(result.isError).toBe(true);
-    expect(result.text).toBe(
-      "Cannot upload storage object: required arguments are --quote-id, --wallet-address, --object-id, --object-id-hash.",
-    );
+    expect(result.text).toContain("Could not parse command arguments");
+    expect(result.text).toContain("Missing required argument");
   });
 
   it("returns invalid async-flag guidance for upload", async () => {
@@ -1841,8 +1839,8 @@ describe("cloud command", () => {
     });
 
     expect(result.isError).toBe(true);
-    expect(result.text).toContain("Cannot list storage object");
-    expect(result.text).toContain("--wallet-address");
+    expect(result.text).toContain("Could not parse command arguments");
+    expect(result.text).toContain("wallet-address");
   });
 
   it("lists bucket when /mnemospark cloud ls has wallet only", async () => {
@@ -1958,8 +1956,8 @@ describe("cloud command", () => {
     });
 
     expect(result.isError).toBe(true);
-    expect(result.text).toContain("Cannot list storage object");
-    expect(result.text).toContain("--wallet-address");
+    expect(result.text).toContain("Could not parse command arguments");
+    expect(result.text).toContain("wallet-address");
     expect(lsCalled).toBe(false);
   });
 

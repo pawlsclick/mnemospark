@@ -57,6 +57,19 @@ import { isValidWalletPrivateKey } from "./wallet-key.js";
 import { createCloudDatastore, type CronJobRow, type QuoteLookup } from "./cloud-datastore.js";
 import { appendJsonlEvent } from "./cloud-jsonl.js";
 import type { RequestCorrelation } from "./cloud-correlation.js";
+import { normalizeInputForParsing } from "./args/normalize.js";
+import { parseCommandArgs, valuesToStringRecord } from "./args/parser.js";
+import { stripSubcommandVerbose } from "./mnemospark-route.js";
+import {
+  backupFlagsSchema,
+  deleteSchema,
+  downloadSchema,
+  lsSchema,
+  opStatusSchema,
+  paymentSettleSchema,
+  priceStorageSchema,
+  uploadSchema,
+} from "./arg-schemas.js";
 
 const SUPPORTED_BACKUP_PLATFORMS = new Set<NodeJS.Platform>(["darwin", "linux"]);
 const BACKUP_DIR_SUBPATH = join(".openclaw", "mnemospark", "backup");
@@ -84,7 +97,6 @@ const REQUIRED_PRICE_STORAGE =
 const REQUIRED_UPLOAD = "--quote-id, --wallet-address, --object-id, --object-id-hash";
 const REQUIRED_BACKUP = "<file|directory> and --name <friendly-name>";
 const REQUIRED_PAYMENT_SETTLE = "--wallet-address and (--quote-id | --renewal with --object-key)";
-const PAYMENT_SETTLE_BOOLEAN_FLAGS = new Set(["renewal"]);
 const REQUIRED_STORAGE_OBJECT =
   "--wallet-address and one of (--object-key | --name [--latest|--at])";
 const REQUIRED_LS =
@@ -97,10 +109,6 @@ const PAYMENT_SETTLE_FLAG_NAMES = new Set([
   "storage-price",
   "renewal",
 ]);
-const BOOLEAN_SELECTOR_FLAGS = new Set(["latest"]);
-const BOOLEAN_ASYNC_FLAGS = new Set(["async"]);
-const BOOLEAN_OP_STATUS_FLAGS = new Set(["cancel"]);
-const BOOLEAN_SELECTOR_AND_ASYNC_FLAGS = new Set(["latest", "async"]);
 const ORCHESTRATOR_MODES = new Set(["inline", "subagent"]);
 
 /**
@@ -121,39 +129,42 @@ export function expandTilde(path: string): string {
 const CLOUD_HELP_TEXT = [
   "☁️ **mnemospark - Wallet and go.** 💙",
   "",
+  "**Syntax:** use `/mnemospark cloud …`. Arguments may use `key:value`, `key=value`, or `--key value`. Optional verbose markers: `cloud:true`, `price-storage:true`, etc. Aliases: `wallet:` → wallet-address, `object:` → object-id, `quote:` → quote-id, `hash:` → object-id-hash.",
+  "",
   "**Cloud Commands**",
   "",
-  "• `/mnemospark_cloud` or `/mnemospark_cloud help` — show this message",
+  "• `/mnemospark cloud` or `/mnemospark cloud help` — show this message (equivalent: `/mnemospark cloud:true help:true`)",
   "",
-  "• `/mnemospark_cloud backup <file|directory> --name <friendly-name> [--async] [--orchestrator <inline|subagent>] [--timeout-seconds <n>]`",
+  "• `/mnemospark cloud backup <file|directory> --name <friendly-name> [--async] [--orchestrator <inline|subagent>] [--timeout-seconds <n>]`",
   "  Purpose: create a local tar+gzip archive under ~/.openclaw/mnemospark/backup (filename from sanitized friendly name) and record metadata in SQLite for later price-storage and upload.",
   "  Required: " + REQUIRED_BACKUP,
   "",
-  "• `/mnemospark_cloud price-storage --wallet-address <addr> --object-id <id> --object-id-hash <hash> --gb <gb> --provider aws --region us-east-1`",
+  "• `/mnemospark cloud price-storage --wallet-address <addr> --object-id <id> --object-id-hash <hash> --gb <gb> --provider aws --region us-east-1`",
   "  Purpose: request a storage quote before upload (defaults shown; override `--provider` / `--region` for other regions).",
   "  Required: " + REQUIRED_PRICE_STORAGE,
+  "  Shorter: `wallet:… object:… hash:… gb:… provider:… region:…`",
   "",
-  "• `/mnemospark_cloud upload --quote-id <quote-id> --wallet-address <addr> --object-id <id> --object-id-hash <hash> [--name <friendly-name>] [--async] [--orchestrator <inline|subagent>] [--timeout-seconds <n>]`",
+  "• `/mnemospark cloud upload --quote-id <quote-id> --wallet-address <addr> --object-id <id> --object-id-hash <hash> [--name <friendly-name>] [--async] [--orchestrator <inline|subagent>] [--timeout-seconds <n>]`",
   "  Purpose: upload an encrypted object using a valid quote-id.",
   "  Required: " + REQUIRED_UPLOAD,
   "",
-  "• `/mnemospark_cloud payment-settle (--quote-id <quote-id> | --renewal --object-key <key>) --wallet-address <addr> [--object-id <id>] [--storage-price <n>]`",
+  "• `/mnemospark cloud payment-settle (--quote-id <quote-id> | --renewal --object-key <key>) --wallet-address <addr> [--object-id <id>] [--storage-price <n>]`",
   "  Purpose: settle storage payment before upload (quote) or on the monthly cron (renewal, no new quote). Uses the same proxy + x402 path as upload pre-settlement.",
   "  Required: " + REQUIRED_PAYMENT_SETTLE + " (wallet private key must match the address).",
   "",
-  "• `/mnemospark_cloud ls --wallet-address <addr> [--object-key <key> | --name <friendly-name> | omit both to list bucket] [--latest|--at <timestamp>]`",
+  "• `/mnemospark cloud ls --wallet-address <addr> [--object-key <key> | --name <friendly-name> | omit both to list bucket] [--latest|--at <timestamp>]`",
   "  Purpose: stat one object or list all keys in the wallet bucket (S3).",
   "  Required: " + REQUIRED_LS,
   "",
-  "• `/mnemospark_cloud download --wallet-address <addr> [--object-key <object-key> | --name <friendly-name>] [--latest|--at <timestamp>] [--async] [--orchestrator <inline|subagent>] [--timeout-seconds <n>]`",
+  "• `/mnemospark cloud download --wallet-address <addr> [--object-key <object-key> | --name <friendly-name>] [--latest|--at <timestamp>] [--async] [--orchestrator <inline|subagent>] [--timeout-seconds <n>]`",
   "  Purpose: fetch an object to local disk.",
   "  Required: " + REQUIRED_STORAGE_OBJECT,
   "",
-  "• `/mnemospark_cloud delete --wallet-address <addr> [--object-key <object-key> | --name <friendly-name>] [--latest|--at <timestamp>]`",
+  "• `/mnemospark cloud delete --wallet-address <addr> [--object-key <object-key> | --name <friendly-name>] [--latest|--at <timestamp>]`",
   "  Purpose: remove a remote object and local cron tracking when present.",
   "  Required: " + REQUIRED_STORAGE_OBJECT,
   "",
-  "• `/mnemospark_cloud op-status --operation-id <id> [--cancel]`",
+  "• `/mnemospark cloud op-status --operation-id <id> [--cancel]`",
   "  Purpose: inspect async operation status, or request cancellation for subagent runs.",
   "  Required: --operation-id",
   "",
@@ -170,10 +181,10 @@ const CLOUD_HELP_TEXT = [
   "  Cancel a subagent-orchestrated operation by operation-id (idempotent).",
   "",
   "Examples:",
-  "• `/mnemospark_cloud upload ... --async --orchestrator subagent`",
-  "• `/mnemospark_cloud download ... --async --orchestrator subagent --timeout-seconds 900`",
-  "• `/mnemospark_cloud op-status --operation-id <id>`",
-  "• `/mnemospark_cloud op-status --operation-id <id> --cancel`",
+  "• `/mnemospark cloud upload ... --async --orchestrator subagent`",
+  "• `/mnemospark cloud download ... --async --orchestrator subagent --timeout-seconds 900`",
+  "• `/mnemospark cloud op-status --operation-id <id>`",
+  "• `/mnemospark cloud op-status --operation-id <id> --cancel`",
   "",
   CLOUD_HELP_FOOTER_STATE,
   "",
@@ -235,7 +246,7 @@ type MnemosparkSubagentTaskV1 = {
   args: string;
   timeoutSeconds?: number;
   requestedBy: {
-    pluginCommand: "mnemospark_cloud";
+    pluginCommand: "mnemospark";
     chatId?: string;
     senderId?: string;
   };
@@ -307,7 +318,8 @@ type ParsedCloudArgs =
   | { mode: "delete-invalid" }
   | { mode: "op-status"; operationId: string; cancel?: boolean }
   | { mode: "op-status-invalid" }
-  | { mode: "unknown" };
+  | { mode: "unknown" }
+  | { mode: "arg-parse-failure"; errors: string[]; warnings: string[] };
 
 type CreateCloudCommandOptions = {
   backupOptions?: BackupObjectOptions;
@@ -391,47 +403,6 @@ function tokenizeArgsRaw(input: string): string[] {
     return [];
   }
   return tokens;
-}
-
-function tokenizeArgs(input: string): string[] {
-  return tokenizeArgsRaw(input).map((token) => stripWrappingQuotes(token));
-}
-
-function parseNamedFlagsTokens(
-  tokens: string[],
-  booleanFlags: ReadonlySet<string> = new Set(),
-): Record<string, string> | null {
-  if (tokens.length === 0) {
-    return null;
-  }
-
-  const parsed: Record<string, string> = {};
-  for (let i = 0; i < tokens.length; i += 1) {
-    const keyToken = tokens[i];
-    if (!keyToken.startsWith("--")) {
-      return null;
-    }
-    const key = keyToken.slice(2).toLowerCase().replace(/_/g, "-");
-    const value = tokens[i + 1];
-    if (!value || value.startsWith("--")) {
-      if (booleanFlags.has(key)) {
-        parsed[key] = "true";
-        continue;
-      }
-      return null;
-    }
-    parsed[key] = value;
-    i += 1;
-  }
-  return parsed;
-}
-
-function parseNamedFlags(
-  input: string,
-  booleanFlags: ReadonlySet<string> = new Set(),
-): Record<string, string> | null {
-  const tokens = tokenizeArgs(input);
-  return parseNamedFlagsTokens(tokens, booleanFlags);
 }
 
 function parseObjectSelector(
@@ -568,37 +539,62 @@ function stripAsyncControlFlags(args?: string): string {
   return filtered.join(" ");
 }
 
+function mergeArgParseWarnings(a: string[], b: string[]): string[] {
+  return [...a, ...b];
+}
+
 function parseCloudArgs(args?: string): ParsedCloudArgs {
   const trimmed = args?.trim() ?? "";
   if (!trimmed) {
     return { mode: "help" };
   }
 
-  const spaceIdx = trimmed.indexOf(" ");
-  const subcommand = (spaceIdx === -1 ? trimmed : trimmed.slice(0, spaceIdx)).toLowerCase();
-  const rest = spaceIdx === -1 ? "" : trimmed.slice(spaceIdx + 1);
+  const norm = normalizeInputForParsing(trimmed);
+  const text = norm.text;
+  const normWarnings = norm.warnings;
+
+  const spaceIdx = text.search(/\s/);
+  const rawFirst = spaceIdx === -1 ? text : text.slice(0, spaceIdx);
+  const rest = spaceIdx === -1 ? "" : text.slice(spaceIdx + 1).trim();
+
+  const subParsed = stripSubcommandVerbose(rawFirst);
+  if (!subParsed.ok) {
+    return {
+      mode: "arg-parse-failure",
+      errors: [`Invalid subcommand token "${rawFirst}". Use name:true only with value true.`],
+      warnings: normWarnings,
+    };
+  }
+
+  const subcommand = subParsed.name;
 
   if (subcommand === "help") {
     return { mode: "help" };
   }
 
   if (subcommand === "backup") {
-    const tokens = tokenizeArgs(rest);
+    const restNorm = normalizeInputForParsing(rest);
+    const restText = restNorm.text;
+    const w = mergeArgParseWarnings(normWarnings, restNorm.warnings);
+    const tokens = tokenizeArgsRaw(restText);
     if (tokens.length === 0) {
       return { mode: "unknown" };
     }
-    const backupTarget = tokens[0] ?? "";
+    const backupTarget = stripWrappingQuotes(tokens[0] ?? "");
     if (!backupTarget) {
       return { mode: "unknown" };
     }
     const remainingTokens = tokens.slice(1);
-    const flags =
-      remainingTokens.length === 0
-        ? ({} as Record<string, string>)
-        : parseNamedFlagsTokens(remainingTokens, BOOLEAN_ASYNC_FLAGS);
-    if (!flags) {
-      return { mode: "backup-invalid" };
+    const flagsPart = remainingTokens.join(" ");
+    const parsed = parseCommandArgs(flagsPart, backupFlagsSchema);
+    if (!parsed.ok) {
+      return {
+        mode: "arg-parse-failure",
+        errors: parsed.errors,
+        warnings: mergeArgParseWarnings(w, parsed.warnings),
+      };
     }
+    const flags = valuesToStringRecord(parsed.values);
     const asyncArgs = parseAsyncOperationArgs(flags);
     if (!asyncArgs) {
       return { mode: "backup-invalid-async" };
@@ -616,10 +612,15 @@ function parseCloudArgs(args?: string): ParsedCloudArgs {
   }
 
   if (subcommand === "price-storage") {
-    const flags = parseNamedFlags(rest);
-    if (!flags) {
-      return { mode: "price-storage-invalid" };
+    const parsed = parseCommandArgs(rest, priceStorageSchema);
+    if (!parsed.ok) {
+      return {
+        mode: "arg-parse-failure",
+        errors: parsed.errors,
+        warnings: mergeArgParseWarnings(normWarnings, parsed.warnings),
+      };
     }
+    const flags = valuesToStringRecord(parsed.values);
     const gb = Number.parseFloat(flags.gb ?? "");
     const request = parsePriceStorageQuoteRequest({
       wallet_address: flags["wallet-address"],
@@ -636,10 +637,15 @@ function parseCloudArgs(args?: string): ParsedCloudArgs {
   }
 
   if (subcommand === "upload") {
-    const flags = parseNamedFlags(rest, BOOLEAN_ASYNC_FLAGS);
-    if (!flags) {
-      return { mode: "upload-invalid" };
+    const parsed = parseCommandArgs(rest, uploadSchema);
+    if (!parsed.ok) {
+      return {
+        mode: "arg-parse-failure",
+        errors: parsed.errors,
+        warnings: mergeArgParseWarnings(normWarnings, parsed.warnings),
+      };
     }
+    const flags = valuesToStringRecord(parsed.values);
     const asyncArgs = parseAsyncOperationArgs(flags);
     if (!asyncArgs) {
       return { mode: "upload-invalid-async" };
@@ -668,10 +674,15 @@ function parseCloudArgs(args?: string): ParsedCloudArgs {
   }
 
   if (subcommand === "payment-settle") {
-    const flags = parseNamedFlags(rest, PAYMENT_SETTLE_BOOLEAN_FLAGS);
-    if (!flags) {
-      return { mode: "payment-settle-invalid" };
+    const parsed = parseCommandArgs(rest, paymentSettleSchema);
+    if (!parsed.ok) {
+      return {
+        mode: "arg-parse-failure",
+        errors: parsed.errors,
+        warnings: mergeArgParseWarnings(normWarnings, parsed.warnings),
+      };
     }
+    const flags = valuesToStringRecord(parsed.values);
     for (const key of Object.keys(flags)) {
       if (!PAYMENT_SETTLE_FLAG_NAMES.has(key)) {
         return { mode: "payment-settle-invalid" };
@@ -717,11 +728,16 @@ function parseCloudArgs(args?: string): ParsedCloudArgs {
   }
 
   if (subcommand === "ls") {
-    const flags = parseNamedFlags(rest, BOOLEAN_SELECTOR_FLAGS);
-    if (!flags) {
-      return { mode: "ls-invalid" };
+    const parsed = parseCommandArgs(rest, lsSchema);
+    if (!parsed.ok) {
+      return {
+        mode: "arg-parse-failure",
+        errors: parsed.errors,
+        warnings: mergeArgParseWarnings(normWarnings, parsed.warnings),
+      };
     }
-    const walletAddress = flags["wallet-address"]?.trim() ?? flags["wallet_address"]?.trim() ?? "";
+    const flags = valuesToStringRecord(parsed.values);
+    const walletAddress = flags["wallet-address"]?.trim() ?? "";
     if (!walletAddress) {
       return { mode: "ls-invalid" };
     }
@@ -754,10 +770,15 @@ function parseCloudArgs(args?: string): ParsedCloudArgs {
   }
 
   if (subcommand === "download") {
-    const flags = parseNamedFlags(rest, BOOLEAN_SELECTOR_AND_ASYNC_FLAGS);
-    if (!flags) {
-      return { mode: "download-invalid" };
+    const parsed = parseCommandArgs(rest, downloadSchema);
+    if (!parsed.ok) {
+      return {
+        mode: "arg-parse-failure",
+        errors: parsed.errors,
+        warnings: mergeArgParseWarnings(normWarnings, parsed.warnings),
+      };
     }
+    const flags = valuesToStringRecord(parsed.values);
     const asyncArgs = parseAsyncOperationArgs(flags);
     if (!asyncArgs) {
       return { mode: "download-invalid-async" };
@@ -779,10 +800,15 @@ function parseCloudArgs(args?: string): ParsedCloudArgs {
   }
 
   if (subcommand === "delete") {
-    const flags = parseNamedFlags(rest, BOOLEAN_SELECTOR_FLAGS);
-    if (!flags) {
-      return { mode: "delete-invalid" };
+    const parsed = parseCommandArgs(rest, deleteSchema);
+    if (!parsed.ok) {
+      return {
+        mode: "arg-parse-failure",
+        errors: parsed.errors,
+        warnings: mergeArgParseWarnings(normWarnings, parsed.warnings),
+      };
     }
+    const flags = valuesToStringRecord(parsed.values);
     const selector = parseObjectSelector(flags);
     if (!selector) {
       return { mode: "delete-invalid" };
@@ -795,12 +821,20 @@ function parseCloudArgs(args?: string): ParsedCloudArgs {
   }
 
   if (subcommand === "op-status") {
-    const flags = parseNamedFlags(rest, BOOLEAN_OP_STATUS_FLAGS);
-    const operationId = flags?.["operation-id"]?.trim();
+    const parsed = parseCommandArgs(rest, opStatusSchema);
+    if (!parsed.ok) {
+      return {
+        mode: "arg-parse-failure",
+        errors: parsed.errors,
+        warnings: mergeArgParseWarnings(normWarnings, parsed.warnings),
+      };
+    }
+    const flags = valuesToStringRecord(parsed.values);
+    const operationId = flags["operation-id"]?.trim();
     if (!operationId) {
       return { mode: "op-status-invalid" };
     }
-    return { mode: "op-status", operationId, cancel: flags?.cancel === "true" };
+    return { mode: "op-status", operationId, cancel: flags.cancel === "true" };
   }
 
   return { mode: "unknown" };
@@ -902,7 +936,7 @@ async function resolveLocalUploadArchivePath(
   } catch {
     return {
       ok: false,
-      message: `Cannot upload storage object: local archive not found. Run /mnemospark_cloud backup with --name (canonical layout) or restore the legacy file at ${legacyPath}.`,
+      message: `Cannot upload storage object: local archive not found. Run /mnemospark cloud backup with --name (canonical layout) or restore the legacy file at ${legacyPath}.`,
     };
   }
 }
@@ -1197,7 +1231,7 @@ type StoragePaymentRenewalJobFields = {
   storagePrice: number;
 };
 
-/** Args after `cloud` for `node …/cli.js cloud …` (same shape as slash command without `/mnemospark_cloud`). */
+/** Args after `cloud` for `node …/cli.js cloud …` (same shape as `/mnemospark cloud` args after the command name). */
 function buildStoragePaymentRenewalArgs(job: StoragePaymentRenewalJobFields): string {
   return [
     "payment-settle",
@@ -1214,7 +1248,7 @@ function buildStoragePaymentRenewalArgs(job: StoragePaymentRenewalJobFields): st
 }
 
 function buildStoragePaymentCronCommand(job: StoragePaymentRenewalJobFields): string {
-  return `/mnemospark_cloud ${buildStoragePaymentRenewalArgs(job)}`;
+  return `/mnemospark cloud ${buildStoragePaymentRenewalArgs(job)}`;
 }
 
 function buildOpenClawRenewalAgentMessage(openClawHome: string, renewalArgs: string): string {
@@ -1662,7 +1696,7 @@ async function maybeCleanupLocalBackupArchive(archivePath: string): Promise<void
 }
 
 function formatStorageUploadUserMessage(upload: StorageUploadResponse, cronJobId: string): string {
-  const lsLine = `/mnemospark_cloud ls --wallet-address \`${upload.addr}\``;
+  const lsLine = `/mnemospark cloud ls --wallet-address \`${upload.addr}\``;
   return [
     `Your file \`${upload.object_id}\` with key \`${upload.object_key}\` has been stored using \`${upload.provider}\` in folder \`${upload.bucket_name}\` in region \`${upload.location}\``,
     "",
@@ -1751,7 +1785,7 @@ function formatPriceStorageUserMessage(
   quote: PriceStorageQuoteResponse,
   localArchiveHint?: string | null,
 ): string {
-  const uploadLine = `/mnemospark_cloud upload --quote-id \`${quote.quote_id}\` --wallet-address \`${quote.addr}\` --object-id \`${quote.object_id}\` --object-id-hash \`${quote.object_id_hash}\``;
+  const uploadLine = `/mnemospark cloud upload --quote-id \`${quote.quote_id}\` --wallet-address \`${quote.addr}\` --object-id \`${quote.object_id}\` --object-id-hash \`${quote.object_id_hash}\``;
   const lines = [
     `Your storage quote \`${quote.quote_id}\`: storage price \`$${quote.storage_price}\` for file \`${quote.object_id}\` with file size \`${quote.object_size_gb}\` in \`${quote.provider}\` \`${quote.location}\`.`,
     "",
@@ -1795,7 +1829,7 @@ function formatBackupSuccessUserMessage(
   friendlyName: string,
 ): string {
   const hash = result.objectIdHash.replace(/\s/g, "");
-  const priceStorageLine = `/mnemospark_cloud price-storage --wallet-address \`${walletAddress}\` --object-id \`${result.objectId}\` --object-id-hash \`${hash}\` --gb \`${result.objectSizeGb}\` --provider ${DEFAULT_BACKUP_QUOTE_PROVIDER} --region ${DEFAULT_BACKUP_QUOTE_REGION}`;
+  const priceStorageLine = `/mnemospark cloud price-storage --wallet-address \`${walletAddress}\` --object-id \`${result.objectId}\` --object-id-hash \`${hash}\` --gb \`${result.objectSizeGb}\` --provider ${DEFAULT_BACKUP_QUOTE_PROVIDER} --region ${DEFAULT_BACKUP_QUOTE_REGION}`;
   return [
     `Backup archive: \`${result.archivePath}\``,
     "",
@@ -1938,9 +1972,9 @@ export function createCloudCommand(
   const subagentOrchestrator =
     options.subagentOrchestrator ?? createInProcessSubagentOrchestrator();
   return {
-    name: "mnemospark_cloud",
+    name: "mnemospark",
     nativeNames: {
-      default: "mnemospark_cloud",
+      default: "mnemospark",
     },
     description: "Manage mnemospark cloud storage workflow commands",
     acceptsArgs: true,
@@ -2408,6 +2442,24 @@ async function runCloudCommandHandler(
     };
   }
 
+  if (parsed.mode === "arg-parse-failure") {
+    return {
+      text: [
+        "Could not parse command arguments.",
+        ...parsed.errors.map((e) => `- ${e}`),
+        ...(parsed.warnings.length > 0
+          ? ["", "Notes:", ...parsed.warnings.map((w) => `- ${w}`)]
+          : []),
+        "",
+        "Accepted formats:",
+        "- wallet-address:0xabc object-id:file1",
+        "- wallet-address=0xabc object-id=file1",
+        "- --wallet-address 0xabc --object-id file1",
+      ].join("\n"),
+      isError: true,
+    };
+  }
+
   if (parsed.mode === "price-storage-invalid") {
     return {
       text: `Cannot price storage: required arguments are ${REQUIRED_PRICE_STORAGE}.`,
@@ -2851,7 +2903,7 @@ async function runCloudCommandHandler(
         args: syncArgs,
         timeoutSeconds: parsed.timeoutSeconds,
         requestedBy: {
-          pluginCommand: "mnemospark_cloud",
+          pluginCommand: "mnemospark",
           chatId: ctx.channel,
           senderId: ctx.senderId,
         },
@@ -3037,7 +3089,7 @@ async function runCloudCommandHandler(
             `orchestrator: subagent`,
             `subagent-session-id: ${dispatchResult.sessionId}`,
             timeoutSeconds ? `timeout-seconds: ${timeoutSeconds}` : null,
-            `Use /mnemospark_cloud op-status --operation-id ${operationId}`,
+            `Use /mnemospark cloud op-status --operation-id ${operationId}`,
           ]
             .filter((line): line is string => Boolean(line))
             .join("\n"),
@@ -3146,7 +3198,7 @@ async function runCloudCommandHandler(
       text: [
         `Operation started in background. operation-id: ${operationId}`,
         `orchestrator: inline`,
-        `Use /mnemospark_cloud op-status --operation-id ${operationId}`,
+        `Use /mnemospark cloud op-status --operation-id ${operationId}`,
       ].join("\n"),
     };
   }
@@ -3324,7 +3376,7 @@ async function runCloudCommandHandler(
       const loggedQuote = await datastore.findQuoteById(parsed.uploadRequest.quote_id);
       if (!loggedQuote) {
         return {
-          text: "Cannot upload storage object: quote-id not found in local SQLite. Run /mnemospark_cloud price-storage first (quotes expire after about one hour on the server).",
+          text: "Cannot upload storage object: quote-id not found in local SQLite. Run /mnemospark cloud price-storage first (quotes expire after about one hour on the server).",
           isError: true,
         };
       }
@@ -3347,7 +3399,7 @@ async function runCloudCommandHandler(
       );
       if (!dbFriendly?.trim()) {
         return {
-          text: "Cannot upload storage object: no friendly name in local SQLite for this object-id. Run /mnemospark_cloud backup with --name first.",
+          text: "Cannot upload storage object: no friendly name in local SQLite for this object-id. Run /mnemospark cloud backup with --name first.",
           isError: true,
         };
       }
@@ -3376,7 +3428,7 @@ async function runCloudCommandHandler(
         archiveStats = await stat(archivePath);
       } catch {
         return {
-          text: `Cannot upload storage object: local archive not found at ${archivePath}. Run /mnemospark_cloud backup first.`,
+          text: `Cannot upload storage object: local archive not found at ${archivePath}. Run /mnemospark cloud backup first.`,
           isError: true,
         };
       }
