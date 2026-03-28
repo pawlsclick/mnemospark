@@ -136,6 +136,39 @@ function collectCanonicalNames(schema: CommandArgSchema): string[] {
   return [...names];
 }
 
+function tryParseDelimitedToken(
+  token: string,
+  delimiter: ":" | "=",
+  aliasMap: Map<string, ArgSpec>,
+  schema: CommandArgSchema,
+  allCanonicalNames: string[],
+  out: Record<string, string | string[]>,
+): { handled: boolean; error?: string } {
+  const idx = token.indexOf(delimiter);
+  if (idx <= 0) return { handled: false };
+
+  const keyPart = token.slice(0, idx);
+  if (!/^[A-Za-z_][A-Za-z0-9_-]*$/.test(keyPart)) return { handled: false };
+
+  const rawKey = keyPart;
+  const rawValue = token.slice(idx + 1);
+  if (rawValue === "") {
+    return { handled: true, error: `Empty value for argument "${rawKey}".` };
+  }
+
+  const resolved = resolveKey(rawKey, aliasMap, schema, allCanonicalNames);
+  if (resolved.error) {
+    return { handled: true, error: resolved.error };
+  }
+
+  const dupErr = addValue(out, resolved.key!, rawValue, resolved.spec);
+  if (dupErr) {
+    return { handled: true, error: dupErr };
+  }
+
+  return { handled: true };
+}
+
 export function parseCommandArgs(input: string, schema: CommandArgSchema): ParseResult {
   const warnings: string[] = [];
   const errors: string[] = [];
@@ -153,48 +186,32 @@ export function parseCommandArgs(input: string, schema: CommandArgSchema): Parse
     const token = tokens[i]!.value;
 
     {
-      const idx = token.indexOf(":");
-      if (idx > 0) {
-        const keyPart = token.slice(0, idx);
-        if (/^[A-Za-z_][A-Za-z0-9_-]*$/.test(keyPart)) {
-          const rawKey = keyPart;
-          const rawValue = token.slice(idx + 1);
-          if (rawValue === "") {
-            errors.push(`Empty value for argument "${rawKey}".`);
-            continue;
-          }
-          const resolved = resolveKey(rawKey, aliasMap, schema, allCanonicalNames);
-          if (resolved.error) {
-            errors.push(resolved.error);
-            continue;
-          }
-          const dupErr = addValue(values, resolved.key!, rawValue, resolved.spec);
-          if (dupErr) errors.push(dupErr);
-          continue;
-        }
+      const parsed = tryParseDelimitedToken(
+        token,
+        ":",
+        aliasMap,
+        schema,
+        allCanonicalNames,
+        values,
+      );
+      if (parsed.handled) {
+        if (parsed.error) errors.push(parsed.error);
+        continue;
       }
     }
 
     {
-      const idx = token.indexOf("=");
-      if (idx > 0) {
-        const keyPart = token.slice(0, idx);
-        if (/^[A-Za-z_][A-Za-z0-9_-]*$/.test(keyPart)) {
-          const rawKey = keyPart;
-          const rawValue = token.slice(idx + 1);
-          if (rawValue === "") {
-            errors.push(`Empty value for argument "${rawKey}".`);
-            continue;
-          }
-          const resolved = resolveKey(rawKey, aliasMap, schema, allCanonicalNames);
-          if (resolved.error) {
-            errors.push(resolved.error);
-            continue;
-          }
-          const dupErr = addValue(values, resolved.key!, rawValue, resolved.spec);
-          if (dupErr) errors.push(dupErr);
-          continue;
-        }
+      const parsed = tryParseDelimitedToken(
+        token,
+        "=",
+        aliasMap,
+        schema,
+        allCanonicalNames,
+        values,
+      );
+      if (parsed.handled) {
+        if (parsed.error) errors.push(parsed.error);
+        continue;
       }
     }
 
