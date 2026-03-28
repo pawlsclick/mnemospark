@@ -1,6 +1,8 @@
 # mnemospark Commands Reference
 
-## `/mnemospark_cloud`
+## `/mnemospark cloud …`
+
+Slash usage: `/mnemospark cloud <subcommand> …`. CLI/agent: `node dist/cli.js cloud <subcommand> …`.
 
 ### Backup
 
@@ -72,10 +74,10 @@ Applies to `backup`, `upload`, `download`.
 
 ## Async examples
 
-- `/mnemospark_cloud upload ... --async --orchestrator subagent`
-- `/mnemospark_cloud download ... --async --orchestrator subagent --timeout-seconds 900`
-- `/mnemospark_cloud op-status --operation-id <id>`
-- `/mnemospark_cloud op-status --operation-id <id> --cancel`
+- `/mnemospark cloud upload ... --async --orchestrator subagent`
+- `/mnemospark cloud download ... --async --orchestrator subagent --timeout-seconds 900`
+- `/mnemospark cloud op-status --operation-id <id>`
+- `/mnemospark cloud op-status --operation-id <id> --cancel`
 
 ## Name selector rules
 

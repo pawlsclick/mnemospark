@@ -19,7 +19,7 @@ import { startProxy, getProxyPort } from "./proxy.js";
 import { resolveOrGenerateWalletKey, LEGACY_WALLET_FILE, WALLET_FILE } from "./auth.js";
 import { BalanceMonitor } from "./balance.js";
 import { VERSION } from "./version.js";
-import { createCloudCommand } from "./cloud-command.js";
+import { runMnemosparkSlashHandler } from "./mnemospark-handler.js";
 import type { PluginCommandContext } from "./types.js";
 import { spawn } from "node:child_process";
 import { dirname, join } from "node:path";
@@ -89,6 +89,7 @@ type ParsedArgs = {
   command?: "install" | "update" | "check-update" | "wallet" | "cloud" | "proxy";
   installMode?: "default" | "standard";
   cloudArgs?: string;
+  walletArgs?: string;
   proxySubcommand?: string;
 };
 
@@ -100,6 +101,7 @@ function parseArgs(args: string[]): ParsedArgs {
     command: undefined,
     installMode: undefined,
     cloudArgs: undefined,
+    walletArgs: undefined,
     proxySubcommand: undefined,
   };
 
@@ -115,6 +117,8 @@ function parseArgs(args: string[]): ParsedArgs {
         result.command = "check-update";
       } else if (arg === "wallet") {
         result.command = "wallet";
+        result.walletArgs = args.slice(i + 1).join(" ");
+        return result;
       } else if (arg === "cloud") {
         result.command = "cloud";
         result.cloudArgs = args.slice(i + 1).join(" ");
@@ -403,31 +407,16 @@ async function runInstall(mode: "default" | "standard"): Promise<void> {
   await promptOrRunOpenClawPluginInstall();
 }
 
-async function runWallet(): Promise<void> {
-  const { address, source } = await resolveOrGenerateWalletKey();
-
-  console.log(`[mnemospark] Wallet address: ${address}`);
-  console.log(`[mnemospark] Key file: ${WALLET_FILE}`);
-  if (source === "generated") {
-    console.log("[mnemospark] New wallet generated and saved.");
-  } else if (source === "saved") {
-    console.log("[mnemospark] Loaded saved wallet.");
-  } else {
-    console.log("[mnemospark] Using wallet from MNEMOSPARK_WALLET_KEY.");
-  }
-}
-
-async function runCloud(cloudArgs: string): Promise<void> {
-  const cloudCmd = createCloudCommand();
+async function runMnemosparkCli(argsLine: string): Promise<void> {
   const ctx: PluginCommandContext = {
     channel: "cli",
     isAuthorizedSender: true,
-    args: cloudArgs,
-    commandBody: `cloud ${cloudArgs}`,
+    args: argsLine.trim(),
+    commandBody: argsLine.trim(),
     config: {},
   };
 
-  const result = await cloudCmd.handler(ctx);
+  const result = await runMnemosparkSlashHandler(ctx);
   if (result.text) {
     console.log(result.text);
   }
@@ -437,7 +426,13 @@ async function runCloud(cloudArgs: string): Promise<void> {
 }
 
 async function main(): Promise<void> {
-  const args = parseArgs(process.argv.slice(2));
+  const argv = process.argv.slice(2);
+  if (argv.length === 1 && argv[0] === "help") {
+    await runMnemosparkCli("help");
+    return;
+  }
+
+  const args = parseArgs(argv);
 
   if (args.version) {
     console.log(VERSION);
@@ -466,12 +461,14 @@ async function main(): Promise<void> {
   }
 
   if (args.command === "wallet") {
-    await runWallet();
+    const line = `wallet ${args.walletArgs ?? ""}`.trim();
+    await runMnemosparkCli(line);
     return;
   }
 
   if (args.command === "cloud") {
-    await runCloud(args.cloudArgs ?? "");
+    const line = `cloud ${args.cloudArgs ?? ""}`.trim();
+    await runMnemosparkCli(line);
     return;
   }
 

@@ -5,19 +5,12 @@
  * proxy that forwards mnemospark backend storage endpoints.
  */
 
-import type {
-  OpenClawPluginDefinition,
-  OpenClawPluginApi,
-  PluginCommandContext,
-  OpenClawPluginCommandDefinition,
-} from "./types.js";
+import type { OpenClawPluginDefinition, OpenClawPluginApi, PluginCommandContext } from "./types.js";
 import { startProxy } from "./proxy.js";
-import { resolveOrGenerateWalletKey, WALLET_FILE } from "./auth.js";
+import { resolveOrGenerateWalletKey } from "./auth.js";
 import { BalanceMonitor } from "./balance.js";
-import { existsSync, readFileSync } from "node:fs";
 import { VERSION } from "./version.js";
-import { privateKeyToAccount } from "viem/accounts";
-import { createCloudCommand } from "./cloud-command.js";
+import { runMnemosparkSlashHandler } from "./mnemospark-handler.js";
 
 /**
  * Detect if we're running in shell completion mode.
@@ -94,97 +87,6 @@ async function startProxyInBackground(api: OpenClawPluginApi): Promise<void> {
     });
 }
 
-/**
- * /mnemospark_wallet command handler.
- * - /mnemospark_wallet or /mnemospark_wallet status: Show wallet address, balance, and key file location
- * - /mnemospark_wallet export: Show private key for backup
- */
-async function createWalletCommand(): Promise<OpenClawPluginCommandDefinition> {
-  return {
-    name: "mnemospark_wallet",
-    nativeNames: {
-      default: "mnemospark_wallet",
-    },
-    description: "Show mnemospark wallet info or export private key for backup",
-    acceptsArgs: true,
-    requireAuth: true,
-    handler: async (ctx: PluginCommandContext) => {
-      const subcommand = ctx.args?.trim().toLowerCase() || "status";
-
-      // Read wallet key if it exists
-      let walletKey: string | undefined;
-      let address: string | undefined;
-      try {
-        if (existsSync(WALLET_FILE)) {
-          walletKey = readFileSync(WALLET_FILE, "utf-8").trim();
-          if (walletKey.startsWith("0x") && walletKey.length === 66) {
-            const account = privateKeyToAccount(walletKey as `0x${string}`);
-            address = account.address.replace(/\s/g, "");
-          }
-        }
-      } catch {
-        // Wallet file doesn't exist or is invalid
-      }
-
-      if (!walletKey || !address) {
-        return {
-          text: "No mnemospark wallet found. Run `openclaw plugins install mnemospark`.",
-          isError: true,
-        };
-      }
-
-      if (subcommand === "export") {
-        const addressDisplay = address.replace(/\s/g, "");
-        const keyDisplay = walletKey.replace(/\s/g, "");
-        return {
-          text: [
-            "☁️ **mnemospark Wallet Export**",
-            "",
-            "⚠️ **SECURITY WARNING**: Your private key controls your wallet funds.",
-            "Never share this key. Anyone with this key can spend your USDC.",
-            "",
-            `**Address:** \`${addressDisplay}\``,
-            "",
-            "**Private Key:**",
-            `\`${keyDisplay}\``,
-            "",
-            "**To restore on a new machine:**",
-            "1. Set the environment variable before running OpenClaw:",
-            `   \`export MNEMOSPARK_WALLET_KEY=${keyDisplay}\``,
-            "2. Or save to file:",
-            `   \`mkdir -p ~/.openclaw/mnemospark/wallet && echo "${keyDisplay}" > ~/.openclaw/mnemospark/wallet/wallet.key && chmod 600 ~/.openclaw/mnemospark/wallet/wallet.key\``,
-          ].join("\n"),
-        };
-      }
-
-      let balanceText = "Balance: (checking...)";
-      try {
-        const monitor = new BalanceMonitor(address);
-        const balance = await monitor.checkBalance();
-        balanceText = `Balance: ${balance.balanceUSD}`;
-      } catch {
-        balanceText = "Balance: (could not check)";
-      }
-
-      return {
-        text: [
-          "☁️ **mnemospark Wallet**",
-          "",
-          `**Address:** \`${address}\``,
-          `**${balanceText}**`,
-          `**Key File:** \`${WALLET_FILE}\``,
-          "",
-          "**Commands:**",
-          "• `/mnemospark_wallet` - Show this status",
-          "• `/mnemospark_wallet export` - Export private key for backup",
-          "",
-          `**Fund with USDC on Base:** https://basescan.org/address/${address}`,
-        ].join("\n"),
-      };
-    },
-  };
-}
-
 const plugin: OpenClawPluginDefinition = {
   id: "mnemospark",
   name: "mnemospark",
@@ -203,21 +105,32 @@ const plugin: OpenClawPluginDefinition = {
       return;
     }
 
-    createWalletCommand()
-      .then((walletCommand) => {
-        api.registerCommand(walletCommand);
-      })
-      .catch((err) => {
-        api.logger.warn(
-          `Failed to register /mnemospark_wallet command: ${err instanceof Error ? err.message : String(err)}`,
-        );
-      });
-
     try {
-      api.registerCommand(createCloudCommand());
+      api.registerCommand({
+        name: "mnemospark",
+        nativeNames: {
+          default: "mnemospark",
+        },
+        description: "mnemospark wallet and cloud storage commands",
+        acceptsArgs: true,
+        requireAuth: true,
+        handler: async (ctx: PluginCommandContext) => {
+          try {
+            return await runMnemosparkSlashHandler(ctx);
+          } catch (err) {
+            const message =
+              err instanceof Error
+                ? err.message
+                : typeof err === "string"
+                  ? err
+                  : "An unexpected error occurred";
+            return { text: message.trim() || "An unexpected error occurred", isError: true };
+          }
+        },
+      });
     } catch (err) {
       api.logger.warn(
-        `Failed to register /mnemospark_cloud command: ${err instanceof Error ? err.message : String(err)}`,
+        `Failed to register /mnemospark command: ${err instanceof Error ? err.message : String(err)}`,
       );
     }
 
@@ -279,3 +192,4 @@ export {
 export { fetchWithRetry, isRetryable, DEFAULT_RETRY_CONFIG } from "./retry.js";
 export type { RetryConfig } from "./retry.js";
 export { createCloudCommand } from "./cloud-command.js";
+export { runMnemosparkSlashHandler } from "./mnemospark-handler.js";
