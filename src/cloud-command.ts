@@ -573,10 +573,7 @@ function parseCloudArgs(args?: string): ParsedCloudArgs {
   }
 
   if (subcommand === "backup") {
-    const restNorm = normalizeInputForParsing(rest);
-    const restText = restNorm.text;
-    const w = mergeArgParseWarnings(normWarnings, restNorm.warnings);
-    const tokens = tokenizeArgsRaw(restText);
+    const tokens = tokenizeArgsRaw(rest);
     if (tokens.length === 0) {
       return { mode: "unknown" };
     }
@@ -591,7 +588,7 @@ function parseCloudArgs(args?: string): ParsedCloudArgs {
       return {
         mode: "arg-parse-failure",
         errors: parsed.errors,
-        warnings: mergeArgParseWarnings(w, parsed.warnings),
+        warnings: mergeArgParseWarnings(normWarnings, parsed.warnings),
       };
     }
     const flags = valuesToStringRecord(parsed.values);

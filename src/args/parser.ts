@@ -80,10 +80,6 @@ function tokenize(input: string): Token[] {
   return tokens;
 }
 
-function isLikelyKeyPrefix(token: string): boolean {
-  return /^[A-Za-z_][A-Za-z0-9_-]*[:=]/.test(token);
-}
-
 function resolveKey(
   rawKey: string,
   aliasMap: Map<string, ArgSpec>,
@@ -226,7 +222,7 @@ export function parseCommandArgs(input: string, schema: CommandArgSchema): Parse
         continue;
       }
 
-      if (next.value.startsWith("--") || isLikelyKeyPrefix(next.value)) {
+      if (next.value.startsWith("--")) {
         if (resolved.spec?.bareBoolean) {
           const dupErr = addValue(values, resolved.key!, "true", resolved.spec);
           if (dupErr) errors.push(dupErr);
