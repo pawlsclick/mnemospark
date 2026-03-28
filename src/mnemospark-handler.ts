@@ -39,6 +39,29 @@ export const MNEMOSPARK_WALLET_HELP_TEXT = (address: string) =>
 
 const cloudCommandHandler = createCloudCommand().handler;
 
+const NO_WALLET_FOUND_TEXT =
+  "No mnemospark wallet found. Run `openclaw plugins install mnemospark`.";
+
+function resolveWalletFileSync(): { walletKey: string; address: string } | null {
+  try {
+    if (!existsSync(WALLET_FILE)) {
+      return null;
+    }
+    const walletKey = readFileSync(WALLET_FILE, "utf-8").trim();
+    if (!walletKey.startsWith("0x") || walletKey.length !== 66) {
+      return null;
+    }
+    const account = privateKeyToAccount(walletKey as `0x${string}`);
+    const address = account.address.replace(/\s/g, "");
+    if (!address) {
+      return null;
+    }
+    return { walletKey, address };
+  } catch {
+    return null;
+  }
+}
+
 /**
  * OpenClaw + CLI: same handler for `/mnemospark` (args = everything after the command name).
  */
@@ -111,26 +134,14 @@ async function handleWalletSlash(
 }
 
 async function buildWalletStatusResponse(): Promise<PluginCommandResult> {
-  let walletKey: string | undefined;
-  let address: string | undefined;
-  try {
-    if (existsSync(WALLET_FILE)) {
-      walletKey = readFileSync(WALLET_FILE, "utf-8").trim();
-      if (walletKey.startsWith("0x") && walletKey.length === 66) {
-        const account = privateKeyToAccount(walletKey as `0x${string}`);
-        address = account.address.replace(/\s/g, "");
-      }
-    }
-  } catch {
-    // ignore
-  }
-
-  if (!walletKey || !address) {
+  const wallet = resolveWalletFileSync();
+  if (!wallet) {
     return {
-      text: "No mnemospark wallet found. Run `openclaw plugins install mnemospark`.",
+      text: NO_WALLET_FOUND_TEXT,
       isError: true,
     };
   }
+  const { address } = wallet;
 
   let balanceText = "Balance: (checking...)";
   try {
@@ -160,51 +171,27 @@ async function buildWalletStatusResponse(): Promise<PluginCommandResult> {
 }
 
 async function buildWalletHelpResponse(): Promise<PluginCommandResult> {
-  let walletKey: string | undefined;
-  let address: string | undefined;
-  try {
-    if (existsSync(WALLET_FILE)) {
-      walletKey = readFileSync(WALLET_FILE, "utf-8").trim();
-      if (walletKey.startsWith("0x") && walletKey.length === 66) {
-        const account = privateKeyToAccount(walletKey as `0x${string}`);
-        address = account.address.replace(/\s/g, "");
-      }
-    }
-  } catch {
-    // ignore
-  }
-
-  if (!walletKey || !address) {
+  const wallet = resolveWalletFileSync();
+  if (!wallet) {
     return {
-      text: "No mnemospark wallet found. Run `openclaw plugins install mnemospark`.",
+      text: NO_WALLET_FOUND_TEXT,
       isError: true,
     };
   }
+  const { address } = wallet;
 
   return { text: MNEMOSPARK_WALLET_HELP_TEXT(address) };
 }
 
 async function buildWalletExportResponse(): Promise<PluginCommandResult> {
-  let walletKey: string | undefined;
-  let address: string | undefined;
-  try {
-    if (existsSync(WALLET_FILE)) {
-      walletKey = readFileSync(WALLET_FILE, "utf-8").trim();
-      if (walletKey.startsWith("0x") && walletKey.length === 66) {
-        const account = privateKeyToAccount(walletKey as `0x${string}`);
-        address = account.address.replace(/\s/g, "");
-      }
-    }
-  } catch {
-    // ignore
-  }
-
-  if (!walletKey || !address) {
+  const wallet = resolveWalletFileSync();
+  if (!wallet) {
     return {
-      text: "No mnemospark wallet found. Run `openclaw plugins install mnemospark`.",
+      text: NO_WALLET_FOUND_TEXT,
       isError: true,
     };
   }
+  const { walletKey, address } = wallet;
 
   const addressDisplay = address.replace(/\s/g, "");
   const keyDisplay = walletKey.replace(/\s/g, "");
