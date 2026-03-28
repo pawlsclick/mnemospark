@@ -3,12 +3,8 @@ import { privateKeyToAccount } from "viem/accounts";
 import { BalanceMonitor } from "./balance.js";
 import { WALLET_FILE } from "./auth.js";
 import { createCloudCommand } from "./cloud-command.js";
-import {
-  firstTokenAndRest,
-  routeMnemosparkArgs,
-  stripSubcommandVerbose,
-} from "./mnemospark-route.js";
-import type { PluginCommandContext, PluginCommandResult } from "./types.js";
+import { firstTokenAndRest, parseVerboseToken, routeMnemosparkArgs } from "./mnemospark-route.js";
+import type { PluginCommandContext, PluginCommandHandler, PluginCommandResult } from "./types.js";
 
 export const MNEMOSPARK_ROOT_HELP_TEXT = [
   "☁️ **mnemospark - Wallet and go.** 💙",
@@ -37,7 +33,16 @@ export const MNEMOSPARK_WALLET_HELP_TEXT = (address: string) =>
     `**Fund with USDC on Base:** https://basescan.org/address/${address}`,
   ].join("\n");
 
-const cloudCommandHandler = createCloudCommand().handler;
+export type RunMnemosparkSlashHandlerOptions = {
+  cloudCommandHandler?: PluginCommandHandler;
+};
+
+let defaultCloudCommandHandler: PluginCommandHandler | undefined;
+
+function getDefaultCloudCommandHandler(): PluginCommandHandler {
+  defaultCloudCommandHandler ??= createCloudCommand().handler;
+  return defaultCloudCommandHandler;
+}
 
 const NO_WALLET_FOUND_TEXT =
   "No mnemospark wallet found. Run `openclaw plugins install mnemospark`.";
@@ -67,6 +72,7 @@ function resolveWalletFileSync(): { walletKey: string; address: string } | null 
  */
 export async function runMnemosparkSlashHandler(
   ctx: PluginCommandContext,
+  options?: RunMnemosparkSlashHandlerOptions,
 ): Promise<PluginCommandResult> {
   const route = routeMnemosparkArgs(ctx.args);
 
@@ -79,6 +85,7 @@ export async function runMnemosparkSlashHandler(
   }
 
   if (route.kind === "cloud") {
+    const cloudCommandHandler = options?.cloudCommandHandler ?? getDefaultCloudCommandHandler();
     return cloudCommandHandler({ ...ctx, args: route.rest });
   }
 
@@ -95,7 +102,7 @@ async function handleWalletSlash(
   }
 
   const { first, rest: afterFirst } = firstTokenAndRest(trimmed);
-  const parsed = stripSubcommandVerbose(first);
+  const parsed = parseVerboseToken(first);
   if (!parsed.ok) {
     return {
       text: `Invalid token "${first}". Use name:true only with value true.`,

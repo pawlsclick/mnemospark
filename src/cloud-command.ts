@@ -59,7 +59,7 @@ import { appendJsonlEvent } from "./cloud-jsonl.js";
 import type { RequestCorrelation } from "./cloud-correlation.js";
 import { normalizeInputForParsing } from "./args/normalize.js";
 import { parseCommandArgs, valuesToStringRecord } from "./args/parser.js";
-import { stripSubcommandVerbose } from "./mnemospark-route.js";
+import { parseVerboseToken } from "./mnemospark-route.js";
 import {
   backupFlagsSchema,
   deleteSchema,
@@ -557,7 +557,7 @@ function parseCloudArgs(args?: string): ParsedCloudArgs {
   const rawFirst = spaceIdx === -1 ? text : text.slice(0, spaceIdx);
   const rest = spaceIdx === -1 ? "" : text.slice(spaceIdx + 1).trim();
 
-  const subParsed = stripSubcommandVerbose(rawFirst);
+  const subParsed = parseVerboseToken(rawFirst);
   if (!subParsed.ok) {
     return {
       mode: "arg-parse-failure",

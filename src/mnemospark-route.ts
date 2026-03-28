@@ -80,8 +80,3 @@ export function routeMnemosparkArgs(args: string | undefined): MnemosparkRoute {
     ].join("\n"),
   };
 }
-
-/** Strip optional `:true` suffix from a subcommand token (e.g. price-storage:true). */
-export function stripSubcommandVerbose(token: string): { name: string; ok: boolean } {
-  return parseVerboseToken(token);
-}
