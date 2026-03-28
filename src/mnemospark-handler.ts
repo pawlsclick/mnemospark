@@ -3,17 +3,12 @@ import { privateKeyToAccount } from "viem/accounts";
 import { BalanceMonitor } from "./balance.js";
 import { resolveOrGenerateWalletKey, WALLET_FILE } from "./auth.js";
 import { createCloudCommand } from "./cloud-command.js";
-import { routeMnemosparkArgs } from "./mnemospark-route.js";
-import { stripSubcommandVerbose } from "./mnemospark-route.js";
+import {
+  firstTokenAndRest,
+  routeMnemosparkArgs,
+  stripSubcommandVerbose,
+} from "./mnemospark-route.js";
 import type { PluginCommandContext, PluginCommandResult } from "./types.js";
-
-function firstTokenAndRest(input: string): { first: string; rest: string } {
-  const t = input.trim();
-  if (!t) return { first: "", rest: "" };
-  const spaceIdx = t.search(/\s/);
-  if (spaceIdx === -1) return { first: t, rest: "" };
-  return { first: t.slice(0, spaceIdx), rest: t.slice(spaceIdx + 1).trim() };
-}
 
 export const MNEMOSPARK_ROOT_HELP_TEXT = [
   "☁️ **mnemospark - Wallet and go.** 💙",
@@ -103,6 +98,10 @@ async function handleWalletSlash(
       };
     }
     return buildWalletExportResponse();
+  }
+
+  if (parsed.name === "status") {
+    return buildWalletStatusResponse();
   }
 
   return {

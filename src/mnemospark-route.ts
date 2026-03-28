@@ -27,7 +27,7 @@ export function parseVerboseToken(token: string): { name: string; ok: boolean } 
   return { name: key.toLowerCase(), ok: false };
 }
 
-function firstTokenAndRest(input: string): { first: string; rest: string } {
+export function firstTokenAndRest(input: string): { first: string; rest: string } {
   const t = input.trim();
   if (!t) return { first: "", rest: "" };
   const spaceIdx = t.search(/\s/);
