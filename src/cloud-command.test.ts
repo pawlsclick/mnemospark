@@ -435,6 +435,23 @@ describe("cloud command", () => {
     expect(result.text).toContain(`--wallet-address \`${walletAddress}\``);
   });
 
+  it("returns backup-specific required-args message when --name is missing", async () => {
+    const command = createCloudCommand();
+
+    const result = await command.handler({
+      channel: "test",
+      isAuthorizedSender: true,
+      args: "backup /tmp/something",
+      commandBody: "backup /tmp/something",
+      config: {},
+    });
+
+    expect(result.isError).toBe(true);
+    expect(result.text).toBe(
+      "Cannot build storage object: required arguments are <file|directory> and --name <friendly-name>.",
+    );
+  });
+
   it("returns graceful unsupported-platform message", async () => {
     const command = createCloudCommand({
       backupOptions: {

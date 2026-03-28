@@ -26,7 +26,7 @@ export const uploadSchema: CommandArgSchema = {
 
 export const backupFlagsSchema: CommandArgSchema = {
   args: [
-    { name: "name", required: true },
+    { name: "name" },
     { name: "async", bareBoolean: true },
     { name: "orchestrator" },
     { name: "timeout-seconds" },
