@@ -283,7 +283,6 @@ type MnemosparkSubagentOrchestrator = {
 type ParsedCloudArgs =
   | { mode: "help" }
   | ({ mode: "backup"; backupTarget: string; friendlyName: string } & AsyncOperationArgs)
-  | { mode: "backup-invalid" }
   | { mode: "backup-invalid-async" }
   | { mode: "backup-invalid-name" }
   | { mode: "price-storage"; priceStorageRequest: PriceStorageQuoteRequest }
@@ -2451,9 +2450,9 @@ async function runCloudCommandHandler(
           : []),
         "",
         "Accepted formats:",
-        "- wallet-address:0xabc object-id:file1",
-        "- wallet-address=0xabc object-id=file1",
-        "- --wallet-address 0xabc --object-id file1",
+        "- key:value",
+        "- key=value",
+        "- --key value",
       ].join("\n"),
       isError: true,
     };
@@ -2462,13 +2461,6 @@ async function runCloudCommandHandler(
   if (parsed.mode === "price-storage-invalid") {
     return {
       text: `Cannot price storage: required arguments are ${REQUIRED_PRICE_STORAGE}.`,
-      isError: true,
-    };
-  }
-
-  if (parsed.mode === "backup-invalid") {
-    return {
-      text: "Cannot build storage object",
       isError: true,
     };
   }
