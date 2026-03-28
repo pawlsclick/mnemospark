@@ -136,6 +136,10 @@ function collectCanonicalNames(schema: CommandArgSchema): string[] {
   return [...names];
 }
 
+function looksLikeDelimitedArgToken(token: string): boolean {
+  return /^[A-Za-z_][A-Za-z0-9_-]*[:=]/.test(token);
+}
+
 function tryParseDelimitedToken(
   token: string,
   delimiter: ":" | "=",
@@ -246,6 +250,12 @@ export function parseCommandArgs(input: string, schema: CommandArgSchema): Parse
           continue;
         }
         errors.push(`Missing value for argument "${resolved.key}".`);
+        continue;
+      }
+
+      if (resolved.spec?.bareBoolean && looksLikeDelimitedArgToken(next.value)) {
+        const dupErr = addValue(values, resolved.key!, "true", resolved.spec);
+        if (dupErr) errors.push(dupErr);
         continue;
       }
 
