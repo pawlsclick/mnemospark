@@ -101,14 +101,6 @@ const REQUIRED_STORAGE_OBJECT =
   "--wallet-address and one of (--object-key | --name [--latest|--at])";
 const REQUIRED_LS =
   "--wallet-address (for one object add --object-key or --name [--latest|--at]; omit both to list the bucket)";
-const PAYMENT_SETTLE_FLAG_NAMES = new Set([
-  "quote-id",
-  "wallet-address",
-  "object-id",
-  "object-key",
-  "storage-price",
-  "renewal",
-]);
 const ORCHESTRATOR_MODES = new Set(["inline", "subagent"]);
 
 /**
@@ -695,11 +687,6 @@ function parseCloudArgs(args?: string): ParsedCloudArgs {
       };
     }
     const flags = valuesToStringRecord(parsed.values);
-    for (const key of Object.keys(flags)) {
-      if (!PAYMENT_SETTLE_FLAG_NAMES.has(key)) {
-        return { mode: "payment-settle-invalid" };
-      }
-    }
     const walletAddress = flags["wallet-address"]?.trim();
     if (!walletAddress) {
       return { mode: "payment-settle-invalid" };
