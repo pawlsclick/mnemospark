@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { privateKeyToAccount } from "viem/accounts";
 import { BalanceMonitor } from "./balance.js";
-import { resolveOrGenerateWalletKey, WALLET_FILE } from "./auth.js";
+import { WALLET_FILE } from "./auth.js";
 import { createCloudCommand } from "./cloud-command.js";
 import {
   firstTokenAndRest,
@@ -160,7 +160,27 @@ async function buildWalletStatusResponse(): Promise<PluginCommandResult> {
 }
 
 async function buildWalletHelpResponse(): Promise<PluginCommandResult> {
-  const { address } = await resolveOrGenerateWalletKey();
+  let walletKey: string | undefined;
+  let address: string | undefined;
+  try {
+    if (existsSync(WALLET_FILE)) {
+      walletKey = readFileSync(WALLET_FILE, "utf-8").trim();
+      if (walletKey.startsWith("0x") && walletKey.length === 66) {
+        const account = privateKeyToAccount(walletKey as `0x${string}`);
+        address = account.address.replace(/\s/g, "");
+      }
+    }
+  } catch {
+    // ignore
+  }
+
+  if (!walletKey || !address) {
+    return {
+      text: "No mnemospark wallet found. Run `openclaw plugins install mnemospark`.",
+      isError: true,
+    };
+  }
+
   return { text: MNEMOSPARK_WALLET_HELP_TEXT(address) };
 }
 

@@ -1,5 +1,3 @@
-const DASH_CHARS = /[\u2010\u2011\u2012\u2013\u2014\u2015\u2212]/g;
-
 export function normalizeSmartQuotes(input: string): string {
   return input.replace(/[\u201C\u201D]/g, '"').replace(/[\u2018\u2019]/g, "'");
 }
@@ -22,10 +20,6 @@ export function normalizeFlagPositionDashes(input: string): { text: string; warn
   }
 
   return { text, warnings };
-}
-
-export function normalizeUnicodeDashesInKeys(input: string): string {
-  return input.replace(DASH_CHARS, "-");
 }
 
 export type NormalizedInput = {
