@@ -89,13 +89,10 @@ export async function runMnemosparkSlashHandler(
     return cloudCommandHandler({ ...ctx, args: route.rest });
   }
 
-  return handleWalletSlash(ctx, route.rest);
+  return handleWalletSlash(route.rest);
 }
 
-async function handleWalletSlash(
-  ctx: PluginCommandContext,
-  rest: string,
-): Promise<PluginCommandResult> {
+async function handleWalletSlash(rest: string): Promise<PluginCommandResult> {
   const trimmed = rest.trim();
   if (!trimmed) {
     return buildWalletStatusResponse();
