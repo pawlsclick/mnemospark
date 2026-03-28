@@ -2360,6 +2360,52 @@ describe("cloud command", () => {
     expect(dispatchCount).toBe(1);
   });
 
+  it("preserves --key value tokens that look like async flags when stripping async controls", async () => {
+    const { homeDir } = await createSandbox();
+    let dispatchCount = 0;
+    let downloadedObjectKey: string | undefined;
+    const command = createCloudCommand({
+      mnemosparkHomeDir: homeDir,
+      requestStorageDownloadFn: async (request) => {
+        downloadedObjectKey = request.object_key;
+        return {
+          success: true,
+          key: request.object_key,
+          file_path: "/tmp/backup/async-flag-like-key.tar.gz",
+        };
+      },
+      subagentOrchestrator: {
+        dispatch: async (input) => {
+          dispatchCount += 1;
+          if (dispatchCount === 1) {
+            await input.runTask();
+          }
+          return { sessionId: `session-flag-value-${dispatchCount}` };
+        },
+        cancel: async () => ({ accepted: false }),
+      },
+    });
+
+    const started = await command.handler({
+      channel: "test",
+      isAuthorizedSender: true,
+      args: [
+        "download",
+        "--wallet-address 0x1234abcd",
+        "--object-key async:true",
+        "--async",
+        "--orchestrator subagent",
+      ].join(" "),
+      commandBody: "download",
+      config: {},
+    });
+
+    expect(started.isError).toBeUndefined();
+    expect(started.text).toContain("operation-id:");
+    expect(dispatchCount).toBe(1);
+    expect(downloadedObjectKey).toBe("async:true");
+  });
+
   it("labels backup subagent tasks as backup", async () => {
     const { homeDir } = await createSandbox();
     let subagentCommand: string | undefined;

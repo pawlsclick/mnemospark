@@ -519,6 +519,10 @@ function stripAsyncControlFlags(args?: string): string {
     const canonical = rawKey.trim().toLowerCase().replace(/_/g, "-");
     return canonical === "async" || canonical === "orchestrator" || canonical === "timeout-seconds";
   };
+  const isBareBooleanFlag = (rawToken: string): boolean => {
+    const canonical = rawToken.trim().toLowerCase().replace(/^--/, "").replace(/_/g, "-");
+    return canonical === "async" || canonical === "latest";
+  };
   for (let idx = 0; idx < tokens.length; idx += 1) {
     const token = tokens[idx];
     const lowerToken = token.toLowerCase();
@@ -527,6 +531,11 @@ function stripAsyncControlFlags(args?: string): string {
     }
     if (lowerToken === "--orchestrator" || lowerToken === "--timeout-seconds") {
       idx += 1;
+      continue;
+    }
+    const previousToken = tokens[idx - 1];
+    if (previousToken && previousToken.startsWith("--") && !isBareBooleanFlag(previousToken)) {
+      filtered.push(token);
       continue;
     }
     const unwrapped = stripWrappingQuotes(token);
