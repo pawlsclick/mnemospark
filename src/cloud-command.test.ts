@@ -2319,6 +2319,47 @@ describe("cloud command", () => {
     }
   });
 
+  it("strips async control flags in key:value syntax before subagent runTask", async () => {
+    const { homeDir } = await createSandbox();
+    let dispatchCount = 0;
+    const command = createCloudCommand({
+      mnemosparkHomeDir: homeDir,
+      requestStorageDownloadFn: async () => ({
+        success: true,
+        key: "backup/archive.tar.gz",
+        file_path: "/tmp/backup/archive.tar.gz",
+      }),
+      subagentOrchestrator: {
+        dispatch: async (input) => {
+          dispatchCount += 1;
+          if (dispatchCount === 1) {
+            await input.runTask();
+          }
+          return { sessionId: `session-kv-${dispatchCount}` };
+        },
+        cancel: async () => ({ accepted: false }),
+      },
+    });
+
+    const started = await command.handler({
+      channel: "test",
+      isAuthorizedSender: true,
+      args: [
+        "download",
+        "wallet:0x1234abcd",
+        "object-key:backup/archive.tar.gz",
+        "async:true",
+        "orchestrator:subagent",
+      ].join(" "),
+      commandBody: "download",
+      config: {},
+    });
+
+    expect(started.isError).toBeUndefined();
+    expect(started.text).toContain("operation-id:");
+    expect(dispatchCount).toBe(1);
+  });
+
   it("labels backup subagent tasks as backup", async () => {
     const { homeDir } = await createSandbox();
     let subagentCommand: string | undefined;

@@ -524,6 +524,10 @@ const INVALID_ASYNC_FLAGS_MESSAGE =
 function stripAsyncControlFlags(args?: string): string {
   const tokens = tokenizeArgsRaw(args ?? "");
   const filtered: string[] = [];
+  const isAsyncControlKey = (rawKey: string): boolean => {
+    const canonical = rawKey.trim().toLowerCase().replace(/_/g, "-");
+    return canonical === "async" || canonical === "orchestrator" || canonical === "timeout-seconds";
+  };
   for (let idx = 0; idx < tokens.length; idx += 1) {
     const token = tokens[idx];
     const lowerToken = token.toLowerCase();
@@ -533,6 +537,17 @@ function stripAsyncControlFlags(args?: string): string {
     if (lowerToken === "--orchestrator" || lowerToken === "--timeout-seconds") {
       idx += 1;
       continue;
+    }
+    const unwrapped = stripWrappingQuotes(token);
+    const colonIdx = unwrapped.indexOf(":");
+    const equalsIdx = unwrapped.indexOf("=");
+    const splitIdx =
+      colonIdx > 0 && equalsIdx > 0 ? Math.min(colonIdx, equalsIdx) : Math.max(colonIdx, equalsIdx);
+    if (splitIdx > 0) {
+      const candidateKey = unwrapped.slice(0, splitIdx);
+      if (/^[A-Za-z_][A-Za-z0-9_-]*$/.test(candidateKey) && isAsyncControlKey(candidateKey)) {
+        continue;
+      }
     }
     filtered.push(token);
   }
