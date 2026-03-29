@@ -318,8 +318,9 @@ describe("cloud command", () => {
     expect(result.text).toContain("object-id:");
     expect(result.text).toContain("object-id-hash:");
     expect(result.text).toContain("object-size:");
-    expect(result.text).toContain(`wallet-address:\`${walletAddress}\``);
+    expect(result.text).toContain(`wallet-address:${walletAddress}`);
     expect(result.text).toContain("Next, request a storage quote.");
+    expect(result.text).toContain("```");
     expect(result.text).toContain(
       `provider:${DEFAULT_BACKUP_QUOTE_PROVIDER} region:${DEFAULT_BACKUP_QUOTE_REGION}`,
     );
@@ -432,7 +433,7 @@ describe("cloud command", () => {
     };
     expect(backupEvent.event_type).toBe("backup.completed");
     expect(backupEvent.details?.friendly_name).toBe("my project");
-    expect(result.text).toContain(`wallet-address:\`${walletAddress}\``);
+    expect(result.text).toContain(`wallet-address:${walletAddress}`);
   });
 
   it("returns backup-specific required-args message when --name is missing", async () => {
@@ -522,8 +523,9 @@ describe("cloud command", () => {
     expect(result.text).toContain("storage price `$2.75`");
     expect(result.text).toContain("for file `obj-001`");
     expect(result.text).toContain("If you accept this quote, run:");
-    expect(result.text).toContain("/mnemospark cloud upload quote-id:`quote-abc123`");
-    expect(result.text).toContain("object-id-hash:`hash-001`");
+    expect(result.text).toContain("/mnemospark cloud upload quote-id:quote-abc123");
+    expect(result.text).toContain("object-id-hash:hash-001");
+    expect(result.text).toContain("```");
     expect(result.text).toContain(
       "Quotes are valid for one hour. Please run price-storage again if you need a new quote.",
     );
@@ -908,7 +910,8 @@ describe("cloud command", () => {
       expect(cronId).toBeTruthy();
       expect(result.text).toContain("monthly");
       expect(result.text).toContain("3rd (UTC)");
-      expect(result.text).toContain(`/mnemospark cloud ls wallet-address:\`${walletAddress}\``);
+      expect(result.text).toContain(`/mnemospark cloud ls wallet-address:${walletAddress}`);
+      expect(result.text).toContain("```");
       expect(result.text).toContain("Thank you for using mnemospark!");
       expect(result.text).toContain("pluggedin@mnemospark.ai");
 
@@ -2080,7 +2083,8 @@ describe("cloud command", () => {
 
     expect(result.isError).toBeUndefined();
     expect(result.text).toContain("Operation started in background. operation-id:");
-    expect(result.text).toContain("Use /mnemospark cloud op-status operation-id:");
+    expect(result.text).toContain("/mnemospark cloud op-status operation-id:");
+    expect(result.text).toContain("```");
   });
 
   it("returns operation status via op-status", async () => {

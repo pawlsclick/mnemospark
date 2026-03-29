@@ -1703,8 +1703,13 @@ async function maybeCleanupLocalBackupArchive(archivePath: string): Promise<void
   }
 }
 
+/** Markdown fenced block for a single copy-paste command line (matches cloud ls table style). */
+function formatMnemosparkCommandCopyBlock(commandLine: string): string {
+  return ["```", commandLine, "```"].join("\n");
+}
+
 function formatStorageUploadUserMessage(upload: StorageUploadResponse, cronJobId: string): string {
-  const lsLine = `/mnemospark cloud ls wallet-address:\`${upload.addr}\``;
+  const lsCommand = `/mnemospark cloud ls wallet-address:${upload.addr}`;
   return [
     `Your file \`${upload.object_id}\` with key \`${upload.object_key}\` has been stored using \`${upload.provider}\` in folder \`${upload.bucket_name}\` in region \`${upload.location}\``,
     "",
@@ -1712,7 +1717,7 @@ function formatStorageUploadUserMessage(upload: StorageUploadResponse, cronJobId
     "",
     "To view your cloud storage run the command:",
     "",
-    lsLine,
+    formatMnemosparkCommandCopyBlock(lsCommand),
     "",
     "Thank you for using mnemospark!",
     `Reach out if you need anything: ${MNEMOSPARK_SUPPORT_EMAIL}`,
@@ -1793,13 +1798,13 @@ function formatPriceStorageUserMessage(
   quote: PriceStorageQuoteResponse,
   localArchiveHint?: string | null,
 ): string {
-  const uploadLine = `/mnemospark cloud upload quote-id:\`${quote.quote_id}\` wallet-address:\`${quote.addr}\` object-id:\`${quote.object_id}\` object-id-hash:\`${quote.object_id_hash}\``;
+  const uploadCommand = `/mnemospark cloud upload quote-id:${quote.quote_id} wallet-address:${quote.addr} object-id:${quote.object_id} object-id-hash:${quote.object_id_hash}`;
   const lines = [
     `Your storage quote \`${quote.quote_id}\`: storage price \`$${quote.storage_price}\` for file \`${quote.object_id}\` with file size \`${quote.object_size_gb}\` in \`${quote.provider}\` \`${quote.location}\`.`,
     "",
     "If you accept this quote, run:",
     "",
-    uploadLine,
+    formatMnemosparkCommandCopyBlock(uploadCommand),
     "",
   ];
   if (localArchiveHint?.trim()) {
@@ -1837,7 +1842,7 @@ function formatBackupSuccessUserMessage(
   friendlyName: string,
 ): string {
   const hash = result.objectIdHash.replace(/\s/g, "");
-  const priceStorageLine = `/mnemospark cloud price-storage wallet-address:\`${walletAddress}\` object-id:\`${result.objectId}\` object-id-hash:\`${hash}\` gb:\`${result.objectSizeGb}\` provider:${DEFAULT_BACKUP_QUOTE_PROVIDER} region:${DEFAULT_BACKUP_QUOTE_REGION}`;
+  const priceStorageCommand = `/mnemospark cloud price-storage wallet-address:${walletAddress} object-id:${result.objectId} object-id-hash:${hash} gb:${result.objectSizeGb} provider:${DEFAULT_BACKUP_QUOTE_PROVIDER} region:${DEFAULT_BACKUP_QUOTE_REGION}`;
   return [
     `Backup archive: \`${result.archivePath}\``,
     "",
@@ -1848,7 +1853,7 @@ function formatBackupSuccessUserMessage(
     "",
     "Next, request a storage quote.",
     "",
-    priceStorageLine,
+    formatMnemosparkCommandCopyBlock(priceStorageCommand),
     "",
     `The default region is ${DEFAULT_BACKUP_QUOTE_REGION}. Change the command parameters to switch regions (not required).`,
     "",
@@ -3084,16 +3089,20 @@ async function runCloudCommandHandler(
           });
         }
 
+        const subagentMetaLines = [
+          `Operation started in background. operation-id: ${operationId}`,
+          `orchestrator: subagent`,
+          `subagent-session-id: ${dispatchResult.sessionId}`,
+          timeoutSeconds ? `timeout-seconds: ${timeoutSeconds}` : null,
+        ].filter((line): line is string => Boolean(line));
         return {
           text: [
-            `Operation started in background. operation-id: ${operationId}`,
-            `orchestrator: subagent`,
-            `subagent-session-id: ${dispatchResult.sessionId}`,
-            timeoutSeconds ? `timeout-seconds: ${timeoutSeconds}` : null,
-            `Use /mnemospark cloud op-status operation-id:${operationId}`,
-          ]
-            .filter((line): line is string => Boolean(line))
-            .join("\n"),
+            ...subagentMetaLines,
+            "",
+            formatMnemosparkCommandCopyBlock(
+              `/mnemospark cloud op-status operation-id:${operationId}`,
+            ),
+          ].join("\n"),
         };
       } catch (dispatchError) {
         const dispatchMessage =
@@ -3199,7 +3208,8 @@ async function runCloudCommandHandler(
       text: [
         `Operation started in background. operation-id: ${operationId}`,
         `orchestrator: inline`,
-        `Use /mnemospark cloud op-status operation-id:${operationId}`,
+        "",
+        formatMnemosparkCommandCopyBlock(`/mnemospark cloud op-status operation-id:${operationId}`),
       ].join("\n"),
     };
   }
