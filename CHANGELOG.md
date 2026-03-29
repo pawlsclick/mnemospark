@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0](https://github.com/pawlsclick/mnemospark/compare/v1.0.1...v1.1.0) (2026-03-29)
+
+
+### Features
+
+* **cli:** fence next-step mnemospark commands in success text ([#97](https://github.com/pawlsclick/mnemospark/issues/97)) ([89edd72](https://github.com/pawlsclick/mnemospark/commit/89edd72994f1daa606fdb16245596ba494c4ec34))
+
 ## [1.0.1](https://github.com/pawlsclick/mnemospark/compare/v1.0.0...v1.0.1) (2026-03-29)
 
 
