@@ -93,14 +93,14 @@ const CLOUD_HELP_FOOTER_STATE =
   "Local state: mnemospark records quotes, objects, payments, cron jobs, friendly names, and operation metadata in ~/.openclaw/mnemospark/state.db (SQLite). For troubleshooting and correlation, commands and the HTTP proxy append structured JSON lines to ~/.openclaw/mnemospark/events.jsonl. Monthly storage billing jobs are listed in ~/.openclaw/cron/jobs.json for OpenClaw scheduling.";
 
 const REQUIRED_PRICE_STORAGE =
-  "--wallet-address, --object-id, --object-id-hash, --gb, --provider, --region";
-const REQUIRED_UPLOAD = "--quote-id, --wallet-address, --object-id, --object-id-hash";
-const REQUIRED_BACKUP = "<file|directory> and --name <friendly-name>";
-const REQUIRED_PAYMENT_SETTLE = "--wallet-address and (--quote-id | --renewal with --object-key)";
+  "wallet-address:, object-id:, object-id-hash:, gb:, provider:, region:";
+const REQUIRED_UPLOAD = "quote-id:, wallet-address:, object-id:, object-id-hash:";
+const REQUIRED_BACKUP = "<file|directory> and name:<friendly-name>";
+const REQUIRED_PAYMENT_SETTLE = "wallet-address: and (quote-id: | renewal:true with object-key:)";
 const REQUIRED_STORAGE_OBJECT =
-  "--wallet-address and one of (--object-key | --name [--latest|--at])";
+  "wallet-address: and one of (object-key: | name: [latest:true|at:<timestamp>])";
 const REQUIRED_LS =
-  "--wallet-address (for one object add --object-key or --name [--latest|--at]; omit both to list the bucket)";
+  "wallet-address: (for one object add object-key: or name: [latest:true|at:<timestamp>]; omit both to list the bucket)";
 const ORCHESTRATOR_MODES = new Set(["inline", "subagent"]);
 
 /**
@@ -121,66 +121,66 @@ export function expandTilde(path: string): string {
 const CLOUD_HELP_TEXT = [
   "☁️ **mnemospark - Wallet and go.** 💙",
   "",
-  "**Syntax:** use `/mnemospark cloud …`. Arguments may use `key:value`, `key=value`, or `--key value`. Optional verbose markers: `cloud:true`, `price-storage:true`, etc. Aliases: `wallet:` → wallet-address, `object:` → object-id, `quote:` → quote-id, `hash:` → object-id-hash.",
+  "**Syntax:** use `/mnemospark cloud …`. Prefer `key:value` for arguments; `key=value` and `--key value` are also accepted. Optional verbose markers: `cloud:true`, `price-storage:true`, etc. Aliases: `wallet:` → wallet-address, `object:` → object-id, `quote:` → quote-id, `hash:` → object-id-hash.",
   "",
   "**Cloud Commands**",
   "",
   "• `/mnemospark cloud` or `/mnemospark cloud help` — show this message (equivalent: `/mnemospark cloud:true help:true`)",
   "",
-  "• `/mnemospark cloud backup <file|directory> --name <friendly-name> [--async] [--orchestrator <inline|subagent>] [--timeout-seconds <n>]`",
+  "• `/mnemospark cloud backup <file|directory> name:<friendly-name> [async:true] [orchestrator:<inline|subagent>] [timeout-seconds:<n>]`",
   "  Purpose: create a local tar+gzip archive under ~/.openclaw/mnemospark/backup (filename from sanitized friendly name) and record metadata in SQLite for later price-storage and upload.",
   "  Required: " + REQUIRED_BACKUP,
   "",
-  "• `/mnemospark cloud price-storage --wallet-address <addr> --object-id <id> --object-id-hash <hash> --gb <gb> --provider aws --region us-east-1`",
-  "  Purpose: request a storage quote before upload (defaults shown; override `--provider` / `--region` for other regions).",
+  "• `/mnemospark cloud price-storage wallet-address:<addr> object-id:<id> object-id-hash:<hash> gb:<gb> provider:aws region:us-east-1`",
+  "  Purpose: request a storage quote before upload (defaults shown; override `provider:` / `region:` for other regions).",
   "  Required: " + REQUIRED_PRICE_STORAGE,
   "  Shorter: `wallet:… object:… hash:… gb:… provider:… region:…`",
   "",
-  "• `/mnemospark cloud upload --quote-id <quote-id> --wallet-address <addr> --object-id <id> --object-id-hash <hash> [--name <friendly-name>] [--async] [--orchestrator <inline|subagent>] [--timeout-seconds <n>]`",
+  "• `/mnemospark cloud upload quote-id:<quote-id> wallet-address:<addr> object-id:<id> object-id-hash:<hash> [name:<friendly-name>] [async:true] [orchestrator:<inline|subagent>] [timeout-seconds:<n>]`",
   "  Purpose: upload an encrypted object using a valid quote-id.",
   "  Required: " + REQUIRED_UPLOAD,
   "",
-  "• `/mnemospark cloud payment-settle (--quote-id <quote-id> | --renewal --object-key <key>) --wallet-address <addr> [--object-id <id>] [--storage-price <n>]`",
+  "• `/mnemospark cloud payment-settle (quote-id:<quote-id> | renewal:true object-key:<key>) wallet-address:<addr> [object-id:<id>] [storage-price:<n>]`",
   "  Purpose: settle storage payment before upload (quote) or on the monthly cron (renewal, no new quote). Uses the same proxy + x402 path as upload pre-settlement.",
   "  Required: " + REQUIRED_PAYMENT_SETTLE + " (wallet private key must match the address).",
   "",
-  "• `/mnemospark cloud ls --wallet-address <addr> [--object-key <key> | --name <friendly-name> | omit both to list bucket] [--latest|--at <timestamp>]`",
+  "• `/mnemospark cloud ls wallet-address:<addr> [object-key:<key> | name:<friendly-name> | omit both to list bucket] [latest:true|at:<timestamp>]`",
   "  Purpose: stat one object or list all keys in the wallet bucket (S3).",
   "  Required: " + REQUIRED_LS,
   "",
-  "• `/mnemospark cloud download --wallet-address <addr> [--object-key <object-key> | --name <friendly-name>] [--latest|--at <timestamp>] [--async] [--orchestrator <inline|subagent>] [--timeout-seconds <n>]`",
+  "• `/mnemospark cloud download wallet-address:<addr> [object-key:<object-key> | name:<friendly-name>] [latest:true|at:<timestamp>] [async:true] [orchestrator:<inline|subagent>] [timeout-seconds:<n>]`",
   "  Purpose: fetch an object to local disk.",
   "  Required: " + REQUIRED_STORAGE_OBJECT,
   "",
-  "• `/mnemospark cloud delete --wallet-address <addr> [--object-key <object-key> | --name <friendly-name>] [--latest|--at <timestamp>]`",
+  "• `/mnemospark cloud delete wallet-address:<addr> [object-key:<object-key> | name:<friendly-name>] [latest:true|at:<timestamp>]`",
   "  Purpose: remove a remote object and local cron tracking when present.",
   "  Required: " + REQUIRED_STORAGE_OBJECT,
   "",
-  "• `/mnemospark cloud op-status --operation-id <id> [--cancel]`",
+  "• `/mnemospark cloud op-status operation-id:<id> [cancel:true]`",
   "  Purpose: inspect async operation status, or request cancellation for subagent runs.",
-  "  Required: --operation-id",
+  "  Required: operation-id:<id>",
   "",
   "Async orchestration flags (`backup`, `upload`, `download` only):",
-  "• `--async`",
+  "• `async:true`",
   "  Start operation in background and return quickly with operation-id.",
-  "• `--orchestrator <inline|subagent>`",
+  "• `orchestrator:<inline|subagent>`",
   "  Choose async engine. Default when omitted is `inline`.",
   "  Use `subagent` for explicit subagent session tracking and cancellation.",
-  "• `--timeout-seconds <n>`",
-  "  Optional per-operation timeout. Valid only with `--async --orchestrator subagent`.",
+  "• `timeout-seconds:<n>`",
+  "  Optional per-operation timeout. Valid only with `async:true` and `orchestrator:subagent`.",
   "  `n` must be a positive integer (seconds).",
-  "• `op-status --cancel`",
+  "• `op-status` with `cancel:true`",
   "  Cancel a subagent-orchestrated operation by operation-id (idempotent).",
   "",
   "Examples:",
-  "• `/mnemospark cloud upload ... --async --orchestrator subagent`",
-  "• `/mnemospark cloud download ... --async --orchestrator subagent --timeout-seconds 900`",
-  "• `/mnemospark cloud op-status --operation-id <id>`",
-  "• `/mnemospark cloud op-status --operation-id <id> --cancel`",
+  "• `/mnemospark cloud upload ... async:true orchestrator:subagent`",
+  "• `/mnemospark cloud download ... async:true orchestrator:subagent timeout-seconds:900`",
+  "• `/mnemospark cloud op-status operation-id:<id>`",
+  "• `/mnemospark cloud op-status operation-id:<id> cancel:true`",
   "",
   CLOUD_HELP_FOOTER_STATE,
   "",
-  "Backup uses your configured mnemospark wallet key (no `--wallet-address` flag). Commands price-storage, upload, ls, download, delete, and payment-settle require `--wallet-address` on the command line (must match that wallet).",
+  "Backup uses your configured mnemospark wallet key (no `wallet-address:` argument). Commands price-storage, upload, ls, download, delete, and payment-settle require `wallet-address:<addr>` (or `wallet:<addr>`) on the command line (must match that wallet).",
 ].join("\n");
 
 type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
@@ -510,7 +510,7 @@ function parseAsyncOperationArgs(flags: Record<string, string>): AsyncOperationA
 }
 
 const INVALID_ASYNC_FLAGS_MESSAGE =
-  "invalid async flags. `--orchestrator`/`--timeout-seconds` require `--async`, and `--timeout-seconds` is only valid with `--orchestrator subagent`.";
+  "invalid async flags. `orchestrator:` and `timeout-seconds:` require `async:true`, and `timeout-seconds:` is only valid with `orchestrator:subagent`.";
 
 function stripAsyncControlFlags(args?: string): string {
   const tokens = tokenizeArgsRaw(args ?? "");
@@ -944,7 +944,7 @@ async function resolveLocalUploadArchivePath(
   } catch {
     return {
       ok: false,
-      message: `Cannot upload storage object: local archive not found. Run /mnemospark cloud backup with --name (canonical layout) or restore the legacy file at ${legacyPath}.`,
+      message: `Cannot upload storage object: local archive not found. Run /mnemospark cloud backup with name:<friendly-name> (canonical layout) or restore the legacy file at ${legacyPath}.`,
     };
   }
 }
@@ -1704,7 +1704,7 @@ async function maybeCleanupLocalBackupArchive(archivePath: string): Promise<void
 }
 
 function formatStorageUploadUserMessage(upload: StorageUploadResponse, cronJobId: string): string {
-  const lsLine = `/mnemospark cloud ls --wallet-address \`${upload.addr}\``;
+  const lsLine = `/mnemospark cloud ls wallet-address:\`${upload.addr}\``;
   return [
     `Your file \`${upload.object_id}\` with key \`${upload.object_key}\` has been stored using \`${upload.provider}\` in folder \`${upload.bucket_name}\` in region \`${upload.location}\``,
     "",
@@ -1793,7 +1793,7 @@ function formatPriceStorageUserMessage(
   quote: PriceStorageQuoteResponse,
   localArchiveHint?: string | null,
 ): string {
-  const uploadLine = `/mnemospark cloud upload --quote-id \`${quote.quote_id}\` --wallet-address \`${quote.addr}\` --object-id \`${quote.object_id}\` --object-id-hash \`${quote.object_id_hash}\``;
+  const uploadLine = `/mnemospark cloud upload quote-id:\`${quote.quote_id}\` wallet-address:\`${quote.addr}\` object-id:\`${quote.object_id}\` object-id-hash:\`${quote.object_id_hash}\``;
   const lines = [
     `Your storage quote \`${quote.quote_id}\`: storage price \`$${quote.storage_price}\` for file \`${quote.object_id}\` with file size \`${quote.object_size_gb}\` in \`${quote.provider}\` \`${quote.location}\`.`,
     "",
@@ -1837,7 +1837,7 @@ function formatBackupSuccessUserMessage(
   friendlyName: string,
 ): string {
   const hash = result.objectIdHash.replace(/\s/g, "");
-  const priceStorageLine = `/mnemospark cloud price-storage --wallet-address \`${walletAddress}\` --object-id \`${result.objectId}\` --object-id-hash \`${hash}\` --gb \`${result.objectSizeGb}\` --provider ${DEFAULT_BACKUP_QUOTE_PROVIDER} --region ${DEFAULT_BACKUP_QUOTE_REGION}`;
+  const priceStorageLine = `/mnemospark cloud price-storage wallet-address:\`${walletAddress}\` object-id:\`${result.objectId}\` object-id-hash:\`${hash}\` gb:\`${result.objectSizeGb}\` provider:${DEFAULT_BACKUP_QUOTE_PROVIDER} region:${DEFAULT_BACKUP_QUOTE_REGION}`;
   return [
     `Backup archive: \`${result.archivePath}\``,
     "",
@@ -1853,10 +1853,10 @@ function formatBackupSuccessUserMessage(
     `The default region is ${DEFAULT_BACKUP_QUOTE_REGION}. Change the command parameters to switch regions (not required).`,
     "",
     "Region examples (merge into the command above):",
-    "North America: `--provider aws --region us-east-1`",
-    "Europe: `--provider aws --region eu-north-1`",
-    "South America: `--provider aws --region sa-east-1`",
-    "Asia Pacific: `--provider aws --region ap-northeast-1`",
+    "North America: `provider:aws region:us-east-1`",
+    "Europe: `provider:aws region:eu-north-1`",
+    "South America: `provider:aws region:sa-east-1`",
+    "Asia Pacific: `provider:aws region:ap-northeast-1`",
   ].join("\n");
 }
 
@@ -2505,7 +2505,7 @@ async function runCloudCommandHandler(
 
   if (parsed.mode === "payment-settle-invalid") {
     return {
-      text: `Cannot settle payment: required arguments are ${REQUIRED_PAYMENT_SETTLE}. Optional: --object-id, --storage-price.`,
+      text: `Cannot settle payment: required arguments are ${REQUIRED_PAYMENT_SETTLE}. Optional: object-id:, storage-price:.`,
       isError: true,
     };
   }
@@ -2540,7 +2540,7 @@ async function runCloudCommandHandler(
 
   if (parsed.mode === "op-status-invalid") {
     return {
-      text: "Cannot get operation status: required arguments are --operation-id.",
+      text: "Cannot get operation status: required arguments are operation-id:<id>.",
       isError: true,
     };
   }
@@ -2702,7 +2702,7 @@ async function runCloudCommandHandler(
     const walletAccount = privateKeyToAccount(walletKey);
     if (walletAccount.address.toLowerCase() !== req.wallet_address.toLowerCase()) {
       return {
-        text: `Cannot settle payment: wallet key address ${walletAccount.address} does not match --wallet-address ${req.wallet_address}.`,
+        text: `Cannot settle payment: wallet key address ${walletAccount.address} does not match wallet-address: ${req.wallet_address}.`,
         isError: true,
       };
     }
@@ -2807,7 +2807,7 @@ async function runCloudCommandHandler(
       const label = req.renewal ? `object ${req.object_key}` : `quote ${req.quote_id}`;
       return {
         text: transId
-          ? `Payment settled for ${label} (trans_id: ${transId}).`
+          ? `Payment settled for ${label} (trans-id: ${transId}).`
           : `Payment settled for ${label}.`,
       };
     }
@@ -3090,7 +3090,7 @@ async function runCloudCommandHandler(
             `orchestrator: subagent`,
             `subagent-session-id: ${dispatchResult.sessionId}`,
             timeoutSeconds ? `timeout-seconds: ${timeoutSeconds}` : null,
-            `Use /mnemospark cloud op-status --operation-id ${operationId}`,
+            `Use /mnemospark cloud op-status operation-id:${operationId}`,
           ]
             .filter((line): line is string => Boolean(line))
             .join("\n"),
@@ -3199,7 +3199,7 @@ async function runCloudCommandHandler(
       text: [
         `Operation started in background. operation-id: ${operationId}`,
         `orchestrator: inline`,
-        `Use /mnemospark cloud op-status --operation-id ${operationId}`,
+        `Use /mnemospark cloud op-status operation-id:${operationId}`,
       ].join("\n"),
     };
   }
@@ -3454,7 +3454,7 @@ async function runCloudCommandHandler(
         walletAccount.address.toLowerCase() !== parsed.uploadRequest.wallet_address.toLowerCase()
       ) {
         return {
-          text: `Cannot upload storage object: wallet key address ${walletAccount.address} does not match --wallet-address ${parsed.uploadRequest.wallet_address}.`,
+          text: `Cannot upload storage object: wallet key address ${walletAccount.address} does not match wallet-address: ${parsed.uploadRequest.wallet_address}.`,
           isError: true,
         };
       }
