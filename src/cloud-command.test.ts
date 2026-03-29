@@ -209,10 +209,10 @@ describe("cloud command", () => {
       throw new Error("Expected cloud help text");
     }
 
-    expect(result.text).toContain("/mnemospark cloud ls --wallet-address <addr>");
+    expect(result.text).toContain("/mnemospark cloud ls wallet-address:<addr>");
     expect(result.text).toContain("omit both to list bucket");
-    expect(result.text).toContain("/mnemospark cloud download --wallet-address <addr>");
-    expect(result.text).toContain("/mnemospark cloud delete --wallet-address <addr>");
+    expect(result.text).toContain("/mnemospark cloud download wallet-address:<addr>");
+    expect(result.text).toContain("/mnemospark cloud delete wallet-address:<addr>");
     expect(result.text).toContain("/mnemospark cloud payment-settle");
     expect(result.text).not.toContain("<s3-key>");
     expect(result.text).not.toContain("s3-key");
@@ -318,16 +318,16 @@ describe("cloud command", () => {
     expect(result.text).toContain("object-id:");
     expect(result.text).toContain("object-id-hash:");
     expect(result.text).toContain("object-size:");
-    expect(result.text).toContain(`--wallet-address \`${walletAddress}\``);
+    expect(result.text).toContain(`wallet-address:\`${walletAddress}\``);
     expect(result.text).toContain("Next, request a storage quote.");
     expect(result.text).toContain(
-      `--provider ${DEFAULT_BACKUP_QUOTE_PROVIDER} --region ${DEFAULT_BACKUP_QUOTE_REGION}`,
+      `provider:${DEFAULT_BACKUP_QUOTE_PROVIDER} region:${DEFAULT_BACKUP_QUOTE_REGION}`,
     );
     expect(result.text).toContain(`The default region is ${DEFAULT_BACKUP_QUOTE_REGION}.`);
-    expect(result.text).toContain("North America: `--provider aws --region us-east-1`");
-    expect(result.text).toContain("Europe: `--provider aws --region eu-north-1`");
-    expect(result.text).toContain("South America: `--provider aws --region sa-east-1`");
-    expect(result.text).toContain("Asia Pacific: `--provider aws --region ap-northeast-1`");
+    expect(result.text).toContain("North America: `provider:aws region:us-east-1`");
+    expect(result.text).toContain("Europe: `provider:aws region:eu-north-1`");
+    expect(result.text).toContain("South America: `provider:aws region:sa-east-1`");
+    expect(result.text).toContain("Asia Pacific: `provider:aws region:ap-northeast-1`");
   });
 
   it("includes full backup success text in op-status after async inline backup and aligns backup.completed operation_id", async () => {
@@ -378,9 +378,9 @@ describe("cloud command", () => {
       expect(status.text).toContain("status: succeeded");
       expect(status.text).toContain("Next, request a storage quote.");
       expect(status.text).toContain(
-        `--provider ${DEFAULT_BACKUP_QUOTE_PROVIDER} --region ${DEFAULT_BACKUP_QUOTE_REGION}`,
+        `provider:${DEFAULT_BACKUP_QUOTE_PROVIDER} region:${DEFAULT_BACKUP_QUOTE_REGION}`,
       );
-      expect(status.text).toContain("North America: `--provider aws --region us-east-1`");
+      expect(status.text).toContain("North America: `provider:aws region:us-east-1`");
     }
 
     const eventsPath = join(homeDir, ".openclaw", "mnemospark", "events.jsonl");
@@ -432,7 +432,7 @@ describe("cloud command", () => {
     };
     expect(backupEvent.event_type).toBe("backup.completed");
     expect(backupEvent.details?.friendly_name).toBe("my project");
-    expect(result.text).toContain(`--wallet-address \`${walletAddress}\``);
+    expect(result.text).toContain(`wallet-address:\`${walletAddress}\``);
   });
 
   it("returns backup-specific required-args message when --name is missing", async () => {
@@ -448,7 +448,7 @@ describe("cloud command", () => {
 
     expect(result.isError).toBe(true);
     expect(result.text).toBe(
-      "Cannot build storage object: required arguments are <file|directory> and --name <friendly-name>.",
+      "Cannot build storage object: required arguments are <file|directory> and name:<friendly-name>.",
     );
   });
 
@@ -522,8 +522,8 @@ describe("cloud command", () => {
     expect(result.text).toContain("storage price `$2.75`");
     expect(result.text).toContain("for file `obj-001`");
     expect(result.text).toContain("If you accept this quote, run:");
-    expect(result.text).toContain("/mnemospark cloud upload --quote-id `quote-abc123`");
-    expect(result.text).toContain("--object-id-hash `hash-001`");
+    expect(result.text).toContain("/mnemospark cloud upload quote-id:`quote-abc123`");
+    expect(result.text).toContain("object-id-hash:`hash-001`");
     expect(result.text).toContain(
       "Quotes are valid for one hour. Please run price-storage again if you need a new quote.",
     );
@@ -908,7 +908,7 @@ describe("cloud command", () => {
       expect(cronId).toBeTruthy();
       expect(result.text).toContain("monthly");
       expect(result.text).toContain("3rd (UTC)");
-      expect(result.text).toContain(`/mnemospark cloud ls --wallet-address \`${walletAddress}\``);
+      expect(result.text).toContain(`/mnemospark cloud ls wallet-address:\`${walletAddress}\``);
       expect(result.text).toContain("Thank you for using mnemospark!");
       expect(result.text).toContain("pluggedin@mnemospark.ai");
 
@@ -1606,7 +1606,7 @@ describe("cloud command", () => {
 
     expect(result.isError).toBe(true);
     expect(result.text).toBe(
-      "Cannot upload storage object: invalid async flags. `--orchestrator`/`--timeout-seconds` require `--async`, and `--timeout-seconds` is only valid with `--orchestrator subagent`.",
+      "Cannot upload storage object: invalid async flags. `orchestrator:` and `timeout-seconds:` require `async:true`, and `timeout-seconds:` is only valid with `orchestrator:subagent`.",
     );
   });
 
@@ -2005,7 +2005,7 @@ describe("cloud command", () => {
 
     expect(result.isError).toBe(true);
     expect(result.text).toContain("Cannot list storage object");
-    expect(result.text).toContain("--name");
+    expect(result.text).toContain("name:");
     expect(lsCalled).toBe(false);
   });
 
@@ -2062,7 +2062,7 @@ describe("cloud command", () => {
 
     expect(result.isError).toBe(true);
     expect(result.text).toBe(
-      "Cannot download file: invalid async flags. `--orchestrator`/`--timeout-seconds` require `--async`, and `--timeout-seconds` is only valid with `--orchestrator subagent`.",
+      "Cannot download file: invalid async flags. `orchestrator:` and `timeout-seconds:` require `async:true`, and `timeout-seconds:` is only valid with `orchestrator:subagent`.",
     );
   });
 
@@ -2080,6 +2080,7 @@ describe("cloud command", () => {
 
     expect(result.isError).toBeUndefined();
     expect(result.text).toContain("Operation started in background. operation-id:");
+    expect(result.text).toContain("Use /mnemospark cloud op-status operation-id:");
   });
 
   it("returns operation status via op-status", async () => {
