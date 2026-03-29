@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.1](https://github.com/pawlsclick/mnemospark/compare/v1.0.0...v1.0.1) (2026-03-29)
+
+
+### Bug Fixes
+
+* **ci:** surface docs and test in Release Please notes ([#94](https://github.com/pawlsclick/mnemospark/issues/94)) ([563eefa](https://github.com/pawlsclick/mnemospark/commit/563eefa7386425bc734cdac7f7a9be1391f14fd8))
+
+
+### Documentation
+
+* and test: commits do not bump semver by default. ([38ff847](https://github.com/pawlsclick/mnemospark/commit/38ff8473a940f03c881cf6875c273d66b6f877a1))
+* **cli:** prefer key:value in cloud help and success copy ([#92](https://github.com/pawlsclick/mnemospark/issues/92)) ([5679916](https://github.com/pawlsclick/mnemospark/commit/567991660b690e1b0d208d23a6e4c7fea8bcdd94))
+
+
+### Tests
+
+* **cli:** add parser edge cases and parseCloudArgs integration tests ([#91](https://github.com/pawlsclick/mnemospark/issues/91)) ([ddac640](https://github.com/pawlsclick/mnemospark/commit/ddac6402828929cd26b7162c2ffc0b84cc33ff42))
+
 ## [1.0.0](https://github.com/pawlsclick/mnemospark/compare/v0.9.2...v1.0.0) (2026-03-28)
 
 
