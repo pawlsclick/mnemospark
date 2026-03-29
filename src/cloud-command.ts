@@ -558,7 +558,8 @@ function mergeArgParseWarnings(a: string[], b: string[]): string[] {
   return [...a, ...b];
 }
 
-function parseCloudArgs(args?: string): ParsedCloudArgs {
+/** Exported for unit tests (`parseCommandArgs` integration across subcommands). */
+export function parseCloudArgs(args?: string): ParsedCloudArgs {
   const trimmed = args?.trim() ?? "";
   if (!trimmed) {
     return { mode: "help" };
