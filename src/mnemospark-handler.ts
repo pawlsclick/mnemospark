@@ -18,6 +18,12 @@ export const MNEMOSPARK_ROOT_HELP_TEXT = [
   "**Wallet status and funding link:**",
   "• `/mnemospark wallet`",
   "• `/mnemospark wallet help`",
+  "",
+  "**Let your agent run mnemospark for you:**",
+  "",
+  "mnemospark installs as an OpenClaw extension under `~/.openclaw/extensions/mnemospark/`. Point your agent at the bundled skill:",
+  "",
+  "Install the mnemospark skill available at `~/.openclaw/extensions/mnemospark/skills/mnemospark/SKILL.md`",
 ].join("\n");
 
 export const MNEMOSPARK_WALLET_HELP_TEXT = (address: string) =>
