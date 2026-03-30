@@ -2,23 +2,22 @@ import { existsSync, readFileSync } from "node:fs";
 import { privateKeyToAccount } from "viem/accounts";
 import { BalanceMonitor } from "./balance.js";
 import { WALLET_FILE } from "./auth.js";
+import { CLOUD_ONBOARDING_BLOCK_LINES } from "./cloud-help-onboarding.js";
 import { createCloudCommand } from "./cloud-command.js";
 import { firstTokenAndRest, parseVerboseToken, routeMnemosparkArgs } from "./mnemospark-route.js";
 import type { PluginCommandContext, PluginCommandHandler, PluginCommandResult } from "./types.js";
 
 export const MNEMOSPARK_ROOT_HELP_TEXT = [
   "☁️ **mnemospark - Wallet and go.** 💙",
+  ...CLOUD_ONBOARDING_BLOCK_LINES,
+  "To view the full help menu use these commands:",
   "",
-  "**Syntax:** `/mnemospark cloud …` or `/mnemospark wallet …`",
-  "Arguments may use `key:value`, `key=value`, or `--key value`. Optional verbose markers: `cloud:true`, `price-storage:true`, etc. (same as bare words).",
-  "Aliases include `wallet:` → wallet-address, `object:` → object-id, `quote:` → quote-id (see `/mnemospark cloud help`).",
-  "",
-  "**Cloud storage** — full reference:",
+  "**Cloud storage**",
   "• `/mnemospark cloud help`",
   "",
-  "**Wallet** — status:",
+  "**Wallet status and funding link:**",
   "• `/mnemospark wallet`",
-  "• `/mnemospark wallet help` — commands and funding link",
+  "• `/mnemospark wallet help`",
 ].join("\n");
 
 export const MNEMOSPARK_WALLET_HELP_TEXT = (address: string) =>

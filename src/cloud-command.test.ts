@@ -209,6 +209,14 @@ describe("cloud command", () => {
       throw new Error("Expected cloud help text");
     }
 
+    const startHereIdx = result.text.indexOf("Start here");
+    const syntaxIdx = result.text.indexOf("**Syntax:**");
+    expect(startHereIdx).toBeGreaterThanOrEqual(0);
+    expect(syntaxIdx).toBeGreaterThan(startHereIdx);
+    expect(result.text).toContain(
+      "**Syntax:** use `/mnemospark cloud …`. Prefer `key:value` for arguments; `key=value` and `--key value` are also accepted. Optional verbose markers: `cloud:true`, `price-storage:true`, etc. Aliases: `wallet:` → wallet-address, `object:` → object-id, `quote:` → quote-id, `hash:` → object-id-hash.",
+    );
+
     expect(result.text).toContain("/mnemospark cloud ls wallet-address:<addr>");
     expect(result.text).toContain("omit both to list bucket");
     expect(result.text).toContain("/mnemospark cloud download wallet-address:<addr>");
