@@ -121,6 +121,10 @@ export function expandTilde(path: string): string {
 const CLOUD_HELP_TEXT = [
   "☁️ **mnemospark - Wallet and go.** 💙",
   "",
+  "Start here to securely upload a file and we'll guide you along the way. Copy the line below and replace <file|directory> with the file or directory you'd like to save to the cloud and replace <friendly-name> with an easy to remember name.",
+  "",
+  "`/mnemospark cloud backup <file|directory> name:<friendly-name> async:true`",
+  "",
   "**Syntax:** use `/mnemospark cloud …`. Prefer `key:value` for arguments; `key=value` and `--key value` are also accepted. Optional verbose markers: `cloud:true`, `price-storage:true`, etc. Aliases: `wallet:` → wallet-address, `object:` → object-id, `quote:` → quote-id, `hash:` → object-id-hash.",
   "",
   "**Cloud Commands**",

@@ -9,16 +9,18 @@ import type { PluginCommandContext, PluginCommandHandler, PluginCommandResult } 
 export const MNEMOSPARK_ROOT_HELP_TEXT = [
   "☁️ **mnemospark - Wallet and go.** 💙",
   "",
-  "**Syntax:** `/mnemospark cloud …` or `/mnemospark wallet …`",
-  "Arguments may use `key:value`, `key=value`, or `--key value`. Optional verbose markers: `cloud:true`, `price-storage:true`, etc. (same as bare words).",
-  "Aliases include `wallet:` → wallet-address, `object:` → object-id, `quote:` → quote-id (see `/mnemospark cloud help`).",
+  "Start here to securely upload a file and we'll guide you along the way. Copy the line below and replace <file|directory> with the file or directory you'd like to save to the cloud and replace <friendly-name> with an easy to remember name.",
   "",
-  "**Cloud storage** — full reference:",
+  "`/mnemospark cloud backup <file|directory> name:<friendly-name> async:true`",
+  "",
+  "To view the full help menu use these commands:",
+  "",
+  "**Cloud storage**",
   "• `/mnemospark cloud help`",
   "",
-  "**Wallet** — status:",
+  "**Wallet status and funding link:**",
   "• `/mnemospark wallet`",
-  "• `/mnemospark wallet help` — commands and funding link",
+  "• `/mnemospark wallet help`",
 ].join("\n");
 
 export const MNEMOSPARK_WALLET_HELP_TEXT = (address: string) =>
