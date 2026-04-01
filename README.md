@@ -52,9 +52,32 @@ openclaw gateway restart
 
 ---
 
+## Slash command reference
+
+**Syntax**
+
+- **Chat / OpenClaw (primary):** use `key:value` for arguments (for example `wallet-address:0x…`, `region:us-east-1`). `key=value` is also accepted.
+- **Agent-driven workflows and CLI-style usage:** prefer `--parameter value` (as in the Core Commands examples and `npx mnemospark`).
+
+**Top-level routes** (after `/mnemospark`)
+
+- `/mnemospark` or `/mnemospark help` — overview
+- `/mnemospark cloud …` — cloud storage (see below)
+- `/mnemospark wallet …` — wallet helpers
+
+**`/mnemospark cloud`** — includes: `cloud` / `cloud help`, `backup`, `price-storage`, `upload`, `payment-settle`, `ls`, `download`, `delete`, `op-status`. Optional flags include `async:true`, `orchestrator:inline|subagent`, `timeout-seconds:<n>`. For the full cloud guide, run `/mnemospark cloud help` in chat.
+
+**`/mnemospark wallet`**
+
+- `/mnemospark wallet` — address, balance, and key file path
+- `/mnemospark wallet help` — command list and funding link
+- `/mnemospark wallet export` — export private key for backup (sensitive)
+
+---
+
 ## Core Commands
 
-Use via `/mnemospark cloud …` (or `/mnemospark wallet …`) in OpenClaw chat.
+Use via `/mnemospark cloud …` (or `/mnemospark wallet …`) in OpenClaw chat. Prefer `key:value` in chat; use `--wallet-address` style for scripted or agent-driven flows.
 
 ### Get a storage quote
 
@@ -128,6 +151,7 @@ Optional unless noted. All names use the `MNEMOSPARK_` prefix.
 | `MNEMOSPARK_DISABLED`             | Set to `true` or `1` to disable plugin registration.                                                                                                                                                                                      |
 | `MNEMOSPARK_DISABLE_SQLITE`       | Set to `1` to disable local SQLite (`state.db`); cloud commands that need local state will fail.                                                                                                                                          |
 | `MNEMOSPARK_SQLITE_STRICT`        | Set to `1` so certain SQLite consistency checks (e.g. friendly-name verification after upload) throw instead of warning.                                                                                                                  |
+| `MNEMOSPARK_PROXY_VERBOSE_404`    | When `1`, `true`, or `yes`, the local HTTP proxy includes a `message` field on **404** responses describing supported paths. Default (unset) is a generic JSON body `{ "error": "Not found" }` only (reduces reconnaissance).             |
 
 ---
 

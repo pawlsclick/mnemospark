@@ -29,3 +29,12 @@ export const PROXY_PORT = (() => {
 export const MNEMOSPARK_BACKEND_API_BASE_URL = (
   process.env.MNEMOSPARK_BACKEND_API_BASE_URL ?? ""
 ).trim();
+
+/**
+ * When true, unknown HTTP paths return a 404 JSON body that includes a `message`
+ * listing supported routes. Default is a generic `{ "error": "Not found" }` only.
+ */
+export const MNEMOSPARK_PROXY_VERBOSE_404 = (() => {
+  const v = process.env.MNEMOSPARK_PROXY_VERBOSE_404?.trim().toLowerCase();
+  return v === "1" || v === "true" || v === "yes";
+})();

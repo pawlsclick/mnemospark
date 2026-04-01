@@ -12,7 +12,11 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { privateKeyToAccount } from "viem/accounts";
 import { BalanceMonitor } from "./balance.js";
-import { PROXY_PORT, MNEMOSPARK_BACKEND_API_BASE_URL } from "./config.js";
+import {
+  PROXY_PORT,
+  MNEMOSPARK_BACKEND_API_BASE_URL,
+  MNEMOSPARK_PROXY_VERBOSE_404,
+} from "./config.js";
 import { createWalletSignatureHeaderValue } from "./mnemospark-request-sign.js";
 import {
   PAYMENT_SETTLE_PROXY_PATH,
@@ -90,8 +94,16 @@ async function readProxyJsonBody(req: IncomingMessage): Promise<unknown> {
   return JSON.parse(bodyText);
 }
 
+function createJsonResponseHeaders(): Record<string, string> {
+  return {
+    "Content-Type": "application/json",
+    "X-Content-Type-Options": "nosniff",
+    "Cache-Control": "no-store",
+  };
+}
+
 function sendJson(res: ServerResponse, status: number, body: unknown): void {
-  res.writeHead(status, { "Content-Type": "application/json" });
+  res.writeHead(status, createJsonResponseHeaders());
   res.end(JSON.stringify(body));
 }
 
@@ -186,6 +198,8 @@ function createBackendForwardHeaders(response: {
 }): Record<string, string> {
   const responseHeaders: Record<string, string> = {
     "Content-Type": response.contentType,
+    "X-Content-Type-Options": "nosniff",
+    "Cache-Control": "no-store",
   };
 
   // Preserve v2 payment headers while also supporting legacy names.
@@ -239,6 +253,11 @@ function createWalletRequiredBody(): string {
     error: "wallet_required",
     message: "wallet required for storage endpoints",
   });
+}
+
+function sendWalletRequired(res: ServerResponse): void {
+  res.writeHead(400, createJsonResponseHeaders());
+  res.end(createWalletRequiredBody());
 }
 
 /**
@@ -417,6 +436,20 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
 
         correlation.wallet_address = requestPayload.wallet_address;
         correlation.object_id = requestPayload.object_id;
+
+        if (requestPayload.wallet_address.toLowerCase() !== proxyWalletAddressLower) {
+          logProxyEvent("warn", "proxy_price_storage_wallet_mismatch", {
+            request_wallet: requestPayload.wallet_address,
+            proxy_wallet: account.address,
+          });
+          emitProxyTerminalFromStatus(correlation, 403, { reason: "wallet_mismatch" });
+          sendJson(res, 403, {
+            error: "wallet_proof_invalid",
+            message: "wallet proof invalid",
+          });
+          return;
+        }
+
         emitProxyEvent("storage.call", "start", correlation, { target: "price-storage" });
 
         const walletSignature = await createBackendWalletSignature(
@@ -426,8 +459,7 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
         );
         if (!walletSignature) {
           logProxyEvent("warn", "proxy_price_storage_wallet_signature_missing");
-          res.writeHead(400, { "Content-Type": "application/json" });
-          res.end(createWalletRequiredBody());
+          sendWalletRequired(res);
           emitProxyTerminalFromStatus(correlation, 400, { reason: "wallet_signature_missing" });
           return;
         }
@@ -599,8 +631,7 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
         );
         if (!walletSignature) {
           logProxyEvent("warn", "proxy_payment_settle_wallet_signature_missing");
-          res.writeHead(400, { "Content-Type": "application/json" });
-          res.end(createWalletRequiredBody());
+          sendWalletRequired(res);
           emitProxyTerminalFromStatus(correlation, 400, { reason: "wallet_signature_missing" });
           return;
         }
@@ -727,8 +758,7 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
         );
         if (!walletSignature) {
           logProxyEvent("warn", "proxy_upload_wallet_signature_missing");
-          res.writeHead(400, { "Content-Type": "application/json" });
-          res.end(createWalletRequiredBody());
+          sendWalletRequired(res);
           emitProxyTerminalFromStatus(correlation, 400, { reason: "wallet_signature_missing" });
           return;
         }
@@ -783,8 +813,7 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
         );
         if (!settleWalletSignature) {
           logProxyEvent("warn", "proxy_upload_settle_signature_missing");
-          res.writeHead(400, { "Content-Type": "application/json" });
-          res.end(createWalletRequiredBody());
+          sendWalletRequired(res);
           emitProxyTerminalFromStatus(correlation, 400, { reason: "settle_signature_missing" });
           return;
         }
@@ -933,8 +962,7 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
         );
         if (!walletSignature) {
           logProxyEvent("warn", "proxy_upload_confirm_wallet_signature_missing");
-          res.writeHead(400, { "Content-Type": "application/json" });
-          res.end(createWalletRequiredBody());
+          sendWalletRequired(res);
           emitProxyTerminalFromStatus(correlation, 400, { reason: "wallet_signature_missing" });
           return;
         }
@@ -1037,8 +1065,7 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
         );
         if (!walletSignature) {
           logProxyEvent("warn", "proxy_ls_wallet_signature_missing");
-          res.writeHead(400, { "Content-Type": "application/json" });
-          res.end(createWalletRequiredBody());
+          sendWalletRequired(res);
           emitProxyTerminalFromStatus(correlation, 400, { reason: "wallet_signature_missing" });
           return;
         }
@@ -1142,8 +1169,7 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
         );
         if (!walletSignature) {
           logProxyEvent("warn", "proxy_download_wallet_signature_missing");
-          res.writeHead(400, { "Content-Type": "application/json" });
-          res.end(createWalletRequiredBody());
+          sendWalletRequired(res);
           emitProxyTerminalFromStatus(correlation, 400, { reason: "wallet_signature_missing" });
           return;
         }
@@ -1272,8 +1298,7 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
         );
         if (!walletSignature) {
           logProxyEvent("warn", "proxy_delete_wallet_signature_missing");
-          res.writeHead(400, { "Content-Type": "application/json" });
-          res.end(createWalletRequiredBody());
+          sendWalletRequired(res);
           emitProxyTerminalFromStatus(correlation, 400, { reason: "wallet_signature_missing" });
           return;
         }
@@ -1352,10 +1377,14 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
       return;
     }
 
-    sendJson(res, 404, {
-      error: "Not found",
-      message: "Supported paths: /health and /mnemospark/* storage endpoints",
-    });
+    if (MNEMOSPARK_PROXY_VERBOSE_404) {
+      sendJson(res, 404, {
+        error: "Not found",
+        message: "Supported paths: /health and /mnemospark/* storage endpoints",
+      });
+    } else {
+      sendJson(res, 404, { error: "Not found" });
+    }
   });
 
   // Listen on configured port with retry logic for TIME_WAIT handling
