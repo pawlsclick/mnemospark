@@ -1,8 +1,11 @@
 node_modules/
 dist/
 .venv/
-# Prefer pnpm; ignore npm lockfile (see scripts/README.md)
+# Prefer pnpm; ignore npm lockfile
 package-lock.json
+
+# Local helper scripts (optional; not versioned)
+scripts/
 
 # Python / uv
 __pycache__/
