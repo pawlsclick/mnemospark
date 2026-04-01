@@ -3,7 +3,7 @@
 **Wallet and go. 💙**  
 _No forms. No email. Just Base. 💙_
 
-mnemospark is an agentic service layer for OpenClaw and a standalone x402 payment and wallet-proof verification backend. It provides encrypted, authenticated, and fully autonomous access to cloud infrastructure and proprietary data, paid via x402 with USDC on Base. No human onboarding. No API keys. The blockchain transaction is the record.
+mnemospark is an agentic service layer for OpenClaw plus a standalone x402 payment + verification backend. It enables encrypted, authenticated, fully autonomous cloud and data workflows—paid via x402 with USDC on Base. No human onboarding. No API keys. The blockchain transaction is the record.
 
 ---
 
@@ -11,7 +11,7 @@ mnemospark is an agentic service layer for OpenClaw and a standalone x402 paymen
 
 mnemospark connects OpenClaw agents to cloud workflows with wallet-native auth + payment rails.
 
-- **Wallet-proof authentication** for storage/API actions
+- **Wallet-native authentication** for storage/API actions
 - **x402-native payments** with USDC on Base
 - **Agent-first flow** (quote → pay → provision)
 - **Encrypted payload support** and structured request signing
@@ -57,7 +57,7 @@ openclaw gateway restart
 **Syntax**
 
 - **Chat / OpenClaw (primary):** use `key:value` for arguments (for example `wallet-address:0x…`, `region:us-east-1`). `key=value` is also accepted.
-- **Agent-driven workflows and CLI-style usage:** prefer `--parameter value` (as in the Core Commands examples and `npx mnemospark`).
+- **Agent-driven workflows and CLI-style usage:** prefer `--parameter value` (for example `npx mnemospark` or shell scripts).
 
 **Top-level routes** (after `/mnemospark`)
 
@@ -82,33 +82,33 @@ Use via `/mnemospark cloud …` (or `/mnemospark wallet …`) in OpenClaw chat. 
 ### Get a storage quote
 
 ```text
-/mnemospark cloud price-storage --wallet-address <addr> --object-id <id> --object-id-hash <sha256> --gb <gb> --provider aws --region us-east-1
+/mnemospark cloud price-storage wallet-address:<addr> object-id:<id> object-id-hash:<sha256> gb:<gb> provider:aws region:us-east-1
 ```
 
-Use other regions by changing `--provider` and `--region` (defaults: `aws` / `us-east-1`).
+Use other regions by changing `provider:` and `region:` (defaults: `aws` / `us-east-1`).
 
 ### Upload using quote
 
 ```text
-/mnemospark cloud upload --quote-id <quote-id> --wallet-address <addr> --object-id <id> --object-id-hash <sha256>
+/mnemospark cloud upload quote-id:<quote-id> wallet-address:<addr> object-id:<id> object-id-hash:<sha256>
 ```
 
 ### List objects
 
 ```text
-/mnemospark cloud ls --wallet-address <addr> --object-key <object-key>
+/mnemospark cloud ls wallet-address:<addr> object-key:<object-key>
 ```
 
 ### Download object
 
 ```text
-/mnemospark cloud download --wallet-address <addr> --object-key <object-key>
+/mnemospark cloud download wallet-address:<addr> object-key:<object-key>
 ```
 
 ### Delete object
 
 ```text
-/mnemospark cloud delete --wallet-address <addr> --object-key <object-key>
+/mnemospark cloud delete wallet-address:<addr> object-key:<object-key>
 ```
 
 ---
@@ -118,7 +118,7 @@ Use other regions by changing `--provider` and `--region` (defaults: `aws` / `us
 mnemospark follows a quote-and-pay execution model:
 
 1. Agent requests a quote.
-2. Agent provides wallet-proof + payment authorization.
+2. Agent provides wallet-native + payment authorization.
 3. Backend verifies payment/auth context.
 4. Storage action executes.
 
@@ -165,11 +165,23 @@ Optional unless noted. All names use the `MNEMOSPARK_` prefix.
 
 ---
 
+## OpenClaw Install Warning
+
+If OpenClaw shows a warning about **dangerous code patterns** when installing or updating mnemospark—often mentioning shell execution (`child_process`), environment variables, and network access—here is what is going on.
+
+mnemospark is an **OpenClaw plugin** that talks to **your configured mnemospark backend**, runs a **local HTTP proxy** for storage workflows, and can **invoke the `openclaw` CLI** and system tools when needed (for example creating archives with `tar` or running `npm` when you use the update command). Those features use the same low-level Node.js APIs—`child_process` and `fetch`—that security tools also associate with risky software, so the installer may warn you even when the behavior is intentional and benign.
+
+We also read **environment variables** you set on purpose (such as `MNEMOSPARK_BACKEND_API_BASE_URL`, `MNEMOSPARK_PROXY_PORT`, or wallet-related settings) so you can configure the plugin without editing code. Automated scans sometimes flag “environment access + network” as a possible credential-stealing pattern. In mnemospark, that combination exists because the plugin is **configurable and networked by design**, not because we are harvesting your unrelated secrets.
+
+mnemospark is **open source**. If you want extra assurance, review the repository, search for `child_process`, `process.env`, and `fetch`, and run your own tests in a safe environment. The warning helps keep the ecosystem safe; for mnemospark it reflects **capabilities**, not a finding of malicious intent.
+
+---
+
 ## Troubleshooting
 
 - **Missing wallet/auth errors**: verify wallet key is present and request signature headers are generated.
 - **402 payment required**: expected in challenge flow; ensure client retries with payment authorization.
-- **Upload/storage backend errors**: verify cloud permissions (e.g., bucket access + IAM role rights).
+- **Upload/storage backend errors**: verify cloud permissions (e.g. bucket access + IAM role rights).
 - **Command not recognized**: confirm plugin installed and gateway restarted.
 - **One-step operation correlation**: run `./skills/mnemospark/scripts/debug-operation.sh <operation-id>` (or omit ID to use latest).
 
