@@ -1,3 +1,0 @@
-# For examples that call BCM Pricing Calculator (e.g. s3_storage_cost_estimate.py).
-# Prefer: from repo root run   uv sync --extra bcm-pricing   (see pyproject.toml).
-boto3>=1.34.0

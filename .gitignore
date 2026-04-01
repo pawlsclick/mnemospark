@@ -16,6 +16,9 @@ dev-scripts/*
 !dev-scripts/uninstall.sh
 !dev-scripts/verify-dev-tools.sh
 
+# Local examples and experiments (not versioned)
+examples/
+
 # Python / uv
 __pycache__/
 *.py[cod]
