@@ -6,8 +6,8 @@ Development and install helpers for mnemospark. They live in the repo under `dev
 
 **Prerequisites:** Node.js v20+ is required for pnpm. AWS credentials and GitHub auth are configured separately (IAM role, `aws configure`, `gh auth login`).
 
-| Script                         | Purpose                                          |
-| ------------------------------ | ------------------------------------------------ |
+| Script                             | Purpose                                          |
+| ---------------------------------- | ------------------------------------------------ |
 | `./dev-scripts/install-pnpm.sh`    | Enable pnpm via Node corepack. Idempotent.       |
 | `./dev-scripts/install-aws-cli.sh` | Install AWS CLI v2 on Ubuntu x86_64. Idempotent. |
 | `./dev-scripts/install-jq.sh`      | Optional: install jq via apt. Idempotent.        |
