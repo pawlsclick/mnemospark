@@ -5,8 +5,16 @@ dist/
 package-lock.json
 
 # Local-only dev helpers (install, verify, reinstall/uninstall). Repo keeps only
-# scripts/sync-plugin-version.js under scripts/ for prepare/CI.
-dev-scripts/
+# scripts/sync-plugin-version.js under scripts/ for prepare/CI. Ignore anything
+# extra under dev-scripts/; tracked files are re-included below.
+dev-scripts/*
+!dev-scripts/README.md
+!dev-scripts/install-aws-cli.sh
+!dev-scripts/install-jq.sh
+!dev-scripts/install-pnpm.sh
+!dev-scripts/reinstall.sh
+!dev-scripts/uninstall.sh
+!dev-scripts/verify-dev-tools.sh
 
 # Python / uv
 __pycache__/
