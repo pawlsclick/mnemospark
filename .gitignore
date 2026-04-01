@@ -7,6 +7,8 @@ package-lock.json
 # Local-only dev helpers (install, verify, reinstall/uninstall). Repo keeps only
 # scripts/sync-plugin-version.js under scripts/ for prepare/CI. Ignore anything
 # extra under dev-scripts/; tracked files are re-included below.
+scripts/*
+!scripts/sync-plugin-version.js
 dev-scripts/*
 !dev-scripts/README.md
 !dev-scripts/install-aws-cli.sh
