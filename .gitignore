@@ -4,10 +4,9 @@ dist/
 # Prefer pnpm; ignore npm lockfile
 package-lock.json
 
-# Local helper scripts (optional; not versioned). Keep sync-plugin-version.js: package.json
-# "prepare" runs it so CI/install must see the file.
-scripts/*
-!scripts/sync-plugin-version.js
+# Local-only dev helpers (install, verify, reinstall/uninstall). Repo keeps only
+# scripts/sync-plugin-version.js under scripts/ for prepare/CI.
+dev-scripts/
 
 # Python / uv
 __pycache__/
