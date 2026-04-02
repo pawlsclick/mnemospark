@@ -77,11 +77,7 @@ import {
 } from "./arg-schemas.js";
 import { CLOUD_ONBOARDING_BLOCK_LINES } from "./cloud-help-onboarding.js";
 import { parseOpenClawCliJson, runOpenClawCli } from "./openclaw-cli.js";
-import {
-  ensureOpenClawRenewalPrerequisites,
-  getRenewalAgentId,
-  getRenewalNodeBinary,
-} from "./openclaw-renewal-runbook.js";
+import { getRenewalAgentId, getRenewalNodeBinary } from "./openclaw-renewal-runbook.js";
 
 const SUPPORTED_BACKUP_PLATFORMS = new Set<NodeJS.Platform>(["darwin", "linux"]);
 const BACKUP_DIR_SUBPATH = join(".openclaw", "mnemospark", "backup");
@@ -1379,8 +1375,6 @@ async function createStoragePaymentCronJob(
   openClawHomeDir: string,
   nowDateFn: () => Date = () => new Date(),
 ): Promise<StoragePaymentCronJob> {
-  await ensureOpenClawRenewalPrerequisites({ homeDir: openClawHomeDir });
-
   const renewalFields: StoragePaymentRenewalJobFields = {
     walletAddress: upload.addr,
     objectId: upload.object_id,

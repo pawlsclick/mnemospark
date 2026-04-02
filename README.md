@@ -93,7 +93,7 @@ Use other regions by changing `provider:` and `region:` (defaults: `aws` / `us-e
 /mnemospark cloud upload quote-id:<quote-id> wallet-address:<addr> object-id:<id> object-id-hash:<sha256>
 ```
 
-On **OpenClaw 2026.4.x**, the first successful upload applies the **Mnemospark Renewal Agent Runbook** for you: it ensures a dedicated agent (`mnemospark-renewal` by default) with `tools.deny: ["subagents"]` and `tools.exec.ask: "off"`, updates `~/.openclaw/exec-approvals.json` so `/usr/bin/node` is allowlisted for that agent, runs `openclaw config validate`, and best-effort `openclaw gateway restart`. It then registers the monthly renewal cron with `--no-deliver`, `--agent`, and a `Command: /usr/bin/node …/dist/cli.js cloud payment-settle --renewal …` message. Override paths with `MNEMOSPARK_CRON_AGENT_ID` and `MNEMOSPARK_CRON_NODE_BIN` if your system differs.
+On **OpenClaw 2026.4.x**, the **Mnemospark Renewal Agent Runbook** is applied when you install or update mnemospark (including `npx mnemospark install`, `npx mnemospark update`, `openclaw plugins install`, and when the gateway loads the plugin): it ensures a dedicated agent (`mnemospark-renewal` by default) with `tools.deny: ["subagents"]` and `tools.exec.ask: "off"`, updates `~/.openclaw/exec-approvals.json` so `/usr/bin/node` is allowlisted for that agent, and runs `openclaw config validate`. OpenClaw restarts the gateway when a plugin is installed or updated; mnemospark does not call `openclaw gateway restart` itself. After a **successful upload**, mnemospark registers the monthly renewal cron only (`--no-deliver`, `--agent`, and a `Command: /usr/bin/node …/dist/cli.js cloud payment-settle --renewal …` message). Override paths with `MNEMOSPARK_CRON_AGENT_ID` and `MNEMOSPARK_CRON_NODE_BIN` if your system differs.
 
 ### List objects
 
@@ -156,8 +156,7 @@ Optional unless noted. All names use the `MNEMOSPARK_` prefix.
 | `MNEMOSPARK_PROXY_VERBOSE_404`       | When `1`, `true`, or `yes`, the local HTTP proxy includes a `message` field on **404** responses describing supported paths. Default (unset) is a generic JSON body `{ "error": "Not found" }` only (reduces reconnaissance).             |
 | `MNEMOSPARK_CRON_AGENT_ID`           | OpenClaw agent id used for the monthly renewal cron (default `mnemospark-renewal`).                                                                                                                                                       |
 | `MNEMOSPARK_CRON_NODE_BIN`           | Absolute path to `node` for renewal cron exec (default `/usr/bin/node`).                                                                                                                                                                  |
-| `MNEMOSPARK_DISABLE_OPENCLAW_PREREQ` | Set to `1` to skip automatic runbook application (for advanced debugging only).                                                                                                                                                           |
-| `MNEMOSPARK_SKIP_GATEWAY_RESTART`    | Set to `1` to skip best-effort `openclaw gateway restart` after prerequisite writes.                                                                                                                                                      |
+| `MNEMOSPARK_DISABLE_OPENCLAW_PREREQ` | Set to `1` to skip automatic runbook application everywhere it runs (plugin load, CLI install/update; for advanced debugging only).                                                                                                       |
 
 ---
 
@@ -189,6 +188,7 @@ mnemospark is **open source**. If you want extra assurance, review the repositor
 - **402 payment required**: expected in challenge flow; ensure client retries with payment authorization.
 - **Upload/storage backend errors**: verify cloud permissions (e.g. bucket access + IAM role rights).
 - **Command not recognized**: confirm plugin installed and gateway restarted.
+- **Renewal cron / exec failures after upload**: ensure mnemospark was installed or updated through the normal path so the runbook ran (gateway load, `npx mnemospark install`, or `openclaw plugins install`). If the gateway never loaded the plugin, run install again or restart the gateway.
 - **One-step operation correlation**: run `./skills/mnemospark/scripts/debug-operation.sh <operation-id>` (or omit ID to use latest).
 
 ---

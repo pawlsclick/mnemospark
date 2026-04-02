@@ -4,7 +4,7 @@ import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { privateKeyToAccount } from "viem/accounts";
 
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 import {
   buildBackupObject,
@@ -21,16 +21,6 @@ import type { StorageDownloadProxyResponse } from "./cloud-storage.js";
 import { PaymentCache } from "./payment-cache.js";
 
 const sandboxDirs: string[] = [];
-
-beforeAll(() => {
-  process.env.MNEMOSPARK_DISABLE_OPENCLAW_PREREQ = "1";
-  process.env.MNEMOSPARK_SKIP_GATEWAY_RESTART = "1";
-});
-
-afterAll(() => {
-  delete process.env.MNEMOSPARK_DISABLE_OPENCLAW_PREREQ;
-  delete process.env.MNEMOSPARK_SKIP_GATEWAY_RESTART;
-});
 
 afterEach(async () => {
   await Promise.all(

@@ -11,6 +11,7 @@ import { resolveOrGenerateWalletKey } from "./auth.js";
 import { BalanceMonitor } from "./balance.js";
 import { VERSION } from "./version.js";
 import { runMnemosparkSlashHandler } from "./mnemospark-handler.js";
+import { ensureOpenClawRenewalPrerequisites } from "./openclaw-renewal-runbook.js";
 
 /**
  * Detect if we're running in shell completion mode.
@@ -103,6 +104,14 @@ const plugin: OpenClawPluginDefinition = {
 
     if (isCompletionMode()) {
       return;
+    }
+
+    try {
+      await ensureOpenClawRenewalPrerequisites();
+    } catch (err) {
+      api.logger.warn(
+        `mnemospark renewal prerequisites: ${err instanceof Error ? err.message : String(err)}`,
+      );
     }
 
     try {
