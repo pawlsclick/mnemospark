@@ -192,4 +192,10 @@ export {
 export { fetchWithRetry, isRetryable, DEFAULT_RETRY_CONFIG } from "./retry.js";
 export type { RetryConfig } from "./retry.js";
 export { createCloudCommand } from "./cloud-command.js";
+export {
+  ensureOpenClawRenewalPrerequisites,
+  getRenewalAgentId,
+  getRenewalNodeBinary,
+} from "./openclaw-renewal-runbook.js";
+export type { EnsureOpenClawRenewalPrerequisitesOptions } from "./openclaw-renewal-runbook.js";
 export { runMnemosparkSlashHandler } from "./mnemospark-handler.js";
