@@ -54,7 +54,12 @@ import {
 import type { OpenClawPluginCommandDefinition } from "./types.js";
 import { createPaymentFetch, type PaymentFetchResult } from "./x402.js";
 import { isValidWalletPrivateKey } from "./wallet-key.js";
-import { createCloudDatastore, type CronJobRow, type QuoteLookup } from "./cloud-datastore.js";
+import {
+  createCloudDatastore,
+  type CloudDatastore,
+  type CronJobRow,
+  type QuoteLookup,
+} from "./cloud-datastore.js";
 import { appendJsonlEvent } from "./cloud-jsonl.js";
 import type { RequestCorrelation } from "./cloud-correlation.js";
 import { normalizeInputForParsing } from "./args/normalize.js";
@@ -94,7 +99,7 @@ const CLOUD_HELP_FOOTER_STATE =
   "Local state: mnemospark records quotes, objects, payments, cron jobs, friendly names, and operation metadata in ~/.openclaw/mnemospark/state.db (SQLite). For troubleshooting and correlation, commands and the HTTP proxy append structured JSON lines to ~/.openclaw/mnemospark/events.jsonl. Monthly storage billing jobs are listed in ~/.openclaw/cron/jobs.json for OpenClaw scheduling.";
 
 const REQUIRED_PRICE_STORAGE =
-  "wallet-address:, object-id:, object-id-hash:, gb:, provider:, region:";
+  "wallet-address:, object-id:, gb:, provider:, region: (object-id-hash: optional if the object exists in local SQLite after backup)";
 const REQUIRED_UPLOAD = "quote-id:, wallet-address:, object-id:, object-id-hash:";
 const REQUIRED_BACKUP = "<file|directory> and name:<friendly-name>";
 const REQUIRED_PAYMENT_SETTLE = "wallet-address: and (quote-id: | renewal:true with object-key:)";
@@ -132,10 +137,10 @@ const CLOUD_HELP_TEXT = [
   "  Purpose: create a local tar+gzip archive under ~/.openclaw/mnemospark/backup (filename from sanitized friendly name) and record metadata in SQLite for later price-storage and upload.",
   "  Required: " + REQUIRED_BACKUP,
   "",
-  "• `/mnemospark cloud price-storage wallet-address:<addr> object-id:<id> object-id-hash:<hash> gb:<gb> provider:aws region:us-east-1`",
-  "  Purpose: request a storage quote before upload (defaults shown; override `provider:` / `region:` for other regions).",
+  "• `/mnemospark cloud price-storage wallet-address:<addr> object-id:<id> [object-id-hash:<hash>] gb:<gb> provider:aws region:us-east-1`",
+  "  Purpose: request a storage quote before upload (defaults shown; override `provider:` / `region:` for other regions). Omit `object-id-hash:` when the object is already in local SQLite (e.g. after backup); mnemospark reads sha256 from ~/.openclaw/mnemospark/state.db.",
   "  Required: " + REQUIRED_PRICE_STORAGE,
-  "  Shorter: `wallet:… object:… hash:… gb:… provider:… region:…`",
+  "  Shorter: `wallet:… object:… [hash:…] gb:… provider:… region:…`",
   "",
   "• `/mnemospark cloud upload quote-id:<quote-id> wallet-address:<addr> object-id:<id> object-id-hash:<hash> [name:<friendly-name>] [async:true] [orchestrator:<inline|subagent>] [timeout-seconds:<n>]`",
   "  Purpose: upload an encrypted object using a valid quote-id.",
@@ -287,6 +292,16 @@ type ParsedCloudArgs =
   | { mode: "backup-invalid-async" }
   | { mode: "backup-invalid-name" }
   | { mode: "price-storage"; priceStorageRequest: PriceStorageQuoteRequest }
+  | {
+      mode: "price-storage-resolve-hash";
+      priceStoragePartial: {
+        wallet_address: string;
+        object_id: string;
+        gb: number;
+        provider: string;
+        region: string;
+      };
+    }
   | { mode: "price-storage-invalid" }
   | ({
       mode: "upload";
@@ -559,6 +574,54 @@ function mergeArgParseWarnings(a: string[], b: string[]): string[] {
   return [...a, ...b];
 }
 
+async function resolvePriceStorageHashFromDatastore(
+  datastore: CloudDatastore,
+  partial: {
+    wallet_address: string;
+    object_id: string;
+    gb: number;
+    provider: string;
+    region: string;
+  },
+): Promise<{ ok: true; request: PriceStorageQuoteRequest } | { ok: false; message: string }> {
+  await datastore.ensureReady();
+  const row = await datastore.findObjectById(partial.object_id.trim());
+  const wallet = partial.wallet_address.trim().toLowerCase();
+  if (!row) {
+    return {
+      ok: false,
+      message:
+        "Cannot resolve object-id-hash: no object found in local SQLite for this object-id. Run backup first, or pass --object-id-hash explicitly.",
+    };
+  }
+  if (row.wallet_address.trim().toLowerCase() !== wallet) {
+    return {
+      ok: false,
+      message:
+        "Cannot resolve object-id-hash: wallet-address does not match the object record in ~/.openclaw/mnemospark/state.db.",
+    };
+  }
+  const sha = row.sha256?.trim();
+  if (!sha) {
+    return {
+      ok: false,
+      message:
+        "Cannot resolve object-id-hash: local object record has no sha256 yet. Run backup first, or pass --object-id-hash explicitly.",
+    };
+  }
+  return {
+    ok: true,
+    request: {
+      wallet_address: partial.wallet_address.trim(),
+      object_id: partial.object_id.trim(),
+      object_id_hash: sha.replace(/\s/g, ""),
+      gb: partial.gb,
+      provider: partial.provider.trim(),
+      region: partial.region.trim(),
+    },
+  };
+}
+
 /** Exported for unit tests (`parseCommandArgs` integration across subcommands). */
 export function parseCloudArgs(args?: string): ParsedCloudArgs {
   const trimmed = args?.trim() ?? "";
@@ -636,18 +699,41 @@ export function parseCloudArgs(args?: string): ParsedCloudArgs {
     }
     const flags = valuesToStringRecord(parsed.values);
     const gb = Number.parseFloat(flags.gb ?? "");
-    const request = parsePriceStorageQuoteRequest({
-      wallet_address: flags["wallet-address"],
-      object_id: flags["object-id"],
-      object_id_hash: flags["object-id-hash"],
-      gb,
-      provider: flags.provider,
-      region: flags.region,
-    });
-    if (!request) {
+    const hashRaw = flags["object-id-hash"]?.trim();
+    const walletAddress = flags["wallet-address"]?.trim();
+    const objectId = flags["object-id"]?.trim();
+    const provider = flags.provider?.trim();
+    const region = flags.region?.trim();
+
+    if (!walletAddress || !objectId || !provider || !region || !Number.isFinite(gb)) {
       return { mode: "price-storage-invalid" };
     }
-    return { mode: "price-storage", priceStorageRequest: request };
+
+    if (hashRaw) {
+      const request = parsePriceStorageQuoteRequest({
+        wallet_address: walletAddress,
+        object_id: objectId,
+        object_id_hash: hashRaw,
+        gb,
+        provider,
+        region,
+      });
+      if (!request) {
+        return { mode: "price-storage-invalid" };
+      }
+      return { mode: "price-storage", priceStorageRequest: request };
+    }
+
+    return {
+      mode: "price-storage-resolve-hash",
+      priceStoragePartial: {
+        wallet_address: walletAddress,
+        object_id: objectId,
+        gb,
+        provider,
+        region,
+      },
+    };
   }
 
   if (subcommand === "upload") {
@@ -3302,10 +3388,24 @@ async function runCloudCommandHandler(
     }
   }
 
-  if (parsed.mode === "price-storage") {
+  if (parsed.mode === "price-storage" || parsed.mode === "price-storage-resolve-hash") {
+    let priceStorageRequest: PriceStorageQuoteRequest;
+    if (parsed.mode === "price-storage-resolve-hash") {
+      const resolved = await resolvePriceStorageHashFromDatastore(
+        datastore,
+        parsed.priceStoragePartial,
+      );
+      if (!resolved.ok) {
+        return { text: resolved.message, isError: true };
+      }
+      priceStorageRequest = resolved.request;
+    } else {
+      priceStorageRequest = parsed.priceStorageRequest;
+    }
+
     const correlation = buildRequestCorrelation();
     try {
-      const quote = await requestPriceStorageQuote(parsed.priceStorageRequest, {
+      const quote = await requestPriceStorageQuote(priceStorageRequest, {
         ...options.proxyQuoteOptions,
         correlation,
       });
@@ -3363,8 +3463,8 @@ async function runCloudCommandHandler(
         {
           operation_id: correlation.operationId,
           trace_id: correlation.traceId,
-          wallet_address: parsed.priceStorageRequest.wallet_address,
-          object_id: parsed.priceStorageRequest.object_id,
+          wallet_address: priceStorageRequest.wallet_address,
+          object_id: priceStorageRequest.object_id,
           status: "failed",
         },
         mnemosparkHomeDir,

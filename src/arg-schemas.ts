@@ -4,7 +4,8 @@ export const priceStorageSchema: CommandArgSchema = {
   args: [
     { name: "wallet-address", aliases: ["wallet"], required: true },
     { name: "object-id", aliases: ["object"], required: true },
-    { name: "object-id-hash", aliases: ["hash"], required: true },
+    // Optional: omit when the object exists in local SQLite after backup; CLI resolves sha256 from state.db.
+    { name: "object-id-hash", aliases: ["hash"] },
     { name: "gb", required: true },
     { name: "provider", required: true },
     { name: "region", required: true },

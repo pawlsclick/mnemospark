@@ -24,7 +24,7 @@ mnemospark connects OpenClaw agents to cloud workflows with wallet-native auth +
 ### 1) Install the plugin in OpenClaw
 
 ```bash
-openclaw plugins install mnemospark
+openclaw plugins install mnemospark --dangerously-force-unsafe-install
 openclaw gateway start
 ```
 

@@ -15,7 +15,7 @@ Slash usage: `/mnemospark cloud <subcommand> …`. CLI/agent: `node dist/cli.js 
 
 ### Price storage quote
 
-`price-storage --wallet-address <addr> --object-id <id> --object-id-hash <hash> --gb <gb> --provider aws --region us-east-1` (defaults; override `--provider` / `--region` for other regions)
+`price-storage --wallet-address <addr> --object-id <id> [--object-id-hash <hash>] --gb <gb> --provider aws --region us-east-1` (defaults; override `--provider` / `--region` for other regions). Omit `--object-id-hash` when the object already exists in local SQLite after **backup** (mnemospark resolves sha256 via `node:sqlite`; do not shell out to the `sqlite3` binary).
 
 ### Upload
 

@@ -2,6 +2,11 @@ import { describe, expect, it } from "vitest";
 
 import { parseCloudArgs } from "./cloud-command.js";
 
+const WALLET = "0x24bB8B93fbC0B87e4b0303aA1F71C51941726424";
+const OID = "1774816919700-d7bb86a8fab10e34";
+const HASH = "9fec74112e2fc5cf0f569b14276c11c62036f4ca57fb5b01c551336876bdd299";
+const GB = "0.035035805";
+
 describe("parseCloudArgs", () => {
   it("returns arg-parse-failure when price-storage has no flags", () => {
     const r = parseCloudArgs("price-storage");
@@ -55,5 +60,25 @@ describe("parseCloudArgs", () => {
       "upload --quote-id q --wallet-address 0xabc --object-id o --object-id-hash h --orchestrator inline",
     );
     expect(r.mode).toBe("upload-invalid-async");
+  });
+
+  it("returns price-storage-resolve-hash when object-id-hash is omitted", () => {
+    const r = parseCloudArgs(
+      `price-storage wallet:${WALLET} object:${OID} gb:${GB} provider:aws region:us-east-1`,
+    );
+    expect(r.mode).toBe("price-storage-resolve-hash");
+    if (r.mode !== "price-storage-resolve-hash") return;
+    expect(r.priceStoragePartial.wallet_address).toBe(WALLET);
+    expect(r.priceStoragePartial.object_id).toBe(OID);
+    expect(r.priceStoragePartial.gb).toBeCloseTo(0.035035805);
+  });
+
+  it("returns price-storage when object-id-hash is present", () => {
+    const r = parseCloudArgs(
+      `price-storage wallet:${WALLET} object:${OID} hash:${HASH} gb:${GB} provider:aws region:us-east-1`,
+    );
+    expect(r.mode).toBe("price-storage");
+    if (r.mode !== "price-storage") return;
+    expect(r.priceStorageRequest.object_id_hash).toBe(HASH);
   });
 });
