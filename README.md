@@ -93,6 +93,8 @@ Use other regions by changing `provider:` and `region:` (defaults: `aws` / `us-e
 /mnemospark cloud upload quote-id:<quote-id> wallet-address:<addr> object-id:<id> object-id-hash:<sha256>
 ```
 
+On **OpenClaw 2026.4.x**, the first successful upload applies the **Mnemospark Renewal Agent Runbook** for you: it ensures a dedicated agent (`mnemospark-renewal` by default) with `tools.deny: ["subagents"]` and `tools.exec.ask: "off"`, updates `~/.openclaw/exec-approvals.json` so `/usr/bin/node` is allowlisted for that agent, runs `openclaw config validate`, and best-effort `openclaw gateway restart`. It then registers the monthly renewal cron with `--no-deliver`, `--agent`, and a `Command: /usr/bin/node …/dist/cli.js cloud payment-settle --renewal …` message. Override paths with `MNEMOSPARK_CRON_AGENT_ID` and `MNEMOSPARK_CRON_NODE_BIN` if your system differs.
+
 ### List objects
 
 ```text
@@ -141,17 +143,21 @@ The blockchain transaction is the payment record.
 
 Optional unless noted. All names use the `MNEMOSPARK_` prefix.
 
-| Variable                          | Purpose                                                                                                                                                                                                                                   |
-| --------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `MNEMOSPARK_BACKEND_API_BASE_URL` | Base URL for the mnemospark backend API (required for the local HTTP proxy to forward storage calls). Example: `https://{api-id}.execute-api.{region}.amazonaws.com/{stage}`.                                                             |
-| `MNEMOSPARK_PROXY_PORT`           | TCP port for the mnemospark HTTP proxy (default `7120`).                                                                                                                                                                                  |
-| `MNEMOSPARK_DOWNLOAD_DIR`         | Directory where the proxy writes downloaded objects (default `~/.openclaw/mnemospark/downloads/`).                                                                                                                                        |
-| `MNEMOSPARK_WALLET_KEY`           | Path to the wallet private key file when not using the default `~/.openclaw/mnemospark/wallet/wallet.key`.                                                                                                                                |
-| `MNEMOSPARK_REMOVE_BACKUP_FILE`   | After a **successful** cloud upload, delete the local backup archive under `~/.openclaw/mnemospark/backup/`. **Default when unset:** remove the file. Set to `0`, `false`, `no`, or `n` to keep it; `1`, `true`, `yes`, or `y` to remove. |
-| `MNEMOSPARK_DISABLED`             | Set to `true` or `1` to disable plugin registration.                                                                                                                                                                                      |
-| `MNEMOSPARK_DISABLE_SQLITE`       | Set to `1` to disable local SQLite (`state.db`); cloud commands that need local state will fail.                                                                                                                                          |
-| `MNEMOSPARK_SQLITE_STRICT`        | Set to `1` so certain SQLite consistency checks (e.g. friendly-name verification after upload) throw instead of warning.                                                                                                                  |
-| `MNEMOSPARK_PROXY_VERBOSE_404`    | When `1`, `true`, or `yes`, the local HTTP proxy includes a `message` field on **404** responses describing supported paths. Default (unset) is a generic JSON body `{ "error": "Not found" }` only (reduces reconnaissance).             |
+| Variable                             | Purpose                                                                                                                                                                                                                                   |
+| ------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `MNEMOSPARK_BACKEND_API_BASE_URL`    | Base URL for the mnemospark backend API (required for the local HTTP proxy to forward storage calls). Example: `https://{api-id}.execute-api.{region}.amazonaws.com/{stage}`.                                                             |
+| `MNEMOSPARK_PROXY_PORT`              | TCP port for the mnemospark HTTP proxy (default `7120`).                                                                                                                                                                                  |
+| `MNEMOSPARK_DOWNLOAD_DIR`            | Directory where the proxy writes downloaded objects (default `~/.openclaw/mnemospark/downloads/`).                                                                                                                                        |
+| `MNEMOSPARK_WALLET_KEY`              | Path to the wallet private key file when not using the default `~/.openclaw/mnemospark/wallet/wallet.key`.                                                                                                                                |
+| `MNEMOSPARK_REMOVE_BACKUP_FILE`      | After a **successful** cloud upload, delete the local backup archive under `~/.openclaw/mnemospark/backup/`. **Default when unset:** remove the file. Set to `0`, `false`, `no`, or `n` to keep it; `1`, `true`, `yes`, or `y` to remove. |
+| `MNEMOSPARK_DISABLED`                | Set to `true` or `1` to disable plugin registration.                                                                                                                                                                                      |
+| `MNEMOSPARK_DISABLE_SQLITE`          | Set to `1` to disable local SQLite (`state.db`); cloud commands that need local state will fail.                                                                                                                                          |
+| `MNEMOSPARK_SQLITE_STRICT`           | Set to `1` so certain SQLite consistency checks (e.g. friendly-name verification after upload) throw instead of warning.                                                                                                                  |
+| `MNEMOSPARK_PROXY_VERBOSE_404`       | When `1`, `true`, or `yes`, the local HTTP proxy includes a `message` field on **404** responses describing supported paths. Default (unset) is a generic JSON body `{ "error": "Not found" }` only (reduces reconnaissance).             |
+| `MNEMOSPARK_CRON_AGENT_ID`           | OpenClaw agent id used for the monthly renewal cron (default `mnemospark-renewal`).                                                                                                                                                       |
+| `MNEMOSPARK_CRON_NODE_BIN`           | Absolute path to `node` for renewal cron exec (default `/usr/bin/node`).                                                                                                                                                                  |
+| `MNEMOSPARK_DISABLE_OPENCLAW_PREREQ` | Set to `1` to skip automatic runbook application (for advanced debugging only).                                                                                                                                                           |
+| `MNEMOSPARK_SKIP_GATEWAY_RESTART`    | Set to `1` to skip best-effort `openclaw gateway restart` after prerequisite writes.                                                                                                                                                      |
 
 ---
 
@@ -160,7 +166,7 @@ Optional unless noted. All names use the `MNEMOSPARK_` prefix.
 1. Install plugin
 2. Fund Base wallet with USDC
 3. Request quote
-4. Execute upload
+4. Execute upload (supports up to 5 GB files - multipart uploads coming soon!)
 5. Confirm/list/download/delete as needed
 
 ---

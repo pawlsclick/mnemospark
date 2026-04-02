@@ -85,7 +85,7 @@
     "eslint": "^9.39.2",
     "husky": "^9.1.7",
     "lint-staged": "^16.2.7",
-    "openclaw": "latest",
+    "openclaw": "^2026.4.1",
     "prettier": "^3.8.1",
     "tsup": "^8.0.0",
     "typescript": "^5.7.0",
