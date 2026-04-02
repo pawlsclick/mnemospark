@@ -52,6 +52,20 @@ openclaw gateway restart
 
 ---
 
+## OpenClaw Install Warning
+
+If OpenClaw shows a warning about **dangerous code patterns** when installing or updating mnemospark—often mentioning shell execution (`child_process`), environment variables, and network access—here is what is going on.
+
+mnemospark is an **OpenClaw plugin** that talks to **your configured mnemospark backend**, runs a **local HTTP proxy** for storage workflows, and can **invoke the `openclaw` CLI** and system tools when needed (for example creating archives with `tar` or running `npm` when you use the update command). Those features use the same low-level Node.js APIs—`child_process` and `fetch`—that security tools also associate with risky software, so the installer may warn you even when the behavior is intentional and benign.
+
+We also read **environment variables** you set on purpose (such as `MNEMOSPARK_BACKEND_API_BASE_URL`, `MNEMOSPARK_PROXY_PORT`, or wallet-related settings) so you can configure the plugin without editing code. Automated scans sometimes flag “environment access + network” as a possible credential-stealing pattern. In mnemospark, that combination exists because the plugin is **configurable and networked by design**, not because we are harvesting your unrelated secrets.
+
+mnemospark is **open source**. If you want extra assurance, review the repository, search for `child_process`, `process.env`, and `fetch`, and run your own tests in a safe environment. The warning helps keep the ecosystem safe; for mnemospark it reflects **capabilities**, not a finding of malicious intent.
+
+Have ChatGPT or your favorite LLM evaluate the mnemospark codebase. Here's a [starter link](https://chatgpt.com/share/69ce6119-52cc-8394-b9f9-c06528d85ea7).
+
+---
+
 ## Slash command reference
 
 **Syntax**
@@ -92,8 +106,6 @@ Use other regions by changing `provider:` and `region:` (defaults: `aws` / `us-e
 ```text
 /mnemospark cloud upload quote-id:<quote-id> wallet-address:<addr> object-id:<id> object-id-hash:<sha256>
 ```
-
-On **OpenClaw 2026.4.x**, the **Mnemospark Renewal Agent Runbook** is applied when you install or update mnemospark (including `npx mnemospark install`, `npx mnemospark update`, `openclaw plugins install`, and when the gateway loads the plugin): it ensures a dedicated agent (`mnemospark-renewal` by default) with `tools.deny: ["subagents"]` and `tools.exec.ask: "off"`, updates `~/.openclaw/exec-approvals.json` so `/usr/bin/node` is allowlisted for that agent, and runs `openclaw config validate`. OpenClaw restarts the gateway when a plugin is installed or updated; mnemospark does not call `openclaw gateway restart` itself. After a **successful upload**, mnemospark registers the monthly renewal cron only (`--no-deliver`, `--agent`, and a `Command: /usr/bin/node …/dist/cli.js cloud payment-settle --renewal …` message). Override paths with `MNEMOSPARK_CRON_AGENT_ID` and `MNEMOSPARK_CRON_NODE_BIN` if your system differs.
 
 ### List objects
 
@@ -170,15 +182,9 @@ Optional unless noted. All names use the `MNEMOSPARK_` prefix.
 
 ---
 
-## OpenClaw Install Warning
+## mnemospark Exec Approvals Runbook
 
-If OpenClaw shows a warning about **dangerous code patterns** when installing or updating mnemospark—often mentioning shell execution (`child_process`), environment variables, and network access—here is what is going on.
-
-mnemospark is an **OpenClaw plugin** that talks to **your configured mnemospark backend**, runs a **local HTTP proxy** for storage workflows, and can **invoke the `openclaw` CLI** and system tools when needed (for example creating archives with `tar` or running `npm` when you use the update command). Those features use the same low-level Node.js APIs—`child_process` and `fetch`—that security tools also associate with risky software, so the installer may warn you even when the behavior is intentional and benign.
-
-We also read **environment variables** you set on purpose (such as `MNEMOSPARK_BACKEND_API_BASE_URL`, `MNEMOSPARK_PROXY_PORT`, or wallet-related settings) so you can configure the plugin without editing code. Automated scans sometimes flag “environment access + network” as a possible credential-stealing pattern. In mnemospark, that combination exists because the plugin is **configurable and networked by design**, not because we are harvesting your unrelated secrets.
-
-mnemospark is **open source**. If you want extra assurance, review the repository, search for `child_process`, `process.env`, and `fetch`, and run your own tests in a safe environment. The warning helps keep the ecosystem safe; for mnemospark it reflects **capabilities**, not a finding of malicious intent.
+On **OpenClaw 2026.4.x**, the **Mnemospark Renewal Agent Runbook** is applied when you install or update mnemospark (including `npx mnemospark install`, `npx mnemospark update`, `openclaw plugins install`, and when the gateway loads the plugin): it ensures a dedicated agent (`mnemospark-renewal` by default) with `tools.deny: ["subagents"]` and `tools.exec.ask: "off"`, updates `~/.openclaw/exec-approvals.json` so `/usr/bin/node` is allowlisted for that agent, and runs `openclaw config validate`. OpenClaw restarts the gateway when a plugin is installed or updated; mnemospark does not call `openclaw gateway restart` itself. After a **successful upload**, mnemospark registers the monthly renewal cron only (`--no-deliver`, `--agent`, and a `Command: /usr/bin/node …/dist/cli.js cloud payment-settle --renewal …` message). Override paths with `MNEMOSPARK_CRON_AGENT_ID` and `MNEMOSPARK_CRON_NODE_BIN` if your system differs.
 
 ---
 
