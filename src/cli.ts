@@ -20,6 +20,7 @@ import { resolveOrGenerateWalletKey, LEGACY_WALLET_FILE, WALLET_FILE } from "./a
 import { BalanceMonitor } from "./balance.js";
 import { VERSION } from "./version.js";
 import { runMnemosparkSlashHandler } from "./mnemospark-handler.js";
+import { ensureOpenClawRenewalPrerequisites } from "./openclaw-renewal-runbook.js";
 import type { PluginCommandContext } from "./types.js";
 import { spawn } from "node:child_process";
 import { dirname, join } from "node:path";
@@ -239,6 +240,14 @@ async function promptOrRunOpenClawPluginInstall(): Promise<void> {
     });
     if (exitCode === 0) {
       await ensureMnemosparkInPluginsAllow();
+      try {
+        await ensureOpenClawRenewalPrerequisites();
+      } catch (err) {
+        console.warn(
+          "[mnemospark] Renewal prerequisites:",
+          err instanceof Error ? err.message : String(err),
+        );
+      }
     } else {
       console.log(
         "\n[mnemospark] OpenClaw plugin install did not succeed. Run manually: openclaw plugins install mnemospark",
@@ -353,6 +362,14 @@ async function runUpdate(): Promise<void> {
     try {
       execSync(`npm install mnemospark@${latest}`, { stdio: "inherit" });
       console.log(`[mnemospark] Updated to ${latest}.`);
+      try {
+        await ensureOpenClawRenewalPrerequisites();
+      } catch (err) {
+        console.warn(
+          "[mnemospark] Renewal prerequisites:",
+          err instanceof Error ? err.message : String(err),
+        );
+      }
     } catch {
       console.log(
         "[mnemospark] npm install failed. You can update manually: npm install mnemospark@latest",

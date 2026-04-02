@@ -151,15 +151,14 @@ export type EnsureOpenClawRenewalPrerequisitesOptions = {
   homeDir?: string;
   /** Skip all OpenClaw mutations (tests). */
   disabled?: boolean;
-  /** Skip gateway restart (tests). */
-  skipGatewayRestart?: boolean;
 };
 
 /**
- * Apply the Mnemospark Renewal Agent Runbook before registering the first renewal cron:
+ * Apply the Mnemospark Renewal Agent Runbook (install/update / plugin load):
  * - `agents.list` entry via `openclaw config set` + `openclaw config validate`
  * - `~/.openclaw/exec-approvals.json` merge for the node binary
- * - best-effort `openclaw gateway restart`
+ *
+ * Gateway restart is not performed here; OpenClaw restarts the gateway when a plugin is installed or updated.
  */
 export async function ensureOpenClawRenewalPrerequisites(
   options: EnsureOpenClawRenewalPrerequisitesOptions = {},
@@ -188,7 +187,7 @@ export async function ensureOpenClawRenewalPrerequisites(
     parsed = JSON.parse(configRaw) as Record<string, unknown>;
   } catch {
     throw new Error(
-      `openclaw.json at ${configPath} is not valid JSON; fix or remove it before upload.`,
+      `openclaw.json at ${configPath} is not valid JSON; fix or remove it before applying renewal prerequisites.`,
     );
   }
 
@@ -222,15 +221,5 @@ export async function ensureOpenClawRenewalPrerequisites(
   );
   if (execChanged) {
     await writeFileAtomic(execPath, `${JSON.stringify(mergedExec, null, 2)}\n`);
-  }
-
-  const skipRestart =
-    options.skipGatewayRestart ?? process.env.MNEMOSPARK_SKIP_GATEWAY_RESTART === "1";
-  if (!skipRestart && (agentChanged || execChanged)) {
-    try {
-      await runOpenClawCli(["gateway", "restart", "--json"], homeDir);
-    } catch {
-      // Service install may be missing; policy still applies on next gateway start.
-    }
   }
 }

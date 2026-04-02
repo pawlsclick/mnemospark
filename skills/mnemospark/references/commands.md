@@ -25,7 +25,7 @@ Slash usage: `/mnemospark cloud <subcommand> …`. CLI/agent: `node dist/cli.js 
 - Local archive path: prefers `backup/<sanitized-friendly-name>` from SQLite (see `backup` + `friendly_names`); falls back to legacy `backup/<object-id>` if that file exists.
 - Optional `--name` must exactly match the friendly name in SQLite for that `object_id` (validation only; not sent to the backend).
 - `--timeout-seconds <n>` only applies when `--async --orchestrator subagent`.
-- **OpenClaw 2026.4.x:** On the first successful upload, mnemospark applies the **Renewal Agent Runbook** automatically (dedicated agent `mnemospark-renewal`, `exec-approvals.json` entry for `/usr/bin/node`, `openclaw config validate`, best-effort gateway restart), then registers the monthly isolated cron with `--no-deliver` and a `Command: /usr/bin/node … dist/cli.js cloud payment-settle --renewal …` payload. See the main README for `MNEMOSPARK_CRON_*` overrides.
+- **OpenClaw 2026.4.x:** The **Renewal Agent Runbook** (agent policy + `/usr/bin/node` in `exec-approvals.json` + `openclaw config validate`) is applied on install/update and when the gateway loads the plugin—not during upload. After a successful upload, mnemospark registers the monthly isolated cron with `--no-deliver` and a `Command: /usr/bin/node … dist/cli.js cloud payment-settle --renewal …` payload. See the main README for `MNEMOSPARK_CRON_*` overrides.
 
 ### Payment settle (scheduled / manual)
 
