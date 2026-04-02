@@ -1661,6 +1661,13 @@ describe("cloud command", () => {
     expect(result.text).toContain("1.5 KB");
     expect(result.text).toContain("Folder: wallet-bucket-001");
     expect(result.text).toContain("☁️ mnemospark cloud");
+    expect(result.text).toContain("What's next?");
+    expect(result.text).toContain(
+      "/mnemospark cloud download wallet-address:0x1234abcd [object-key:<object-key> | name:<friendly-name>]",
+    );
+    expect(result.text).toContain(
+      "/mnemospark cloud delete wallet-address:0x1234abcd [object-key:<object-key> | name:<friendly-name>]",
+    );
   });
 
   it("resolves --name with --wallet_address alias and mixed-case wallet values", async () => {
@@ -1916,6 +1923,13 @@ describe("cloud command", () => {
     expect(result.text).toContain("```");
     expect(result.text).toContain("a.bin");
     expect(result.text).toContain("b.bin");
+    expect(result.text).toContain("What's next?");
+    expect(result.text).toContain(
+      "/mnemospark cloud download wallet-address:0x1234567890123456789012345678901234567890 [object-key:<object-key> | name:<friendly-name>]",
+    );
+    expect(result.text).toContain(
+      "/mnemospark cloud delete wallet-address:0x1234567890123456789012345678901234567890 [object-key:<object-key> | name:<friendly-name>]",
+    );
   });
 
   it("stores null error_message on successful bucket ls operation", async () => {
@@ -1954,6 +1968,8 @@ describe("cloud command", () => {
 
     expect(result.isError).not.toBe(true);
     expect(operationId).toBeTruthy();
+    expect(result.text).toContain("No objects in this bucket.");
+    expect(result.text).not.toContain("What's next?");
     const datastore = await createCloudDatastore(homeDir);
     const operation = await datastore.findOperationById(operationId ?? "");
     expect(operation?.status).toBe("succeeded");

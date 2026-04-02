@@ -241,6 +241,23 @@ function renderHeader(w: ColWidths): string {
   ].join(" ");
 }
 
+/** Markdown fenced block for a single copy-paste command line (matches upload/ls table style). */
+function formatLsCommandCopyBlock(commandLine: string): string {
+  return ["```", commandLine, "```"].join("\n");
+}
+
+function formatLsWhatsNextFooter(walletAddress: string): string {
+  const downloadLine = `/mnemospark cloud download wallet-address:${walletAddress} [object-key:<object-key> | name:<friendly-name>] [latest:true|at:<timestamp>] [async:true] [orchestrator:<inline|subagent>] [timeout-seconds:<n>]`;
+  const deleteLine = `/mnemospark cloud delete wallet-address:${walletAddress} [object-key:<object-key> | name:<friendly-name>] [latest:true|at:<timestamp>]`;
+  return [
+    "What's next? Would you like to download or delete a file:",
+    "",
+    formatLsCommandCopyBlock(downloadLine),
+    "",
+    formatLsCommandCopyBlock(deleteLine),
+  ].join("\n");
+}
+
 export async function buildMnemosparkLsMessage(
   result: StorageLsResponse,
   ctx: {
@@ -263,7 +280,7 @@ export async function buildMnemosparkLsMessage(
     const truncLine = result.is_truncated ? "List truncated; more objects in bucket." : null;
     const prose = [...intro, ...(truncLine ? [truncLine] : [])].join("\n");
     const fence = ["```", [header, ...bodyLines].join("\n"), "```"].join("\n");
-    return `${prose}\n\n${fence}`;
+    return `${prose}\n\n${fence}\n\n${formatLsWhatsNextFooter(ctx.walletAddress)}`;
   }
 
   const friendly = await ctx.datastore.findLatestFriendlyNameForObjectKey(
@@ -299,5 +316,5 @@ export async function buildMnemosparkLsMessage(
   const line = renderRow(prep, w);
   const prose = buildLsProseIntro(result.bucket).join("\n");
   const fence = ["```", [header, line].join("\n"), "```"].join("\n");
-  return `${prose}\n\n${fence}`;
+  return `${prose}\n\n${fence}\n\n${formatLsWhatsNextFooter(ctx.walletAddress)}`;
 }
