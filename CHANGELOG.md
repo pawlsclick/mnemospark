@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.0](https://github.com/pawlsclick/mnemospark/compare/v1.3.0...v1.4.0) (2026-04-02)
+
+
+### Features
+
+* renewal runbook on install; upload registers cron only ([#112](https://github.com/pawlsclick/mnemospark/issues/112)) ([e36600c](https://github.com/pawlsclick/mnemospark/commit/e36600c6a500bed56cb400065a4e5139a53bebce))
+
 ## [1.3.0](https://github.com/pawlsclick/mnemospark/compare/v1.2.2...v1.3.0) (2026-04-02)
 
 
