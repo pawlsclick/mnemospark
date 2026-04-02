@@ -40,6 +40,14 @@ describe("parseCommandArgs", () => {
       expect(r.values.region).toBe("us-east-1");
     });
 
+    it("allows omitting object-id-hash (resolved by mnemospark from local SQLite)", () => {
+      const line = `wallet:${WALLET} object:${OID} gb:${GB} provider:aws region:us-east-1`;
+      const r = parseCommandArgs(line, priceStorageSchema);
+      expect(r.ok).toBe(true);
+      if (!r.ok) return;
+      expect(r.values["object-id-hash"]).toBeUndefined();
+    });
+
     it("accepts mixed --key value and key:value / aliases", () => {
       const line = `--wallet-address ${WALLET} object:${OID} hash:${HASH} gb:${GB} provider:aws region:us-east-1`;
       const r = parseCommandArgs(line, priceStorageSchema);

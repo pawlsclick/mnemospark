@@ -18,7 +18,9 @@ Use this skill for mnemospark cloud backup/storage workflows, async operation tr
 
 3. **Flag style:** Use **`--key value`** for all arguments (and bare flags like `--async`, `--latest`, `--renewal`, `--cancel` where applicable). Do **not** build shell commands with slash prefixes (`/mnemospark …`) or `name:value` forms—those are for **in-chat** slash UX. The chat handler accepts multiple spellings; **shell automation must use `--key value`**.
 
-4. **Discovery:** `node <ABSOLUTE_PATH_TO_EXTENSION>/dist/cli.js cloud help` shows the same help as `/mnemospark cloud help`.
+4. **SQLite:** Do **not** use the host `sqlite3` binary to read `~/.openclaw/mnemospark/state.db`. mnemospark uses Node’s built-in SQLite (`node:sqlite`). For **`price-storage`** after a local **backup**, you may **omit `--object-id-hash`**; the CLI reads sha256 from local state. Otherwise pass `--object-id-hash` from backup output.
+
+5. **Discovery:** `node <ABSOLUTE_PATH_TO_EXTENSION>/dist/cli.js cloud help` shows the same help as `/mnemospark cloud help`.
 
 ## Inputs expected
 
@@ -50,7 +52,7 @@ Let `CLI` = `node <ABSOLUTE_PATH_TO_EXTENSION>/dist/cli.js cloud`. Replace `<ABS
 **Primary subcommands**
 
 - `CLI backup <file|directory> --name <friendly-name> [--async] [--orchestrator <inline|subagent>] [--timeout-seconds <n>]` — **`--name` is required.**
-- `CLI price-storage --wallet-address <addr> --object-id <id> --object-id-hash <hash> --gb <gb> --provider <provider> --region <region>` — **`--provider` and `--region` are required** (defaults often `aws` / `us-east-1`; override as needed).
+- `CLI price-storage --wallet-address <addr> --object-id <id> [--object-id-hash <hash>] --gb <gb> --provider <provider> --region <region>` — **`--provider` and `--region` are required** (defaults often `aws` / `us-east-1`; override as needed). Omit **`--object-id-hash`** when the object row exists in local SQLite after **backup**; pass it when quoting without a prior local backup row.
 - `CLI upload --quote-id <quote-id> --wallet-address <addr> --object-id <id> --object-id-hash <hash> [--name <friendly-name>] [--async] [--orchestrator <inline|subagent>] [--timeout-seconds <n>]`
 - `CLI ls --wallet-address <addr> [--object-key <object-key> | --name <friendly-name>] [--latest|--at <timestamp>]`
 - `CLI download --wallet-address <addr> [--object-key <object-key> | --name <friendly-name>] [--latest|--at <timestamp>] [--async] [--orchestrator <inline|subagent>] [--timeout-seconds <n>]`
