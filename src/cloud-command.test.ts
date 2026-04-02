@@ -4,7 +4,7 @@ import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { privateKeyToAccount } from "viem/accounts";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 
 import {
   buildBackupObject,
@@ -21,6 +21,16 @@ import type { StorageDownloadProxyResponse } from "./cloud-storage.js";
 import { PaymentCache } from "./payment-cache.js";
 
 const sandboxDirs: string[] = [];
+
+beforeAll(() => {
+  process.env.MNEMOSPARK_DISABLE_OPENCLAW_PREREQ = "1";
+  process.env.MNEMOSPARK_SKIP_GATEWAY_RESTART = "1";
+});
+
+afterAll(() => {
+  delete process.env.MNEMOSPARK_DISABLE_OPENCLAW_PREREQ;
+  delete process.env.MNEMOSPARK_SKIP_GATEWAY_RESTART;
+});
 
 afterEach(async () => {
   await Promise.all(
@@ -926,8 +936,8 @@ describe("cloud command", () => {
       const cronEntry = cronHooks.__cronAdapter?.snapshot().at(-1);
       expect(cronEntry).toBeTruthy();
       expect(cronEntry?.jobId).toBe(cronId);
-      expect(cronEntry?.message).toContain("Execute:");
-      expect(cronEntry?.message).toContain("node");
+      expect(cronEntry?.message).toContain("Command:");
+      expect(cronEntry?.message).toContain("/usr/bin/node");
       expect(cronEntry?.message).toContain(
         join(homeDir, ".openclaw/extensions/mnemospark/dist/cli.js"),
       );
@@ -1247,8 +1257,8 @@ describe("cloud command", () => {
     expect(result.isError).not.toBe(true);
     const cronJobs = mockCron.snapshot();
     expect(cronJobs).toHaveLength(1);
-    expect(cronJobs[0].message).toContain("Execute:");
-    expect(cronJobs[0].message).toContain("node");
+    expect(cronJobs[0].message).toContain("Command:");
+    expect(cronJobs[0].message).toContain("/usr/bin/node");
     expect(cronJobs[0].message).toContain(
       join(homeDir, ".openclaw/extensions/mnemospark/dist/cli.js"),
     );

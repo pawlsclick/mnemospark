@@ -76,6 +76,12 @@ import {
   uploadSchema,
 } from "./arg-schemas.js";
 import { CLOUD_ONBOARDING_BLOCK_LINES } from "./cloud-help-onboarding.js";
+import { parseOpenClawCliJson, runOpenClawCli } from "./openclaw-cli.js";
+import {
+  ensureOpenClawRenewalPrerequisites,
+  getRenewalAgentId,
+  getRenewalNodeBinary,
+} from "./openclaw-renewal-runbook.js";
 
 const SUPPORTED_BACKUP_PLATFORMS = new Set<NodeJS.Platform>(["darwin", "linux"]);
 const BACKUP_DIR_SUBPATH = join(".openclaw", "mnemospark", "backup");
@@ -1146,18 +1152,14 @@ type OpenClawCronPayload = {
   message: string;
 };
 
-type OpenClawCronDelivery = {
-  mode: "announce";
-  text: string;
-};
-
 type OpenClawCronJobEntry = {
   jobId: string;
   name: string;
   schedule: OpenClawCronSchedule;
   payload: OpenClawCronPayload;
   sessionTarget: "isolated";
-  delivery: OpenClawCronDelivery;
+  /** OpenClaw 2026.4.x: bind isolated renewal work to the dedicated agent. */
+  agentId: string;
 };
 
 type OpenClawCronJobForLookup = {
@@ -1196,54 +1198,6 @@ function normalizeOpenClawCronJobForLookup(value: unknown): OpenClawCronJobForLo
   };
 }
 
-type OpenClawCliResult = { stdout: string; stderr: string };
-
-async function runOpenClawCli(args: string[], homeDir?: string): Promise<OpenClawCliResult> {
-  return await new Promise<OpenClawCliResult>((resolvePromise, rejectPromise) => {
-    let stdout = "";
-    let stderr = "";
-    const child = spawn("openclaw", args, {
-      stdio: ["ignore", "pipe", "pipe"],
-      env: {
-        ...process.env,
-        HOME: homeDir ?? process.env.HOME,
-      },
-    });
-    child.stdout.on("data", (chunk) => {
-      stdout += chunk.toString();
-    });
-    child.stderr.on("data", (chunk) => {
-      stderr += chunk.toString();
-    });
-    child.on("error", rejectPromise);
-    child.on("close", (code) => {
-      if (code === 0) {
-        resolvePromise({ stdout, stderr });
-        return;
-      }
-      rejectPromise(
-        new Error(
-          stderr.trim() ||
-            stdout.trim() ||
-            `openclaw ${args.join(" ")} exited with code ${code ?? "unknown"}`,
-        ),
-      );
-    });
-  });
-}
-
-function parseOpenClawCliJson<T>(stdout: string, commandLabel: string): T {
-  const trimmed = stdout.trim();
-  if (!trimmed) {
-    throw new Error(`openclaw ${commandLabel} returned empty JSON output`);
-  }
-  try {
-    return JSON.parse(trimmed) as T;
-  } catch {
-    throw new Error(`openclaw ${commandLabel} returned invalid JSON output`);
-  }
-}
-
 function createOpenClawCliCronAdapter(homeDir?: string): OpenClawCronAdapter {
   return {
     add: async (job) => {
@@ -1259,11 +1213,11 @@ function createOpenClawCliCronAdapter(homeDir?: string): OpenClawCronAdapter {
           job.schedule.tz,
           "--session",
           job.sessionTarget,
+          "--agent",
+          job.agentId,
           "--message",
           job.payload.message,
-          "--announce",
-          "--description",
-          job.delivery.text,
+          "--no-deliver",
           "--json",
         ],
         homeDir,
@@ -1348,7 +1302,8 @@ function buildStoragePaymentCronCommand(job: StoragePaymentRenewalJobFields): st
 
 function buildOpenClawRenewalAgentMessage(openClawHome: string, renewalArgs: string): string {
   const cliPath = join(openClawHome, ".openclaw/extensions/mnemospark/dist/cli.js");
-  return `Execute: node ${cliPath} cloud ${renewalArgs}`;
+  const nodeBin = getRenewalNodeBinary();
+  return `Command: ${nodeBin} ${cliPath} cloud ${renewalArgs}`;
 }
 
 function parseStoragePaymentCronCommand(
@@ -1405,10 +1360,7 @@ async function appendStoragePaymentCronJob(
       message: payloadMessage,
     },
     sessionTarget: "isolated",
-    delivery: {
-      mode: "announce",
-      text: "Thank you for using mnemospark cloud storage. Your renewal has been processed.",
-    },
+    agentId: getRenewalAgentId(),
   };
   return adapter.add(openClawJob);
 }
@@ -1427,6 +1379,8 @@ async function createStoragePaymentCronJob(
   openClawHomeDir: string,
   nowDateFn: () => Date = () => new Date(),
 ): Promise<StoragePaymentCronJob> {
+  await ensureOpenClawRenewalPrerequisites({ homeDir: openClawHomeDir });
+
   const renewalFields: StoragePaymentRenewalJobFields = {
     walletAddress: upload.addr,
     objectId: upload.object_id,
