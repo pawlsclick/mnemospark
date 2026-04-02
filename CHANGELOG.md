@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.0](https://github.com/pawlsclick/mnemospark/compare/v1.4.0...v1.5.0) (2026-04-02)
+
+
+### Features
+
+* **cloud:** add download/delete next steps to ls output ([#114](https://github.com/pawlsclick/mnemospark/issues/114)) ([255bc15](https://github.com/pawlsclick/mnemospark/commit/255bc15957aa25eefbd0d76115ddbb931c340040))
+
 ## [1.4.0](https://github.com/pawlsclick/mnemospark/compare/v1.3.0...v1.4.0) (2026-04-02)
 
 
