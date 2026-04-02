@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.2](https://github.com/pawlsclick/mnemospark/compare/v1.2.1...v1.2.2) (2026-04-02)
+
+
+### Bug Fixes
+
+* resolve price-storage object-id-hash from local SQLite without sqlite3 CLI ([#109](https://github.com/pawlsclick/mnemospark/issues/109)) ([ed87f52](https://github.com/pawlsclick/mnemospark/commit/ed87f52d572a50bca5d84ac7d4114c75948662ff))
+
+
+### Documentation
+
+* **readme:** add OpenClaw install warning and key:value core commands ([#104](https://github.com/pawlsclick/mnemospark/issues/104)) ([ea6c906](https://github.com/pawlsclick/mnemospark/commit/ea6c906c2c779fa2281525b06571151e7864c1ac))
+
 ## [1.2.1](https://github.com/pawlsclick/mnemospark/compare/v1.2.0...v1.2.1) (2026-04-01)
 
 
