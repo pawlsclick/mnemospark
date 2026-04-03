@@ -184,18 +184,20 @@ async function buildWalletCreateResponse(): Promise<PluginCommandResult> {
     };
   }
   const statusResponse = await buildWalletStatusResponse();
-  if (!backupPath || statusResponse.isError) {
+  if (statusResponse.isError) {
     return statusResponse;
   }
 
+  const createMessageLines = backupPath
+    ? [
+        "✅ Existing wallet key was backed up before creating the new wallet.",
+        `**Backup File:** \`${backupPath}\``,
+      ]
+    : ["✅ New wallet created."];
+
   return {
     ...statusResponse,
-    text: [
-      "✅ Existing wallet key was backed up before creating the new wallet.",
-      `**Backup File:** \`${backupPath}\``,
-      "",
-      statusResponse.text ?? "",
-    ].join("\n"),
+    text: [...createMessageLines, "", statusResponse.text ?? ""].join("\n"),
   };
 }
 
