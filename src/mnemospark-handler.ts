@@ -1,5 +1,6 @@
 import { BalanceMonitor } from "./balance.js";
 import {
+  WALLET_FILE,
   createMnemosparkWalletWithOptionalBackup,
   resolveWalletKeyForSlashCommandsSync,
 } from "./auth.js";
@@ -135,8 +136,11 @@ async function handleWalletSlash(rest: string): Promise<PluginCommandResult> {
   };
 }
 
-async function buildWalletStatusResponse(): Promise<PluginCommandResult> {
-  const wallet = resolveWalletKeyForSlashCommandsSync();
+async function buildWalletStatusResponse(walletOverride?: {
+  address: string;
+  keyPathLabel: string;
+}): Promise<PluginCommandResult> {
+  const wallet = walletOverride ?? resolveWalletKeyForSlashCommandsSync();
   if (!wallet) {
     return {
       text: NO_WALLET_FOUND_TEXT,
@@ -175,15 +179,19 @@ async function buildWalletStatusResponse(): Promise<PluginCommandResult> {
 
 async function buildWalletCreateResponse(): Promise<PluginCommandResult> {
   let backupPath: string | undefined;
+  let createdAddress = "";
   try {
-    ({ backupPath } = await createMnemosparkWalletWithOptionalBackup());
+    ({ backupPath, address: createdAddress } = await createMnemosparkWalletWithOptionalBackup());
   } catch (err) {
     return {
       text: `Failed to create wallet: ${err instanceof Error ? err.message : String(err)}`,
       isError: true,
     };
   }
-  const statusResponse = await buildWalletStatusResponse();
+  const statusResponse = await buildWalletStatusResponse({
+    address: createdAddress,
+    keyPathLabel: WALLET_FILE,
+  });
   if (statusResponse.isError) {
     return statusResponse;
   }
