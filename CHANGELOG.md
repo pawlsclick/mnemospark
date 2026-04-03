@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.6.0](https://github.com/pawlsclick/mnemospark/compare/v1.5.1...v1.6.0) (2026-04-03)
+
+
+### Features
+
+* **mnemospark:** wallet slash legacy path and wallet create command ([#118](https://github.com/pawlsclick/mnemospark/issues/118)) ([b16c130](https://github.com/pawlsclick/mnemospark/commit/b16c130fca7813c6e4da1a590a13c8f79767e6b4))
+
 ## [1.5.1](https://github.com/pawlsclick/mnemospark/compare/v1.5.0...v1.5.1) (2026-04-03)
 
 
