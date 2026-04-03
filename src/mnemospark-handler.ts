@@ -174,15 +174,29 @@ async function buildWalletStatusResponse(): Promise<PluginCommandResult> {
 }
 
 async function buildWalletCreateResponse(): Promise<PluginCommandResult> {
+  let backupPath: string | undefined;
   try {
-    await createMnemosparkWalletWithOptionalBackup();
+    ({ backupPath } = await createMnemosparkWalletWithOptionalBackup());
   } catch (err) {
     return {
       text: `Failed to create wallet: ${err instanceof Error ? err.message : String(err)}`,
       isError: true,
     };
   }
-  return buildWalletStatusResponse();
+  const statusResponse = await buildWalletStatusResponse();
+  if (!backupPath || statusResponse.isError) {
+    return statusResponse;
+  }
+
+  return {
+    ...statusResponse,
+    text: [
+      "✅ Existing wallet key was backed up before creating the new wallet.",
+      `**Backup File:** \`${backupPath}\``,
+      "",
+      statusResponse.text ?? "",
+    ].join("\n"),
+  };
 }
 
 async function buildWalletHelpResponse(): Promise<PluginCommandResult> {
