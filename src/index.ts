@@ -94,7 +94,7 @@ const plugin: OpenClawPluginDefinition = {
   description: "mnemospark storage and wallet plugin",
   version: VERSION,
 
-  async register(api: OpenClawPluginApi) {
+  register(api: OpenClawPluginApi) {
     const isDisabled =
       process.env.MNEMOSPARK_DISABLED === "true" || process.env.MNEMOSPARK_DISABLED === "1";
     if (isDisabled) {
@@ -106,13 +106,11 @@ const plugin: OpenClawPluginDefinition = {
       return;
     }
 
-    try {
-      await ensureOpenClawRenewalPrerequisites();
-    } catch (err) {
+    void ensureOpenClawRenewalPrerequisites().catch((err) => {
       api.logger.warn(
         `mnemospark renewal prerequisites: ${err instanceof Error ? err.message : String(err)}`,
       );
-    }
+    });
 
     try {
       api.registerCommand({
