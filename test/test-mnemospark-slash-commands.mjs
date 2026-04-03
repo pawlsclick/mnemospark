@@ -98,7 +98,12 @@ const mockApi = {
 };
 
 info("Calling plugin.register(mockApi)");
-await plugin.register(mockApi);
+const registerResult = plugin.register(mockApi);
+if (registerResult != null && typeof registerResult.then === "function") {
+  fail("register() must not return a Promise (OpenClaw ignores async registration)");
+} else {
+  pass("register() is synchronous (non-thenable)");
+}
 
 // ---------------------------------------------------------------------------
 // 3. Verify command registrations
