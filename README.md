@@ -31,23 +31,15 @@ openclaw gateway start
 > Plugin registration is done by `openclaw plugins install mnemospark`.
 > The install also bundles the `skills/mnemospark` skill package so the main agent can delegate mnemospark workflows.
 
-### 2) (Optional) Initialize wallet helpers
-
-```bash
-npx mnemospark install --standard
-```
-
-This creates/reuses local wallet helper files under `~/.openclaw/mnemospark/`.
-
-### 3) Restart gateway after updates
+### 2) Restart gateway after updates
 
 ```bash
 openclaw gateway restart
 ```
 
-### 4) Use slash commands in OpenClaw chat
+### 3) Use slash commands in OpenClaw chat
 
-- `/mnemospark wallet` → wallet status; `/mnemospark wallet help` → commands
+- `/mnemospark wallet` → wallet status; `/mnemospark wallet help` → commands; `/mnemospark wallet create` → new key (backs up existing default `wallet.key` if present)
 - `/mnemospark cloud help` → storage command guide
 
 ---
@@ -85,6 +77,7 @@ Have ChatGPT or your favorite LLM evaluate the mnemospark codebase. Here's a [st
 
 - `/mnemospark wallet` — address, balance, and key file path
 - `/mnemospark wallet help` — command list and funding link
+- `/mnemospark wallet create` — create a new wallet (and backup an existing default key file)
 - `/mnemospark wallet export` — export private key for backup (sensitive)
 
 ---

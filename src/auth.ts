@@ -22,7 +22,8 @@
  * @openclaw-security env-access=MNEMOSPARK_WALLET_KEY purpose=x402-payment-signing
  */
 
-import { writeFile, readFile, mkdir } from "node:fs/promises";
+import { existsSync, readFileSync } from "node:fs";
+import { copyFile, writeFile, readFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
@@ -36,6 +37,48 @@ const WALLET_FILE = join(WALLET_DIR, "wallet.key");
 
 // Export for use by wallet command and CLI
 export { WALLET_FILE, LEGACY_WALLET_FILE };
+
+/** Resolved wallet for slash commands (`/mnemospark wallet`); never auto-generates a key. */
+export type SlashCommandWalletResolution = {
+  walletKey: string;
+  address: string;
+  /** Absolute path to key file, or env label for `MNEMOSPARK_WALLET_KEY`. */
+  keyPathLabel: string;
+};
+
+/**
+ * Same resolution order as `resolveOrGenerateWalletKey` but does not generate a wallet.
+ * Used by `/mnemospark wallet` so blockrun legacy path matches plugin startup.
+ */
+export function resolveWalletKeyForSlashCommandsSync(): SlashCommandWalletResolution | null {
+  const envKey = process.env.MNEMOSPARK_WALLET_KEY?.trim();
+  if (isValidWalletPrivateKey(envKey)) {
+    const account = privateKeyToAccount(envKey);
+    return {
+      walletKey: envKey,
+      address: account.address,
+      keyPathLabel: "MNEMOSPARK_WALLET_KEY (environment variable)",
+    };
+  }
+
+  for (const path of [WALLET_FILE, LEGACY_WALLET_FILE]) {
+    try {
+      if (!existsSync(path)) {
+        continue;
+      }
+      const raw = readFileSync(path, "utf-8").trim();
+      if (!isValidWalletPrivateKey(raw)) {
+        continue;
+      }
+      const account = privateKeyToAccount(raw);
+      return { walletKey: raw, address: account.address, keyPathLabel: path };
+    } catch {
+      // ignore
+    }
+  }
+
+  return null;
+}
 
 /**
  * Try to load a previously auto-generated wallet key from disk.
@@ -90,6 +133,46 @@ async function generateAndSaveWallet(): Promise<{ key: string; address: string }
   }
 
   return { key, address: account.address };
+}
+
+/**
+ * Pick `wallet.key.bak-YYYY-MM-DD` next to `wallet.key`, or append `-2`, `-3`, … if that name exists.
+ */
+export function pickUniqueWalletKeyBackupPath(walletKeyPath: string): string {
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  const base = `${walletKeyPath}.bak-${y}-${m}-${day}`;
+  if (!existsSync(base)) {
+    return base;
+  }
+  let n = 2;
+  for (;;) {
+    const candidate = `${base}-${n}`;
+    if (!existsSync(candidate)) {
+      return candidate;
+    }
+    n += 1;
+  }
+}
+
+/**
+ * If a key exists at the mnemospark default path, copy it to a dated `.bak-*` file, then generate and save a new wallet.
+ * Does not touch the legacy blockrun path.
+ */
+export async function createMnemosparkWalletWithOptionalBackup(): Promise<{
+  backupPath?: string;
+  key: string;
+  address: string;
+}> {
+  let backupPath: string | undefined;
+  if (existsSync(WALLET_FILE)) {
+    backupPath = pickUniqueWalletKeyBackupPath(WALLET_FILE);
+    await copyFile(WALLET_FILE, backupPath);
+  }
+  const { key, address } = await generateAndSaveWallet();
+  return { backupPath, key, address };
 }
 
 /**

@@ -10,6 +10,7 @@ describe("mnemospark root help", () => {
       "`/mnemospark cloud backup <file|directory> name:<friendly-name> async:true`",
     );
     expect(MNEMOSPARK_ROOT_HELP_TEXT).toContain("**Let your agent run mnemospark for you:**");
+    expect(MNEMOSPARK_ROOT_HELP_TEXT).toContain("• `/mnemospark wallet create`");
     expect(MNEMOSPARK_ROOT_HELP_TEXT).toContain("~/.openclaw/extensions/mnemospark/");
     expect(MNEMOSPARK_ROOT_HELP_TEXT).toContain(
       "`~/.openclaw/extensions/mnemospark/skills/mnemospark/SKILL.md`",

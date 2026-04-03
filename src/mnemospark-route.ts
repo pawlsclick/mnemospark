@@ -77,6 +77,7 @@ export function routeMnemosparkArgs(args: string | undefined): MnemosparkRoute {
       "• `/mnemospark cloud help` — cloud commands",
       "• `/mnemospark wallet` — wallet status",
       "• `/mnemospark wallet help` — wallet commands",
+      "• `/mnemospark wallet create` — new wallet (backs up existing default key)",
     ].join("\n"),
   };
 }
