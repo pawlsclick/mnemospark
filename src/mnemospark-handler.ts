@@ -1,7 +1,8 @@
-import { existsSync, readFileSync } from "node:fs";
-import { privateKeyToAccount } from "viem/accounts";
 import { BalanceMonitor } from "./balance.js";
-import { WALLET_FILE } from "./auth.js";
+import {
+  createMnemosparkWalletWithOptionalBackup,
+  resolveWalletKeyForSlashCommandsSync,
+} from "./auth.js";
 import { CLOUD_ONBOARDING_BLOCK_LINES } from "./cloud-help-onboarding.js";
 import { createCloudCommand } from "./cloud-command.js";
 import { firstTokenAndRest, parseVerboseToken, routeMnemosparkArgs } from "./mnemospark-route.js";
@@ -18,6 +19,7 @@ export const MNEMOSPARK_ROOT_HELP_TEXT = [
   "**Wallet status and funding link:**",
   "• `/mnemospark wallet`",
   "• `/mnemospark wallet help`",
+  "• `/mnemospark wallet create`",
   "",
   "**Let your agent run mnemospark for you:**",
   "",
@@ -33,6 +35,7 @@ export const MNEMOSPARK_WALLET_HELP_TEXT = (address: string) =>
     "**Commands:**",
     "• `/mnemospark wallet` — Show address, balance, and key file path",
     "• `/mnemospark wallet help` — This message",
+    "• `/mnemospark wallet create` — Create a new wallet (and backup an existing wallet)",
     "• `/mnemospark wallet export` — Export private key for backup (sensitive)",
     "",
     `**Fund with USDC on Base:** https://basescan.org/address/${address}`,
@@ -50,27 +53,7 @@ function getDefaultCloudCommandHandler(): PluginCommandHandler {
 }
 
 const NO_WALLET_FOUND_TEXT =
-  "No mnemospark wallet found. Run `openclaw plugins install mnemospark`.";
-
-function resolveWalletFileSync(): { walletKey: string; address: string } | null {
-  try {
-    if (!existsSync(WALLET_FILE)) {
-      return null;
-    }
-    const walletKey = readFileSync(WALLET_FILE, "utf-8").trim();
-    if (!walletKey.startsWith("0x") || walletKey.length !== 66) {
-      return null;
-    }
-    const account = privateKeyToAccount(walletKey as `0x${string}`);
-    const address = account.address.replace(/\s/g, "");
-    if (!address) {
-      return null;
-    }
-    return { walletKey, address };
-  } catch {
-    return null;
-  }
-}
+  "No mnemospark wallet found. Run `openclaw plugins install mnemospark` or set MNEMOSPARK_WALLET_KEY.";
 
 /**
  * OpenClaw + CLI: same handler for `/mnemospark` (args = everything after the command name).
@@ -132,6 +115,16 @@ async function handleWalletSlash(rest: string): Promise<PluginCommandResult> {
     return buildWalletExportResponse();
   }
 
+  if (parsed.name === "create") {
+    if (afterFirst.trim()) {
+      return {
+        text: "Unexpected extra arguments after `create`. Use `/mnemospark wallet create` alone.",
+        isError: true,
+      };
+    }
+    return buildWalletCreateResponse();
+  }
+
   if (parsed.name === "status") {
     return buildWalletStatusResponse();
   }
@@ -143,14 +136,14 @@ async function handleWalletSlash(rest: string): Promise<PluginCommandResult> {
 }
 
 async function buildWalletStatusResponse(): Promise<PluginCommandResult> {
-  const wallet = resolveWalletFileSync();
+  const wallet = resolveWalletKeyForSlashCommandsSync();
   if (!wallet) {
     return {
       text: NO_WALLET_FOUND_TEXT,
       isError: true,
     };
   }
-  const { address } = wallet;
+  const { address, keyPathLabel } = wallet;
 
   let balanceText = "Balance: (checking...)";
   try {
@@ -167,11 +160,12 @@ async function buildWalletStatusResponse(): Promise<PluginCommandResult> {
       "",
       `**Address:** \`${address}\``,
       `**${balanceText}**`,
-      `**Key File:** \`${WALLET_FILE}\``,
+      `**Key File:** \`${keyPathLabel}\``,
       "",
       "**Commands:**",
       "• `/mnemospark wallet` — Show this status",
       "• `/mnemospark wallet help` — Commands and funding link",
+      "• `/mnemospark wallet create` — Create a new wallet (and backup an existing wallet)",
       "• `/mnemospark wallet export` — Export private key for backup",
       "",
       `**Fund with USDC on Base:** https://basescan.org/address/${address}`,
@@ -179,8 +173,20 @@ async function buildWalletStatusResponse(): Promise<PluginCommandResult> {
   };
 }
 
+async function buildWalletCreateResponse(): Promise<PluginCommandResult> {
+  try {
+    await createMnemosparkWalletWithOptionalBackup();
+  } catch (err) {
+    return {
+      text: `Failed to create wallet: ${err instanceof Error ? err.message : String(err)}`,
+      isError: true,
+    };
+  }
+  return buildWalletStatusResponse();
+}
+
 async function buildWalletHelpResponse(): Promise<PluginCommandResult> {
-  const wallet = resolveWalletFileSync();
+  const wallet = resolveWalletKeyForSlashCommandsSync();
   if (!wallet) {
     return {
       text: NO_WALLET_FOUND_TEXT,
@@ -193,7 +199,7 @@ async function buildWalletHelpResponse(): Promise<PluginCommandResult> {
 }
 
 async function buildWalletExportResponse(): Promise<PluginCommandResult> {
-  const wallet = resolveWalletFileSync();
+  const wallet = resolveWalletKeyForSlashCommandsSync();
   if (!wallet) {
     return {
       text: NO_WALLET_FOUND_TEXT,
