@@ -31,6 +31,8 @@ openclaw gateway start
 > Plugin registration is done by `openclaw plugins install mnemospark`.
 > The install also bundles the `skills/mnemospark` skill package so the main agent can delegate mnemospark workflows.
 
+By default the plugin uses the production mnemospark API at **https://api.mnemospark.ai**. Set **`MNEMOSPARK_BACKEND_API_BASE_URL`** only when you need a different endpoint (for example staging or a private API URL).
+
 ### 2) Restart gateway after updates
 
 ```bash
@@ -148,20 +150,20 @@ The blockchain transaction is the payment record.
 
 Optional unless noted. All names use the `MNEMOSPARK_` prefix.
 
-| Variable                             | Purpose                                                                                                                                                                                                                                   |
-| ------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `MNEMOSPARK_BACKEND_API_BASE_URL`    | Base URL for the mnemospark backend API (required for the local HTTP proxy to forward storage calls). Example: `https://{api-id}.execute-api.{region}.amazonaws.com/{stage}`.                                                             |
-| `MNEMOSPARK_PROXY_PORT`              | TCP port for the mnemospark HTTP proxy (default `7120`).                                                                                                                                                                                  |
-| `MNEMOSPARK_DOWNLOAD_DIR`            | Directory where the proxy writes downloaded objects (default `~/.openclaw/mnemospark/downloads/`).                                                                                                                                        |
-| `MNEMOSPARK_WALLET_KEY`              | Path to the wallet private key file when not using the default `~/.openclaw/mnemospark/wallet/wallet.key`.                                                                                                                                |
-| `MNEMOSPARK_REMOVE_BACKUP_FILE`      | After a **successful** cloud upload, delete the local backup archive under `~/.openclaw/mnemospark/backup/`. **Default when unset:** remove the file. Set to `0`, `false`, `no`, or `n` to keep it; `1`, `true`, `yes`, or `y` to remove. |
-| `MNEMOSPARK_DISABLED`                | Set to `true` or `1` to disable plugin registration.                                                                                                                                                                                      |
-| `MNEMOSPARK_DISABLE_SQLITE`          | Set to `1` to disable local SQLite (`state.db`); cloud commands that need local state will fail.                                                                                                                                          |
-| `MNEMOSPARK_SQLITE_STRICT`           | Set to `1` so certain SQLite consistency checks (e.g. friendly-name verification after upload) throw instead of warning.                                                                                                                  |
-| `MNEMOSPARK_PROXY_VERBOSE_404`       | When `1`, `true`, or `yes`, the local HTTP proxy includes a `message` field on **404** responses describing supported paths. Default (unset) is a generic JSON body `{ "error": "Not found" }` only (reduces reconnaissance).             |
-| `MNEMOSPARK_CRON_AGENT_ID`           | OpenClaw agent id used for the monthly renewal cron (default `mnemospark-renewal`).                                                                                                                                                       |
-| `MNEMOSPARK_CRON_NODE_BIN`           | Absolute path to `node` for renewal cron exec (default `/usr/bin/node`).                                                                                                                                                                  |
-| `MNEMOSPARK_DISABLE_OPENCLAW_PREREQ` | Set to `1` to skip automatic runbook application everywhere it runs (plugin load, CLI install/update; for advanced debugging only).                                                                                                       |
+| Variable                             | Purpose                                                                                                                                                                                                                                          |
+| ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `MNEMOSPARK_BACKEND_API_BASE_URL`    | Base URL for the mnemospark backend API (required for the local HTTP proxy to forward storage calls). **Default:** `https://api.mnemospark.ai` (production). Set this variable only to override—for example staging or a custom API Gateway URL. |
+| `MNEMOSPARK_PROXY_PORT`              | TCP port for the mnemospark HTTP proxy (default `7120`).                                                                                                                                                                                         |
+| `MNEMOSPARK_DOWNLOAD_DIR`            | Directory where the proxy writes downloaded objects (default `~/.openclaw/mnemospark/downloads/`).                                                                                                                                               |
+| `MNEMOSPARK_WALLET_KEY`              | Path to the wallet private key file when not using the default `~/.openclaw/mnemospark/wallet/wallet.key`.                                                                                                                                       |
+| `MNEMOSPARK_REMOVE_BACKUP_FILE`      | After a **successful** cloud upload, delete the local backup archive under `~/.openclaw/mnemospark/backup/`. **Default when unset:** remove the file. Set to `0`, `false`, `no`, or `n` to keep it; `1`, `true`, `yes`, or `y` to remove.        |
+| `MNEMOSPARK_DISABLED`                | Set to `true` or `1` to disable plugin registration.                                                                                                                                                                                             |
+| `MNEMOSPARK_DISABLE_SQLITE`          | Set to `1` to disable local SQLite (`state.db`); cloud commands that need local state will fail.                                                                                                                                                 |
+| `MNEMOSPARK_SQLITE_STRICT`           | Set to `1` so certain SQLite consistency checks (e.g. friendly-name verification after upload) throw instead of warning.                                                                                                                         |
+| `MNEMOSPARK_PROXY_VERBOSE_404`       | When `1`, `true`, or `yes`, the local HTTP proxy includes a `message` field on **404** responses describing supported paths. Default (unset) is a generic JSON body `{ "error": "Not found" }` only (reduces reconnaissance).                    |
+| `MNEMOSPARK_CRON_AGENT_ID`           | OpenClaw agent id used for the monthly renewal cron (default `mnemospark-renewal`).                                                                                                                                                              |
+| `MNEMOSPARK_CRON_NODE_BIN`           | Absolute path to `node` for renewal cron exec (default `/usr/bin/node`).                                                                                                                                                                         |
+| `MNEMOSPARK_DISABLE_OPENCLAW_PREREQ` | Set to `1` to skip automatic runbook application everywhere it runs (plugin load, CLI install/update; for advanced debugging only).                                                                                                              |
 
 ---
 

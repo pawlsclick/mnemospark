@@ -3,7 +3,24 @@
 All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
-and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Release
+versions use **calendar-style** identifiers `YYYY.M.D` (and optional correction/prerelease segments),
+aligned with [OpenClaw release naming](https://docs.openclaw.ai/reference/RELEASING), while
+remaining valid semver.
+
+## [2026.4.5](https://github.com/pawlsclick/mnemospark/compare/v1.6.0...v2026.4.5) (2026-04-05)
+
+### Features
+
+* Default mnemospark backend API base URL to `https://api.mnemospark.ai`; `MNEMOSPARK_BACKEND_API_BASE_URL` overrides when set.
+
+### Build System
+
+* Exclude `scripts/` from the published npm package; run plugin version sync in `prepublishOnly`; add root `prepare.mjs` for dev-only sync + husky.
+
+### Continuous Integration
+
+* Release Please: `versioning: always-bump-patch` for cal-style `YYYY.M.D` patch increments.
 
 ## [1.6.0](https://github.com/pawlsclick/mnemospark/compare/v1.5.1...v1.6.0) (2026-04-03)
 

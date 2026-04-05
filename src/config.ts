@@ -7,6 +7,9 @@
 
 const DEFAULT_PORT = 7120;
 
+/** Production API; override with `MNEMOSPARK_BACKEND_API_BASE_URL` when needed. */
+const DEFAULT_BACKEND_API_BASE_URL = "https://api.mnemospark.ai";
+
 /**
  * Proxy port configuration - resolved once at module load.
  * Reads MNEMOSPARK_PROXY_PORT env var or defaults to 7120 (mnemospark does not conflict with BlockRun proxy on 8402).
@@ -24,10 +27,10 @@ export const PROXY_PORT = (() => {
 
 /**
  * Mnemospark backend API base URL for proxy → backend calls.
- * Example: https://{api-id}.execute-api.{region}.amazonaws.com/{stage}
+ * Defaults to production; set `MNEMOSPARK_BACKEND_API_BASE_URL` to override (e.g. staging or a private API Gateway URL).
  */
 export const MNEMOSPARK_BACKEND_API_BASE_URL = (
-  process.env.MNEMOSPARK_BACKEND_API_BASE_URL ?? ""
+  process.env.MNEMOSPARK_BACKEND_API_BASE_URL ?? DEFAULT_BACKEND_API_BASE_URL
 ).trim();
 
 /**
