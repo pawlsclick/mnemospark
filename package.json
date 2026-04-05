@@ -1,6 +1,6 @@
 {
   "name": "mnemospark",
-  "version": "1.6.0",
+  "version": "2026.4.5",
   "description": "mnemospark is an OpenClaw plugin that gives agentic systems instant, secure access to cloud storage, compute, and proprietary datasets paid via x402 with USDC on Base. Wallet and go.",
   "type": "module",
   "main": "dist/index.js",
@@ -22,12 +22,12 @@
   "files": [
     "dist",
     "skills",
-    "scripts",
+    "prepare.mjs",
     "openclaw.plugin.json"
   ],
   "scripts": {
     "build": "tsup",
-    "prepublishOnly": "npm run build",
+    "prepublishOnly": "npm run build && node scripts/sync-plugin-version.js",
     "dev": "tsup --watch",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -38,7 +38,7 @@
     "commitlint": "commitlint --edit",
     "test:install-check": "node test/install-check.mjs",
     "test:slash-commands": "node test/test-mnemospark-slash-commands.mjs",
-    "prepare": "node scripts/sync-plugin-version.js && husky"
+    "prepare": "node prepare.mjs"
   },
   "keywords": [
     "openclaw",

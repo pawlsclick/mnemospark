@@ -1,7 +1,7 @@
 # Release train (with Release Please + PAT):
-# 1) Merge the autorelease PR → Release Please creates GitHub Release + tag vX.Y.Z.
+# 1) Merge the autorelease PR → Release Please creates GitHub Release + tag vYYYY.M.D (optional: vYYYY.M.D-N correction, vYYYY.M.D-beta.N prerelease).
 # 2) This workflow runs once on release: published (PAT allows the event to trigger workflows).
-# Do not also trigger on push: tags — tag push + release:published both fired for v0.3.0, so npm publish ran twice.
+# Do not also trigger on push: tags — tag push + release:published both fired in the past, so npm publish ran twice.
 name: Publish
 
 on:
@@ -10,7 +10,7 @@ on:
   workflow_dispatch:
     inputs:
       publish_ref:
-        description: "Git ref to publish (tag like v0.2.0, or release branch)"
+        description: "Git ref to publish (tag like v2026.4.5, or release branch)"
         required: false
         default: ""
 
@@ -55,7 +55,7 @@ jobs:
         if: github.event_name == 'workflow_dispatch'
         run: |
           if [ -z "${{ inputs.publish_ref }}" ]; then
-            echo "workflow_dispatch requires input 'publish_ref' (use a release tag like v0.2.0)."
+            echo "workflow_dispatch requires input 'publish_ref' (use a release tag like v2026.4.5)."
             exit 1
           fi
 
