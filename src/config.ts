@@ -30,7 +30,7 @@ export const PROXY_PORT = (() => {
  * Defaults to production; set `MNEMOSPARK_BACKEND_API_BASE_URL` to override (e.g. staging or a private API Gateway URL).
  */
 export const MNEMOSPARK_BACKEND_API_BASE_URL = (
-  process.env.MNEMOSPARK_BACKEND_API_BASE_URL ?? DEFAULT_BACKEND_API_BASE_URL
+  process.env.MNEMOSPARK_BACKEND_API_BASE_URL || DEFAULT_BACKEND_API_BASE_URL
 ).trim();
 
 /**
