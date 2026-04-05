@@ -8,6 +8,63 @@ versions use **calendar-style** identifiers `YYYY.M.D` (and optional correction/
 aligned with [OpenClaw release naming](https://docs.openclaw.ai/reference/RELEASING), while
 remaining valid semver.
 
+## [2026.4.6](https://github.com/pawlsclick/mnemospark/compare/v2026.4.5...v2026.4.6) (2026-04-05)
+
+
+### ⚠ BREAKING CHANGES
+
+* Version scheme moves to YYYY.M.D. Backend calls default to https://api.mnemospark.ai unless MNEMOSPARK_BACKEND_API_BASE_URL is set.
+* **openclaw:** /mnemospark_cloud and /mnemospark_wallet are removed. Use /mnemospark cloud … and /mnemospark wallet … instead.
+
+### Features
+
+* automate OpenClaw renewal runbook and align cron CLI ([#110](https://github.com/pawlsclick/mnemospark/issues/110)) ([7cf07f4](https://github.com/pawlsclick/mnemospark/commit/7cf07f466b292f599066be905dfb0690f97f563a))
+* calver 2026.4.5, default API, slim npm package ([#121](https://github.com/pawlsclick/mnemospark/issues/121)) ([bf08a62](https://github.com/pawlsclick/mnemospark/commit/bf08a62e7538bc8043752d6d4f87c15777f1f856))
+* **ci:** enforce Conventional Commits (commitlint + PR title check) ([#63](https://github.com/pawlsclick/mnemospark/issues/63)) ([07a9217](https://github.com/pawlsclick/mnemospark/commit/07a9217eb22de975eb0e3c1e161eef364ffce0ac))
+* **cli:** fence next-step mnemospark commands in success text ([#97](https://github.com/pawlsclick/mnemospark/issues/97)) ([89edd72](https://github.com/pawlsclick/mnemospark/commit/89edd72994f1daa606fdb16245596ba494c4ec34))
+* **cli:** onboarding copy for root and cloud help ([#99](https://github.com/pawlsclick/mnemospark/issues/99)) ([4962f62](https://github.com/pawlsclick/mnemospark/commit/4962f6289f67946281476b0a38ded66915fa2abc))
+* **cloud:** add download/delete next steps to ls output ([#114](https://github.com/pawlsclick/mnemospark/issues/114)) ([255bc15](https://github.com/pawlsclick/mnemospark/commit/255bc15957aa25eefbd0d76115ddbb931c340040))
+* **cloud:** add payment-settle command and slash-command cron line ([#66](https://github.com/pawlsclick/mnemospark/issues/66)) ([8db715e](https://github.com/pawlsclick/mnemospark/commit/8db715eb52bd22656a038fdc974ae8e2a7de5a38))
+* **cloud:** friendly-name backup paths and env docs ([#75](https://github.com/pawlsclick/mnemospark/issues/75)) ([599b300](https://github.com/pawlsclick/mnemospark/commit/599b300acc226f48331352e519980d0cbca45448))
+* **cloud:** improve storage copy and backup wallet handling ([#73](https://github.com/pawlsclick/mnemospark/issues/73)) ([55ce638](https://github.com/pawlsclick/mnemospark/commit/55ce6386e60a646eddaca2effa4e0c5f880ad298))
+* **cloud:** renewal payment-settle and monthly cron without quote_id ([#76](https://github.com/pawlsclick/mnemospark/issues/76)) ([3936599](https://github.com/pawlsclick/mnemospark/commit/3936599fd462e9be90e038bc887e807d2e9560ff))
+* **cloud:** wallet-only ls with S3 list and ls -l-style output ([#67](https://github.com/pawlsclick/mnemospark/issues/67)) ([19821e0](https://github.com/pawlsclick/mnemospark/commit/19821e066b59a8faf8d01d8f2636b69e8ffe0b2e))
+* **ls:** simplify table columns and refresh ls header prose ([#69](https://github.com/pawlsclick/mnemospark/issues/69)) ([3e244e7](https://github.com/pawlsclick/mnemospark/commit/3e244e7309e3b3b19b99186a1f80c460b8aabf5a))
+* **mnemospark_cloud:** surface async command output in op-status ([#83](https://github.com/pawlsclick/mnemospark/issues/83)) ([ff63266](https://github.com/pawlsclick/mnemospark/commit/ff6326668c2c818d384523681717747d07baae53))
+* **mnemospark:** wallet slash legacy path and wallet create command ([#118](https://github.com/pawlsclick/mnemospark/issues/118)) ([b16c130](https://github.com/pawlsclick/mnemospark/commit/b16c130fca7813c6e4da1a590a13c8f79767e6b4))
+* **openclaw:** unified /mnemospark slash command and schema-driven args ([#89](https://github.com/pawlsclick/mnemospark/issues/89)) ([107f8b4](https://github.com/pawlsclick/mnemospark/commit/107f8b4c9148ccd32b12c9e2520ec6130a05ea90))
+* renewal runbook on install; upload registers cron only ([#112](https://github.com/pawlsclick/mnemospark/issues/112)) ([e36600c](https://github.com/pawlsclick/mnemospark/commit/e36600c6a500bed56cb400065a4e5139a53bebce))
+* unify local state on SQLite and events.jsonl ([#71](https://github.com/pawlsclick/mnemospark/issues/71)) ([edcb712](https://github.com/pawlsclick/mnemospark/commit/edcb7128a0fc3948d3dacb96cb2c5b186ca07ea6))
+
+
+### Bug Fixes
+
+* **ci:** allow Release Please PAT so Publish runs on new releases ([#61](https://github.com/pawlsclick/mnemospark/issues/61)) ([57148d0](https://github.com/pawlsclick/mnemospark/commit/57148d0cc895f9e3376380db201797efd0461b22))
+* **ci:** anchor release-please; Cursor rule for branch policy ([#58](https://github.com/pawlsclick/mnemospark/issues/58)) ([f016367](https://github.com/pawlsclick/mnemospark/commit/f01636742ff5d189e07f4b4ba34e8491741e7a56))
+* **ci:** surface docs and test in Release Please notes ([#94](https://github.com/pawlsclick/mnemospark/issues/94)) ([563eefa](https://github.com/pawlsclick/mnemospark/commit/563eefa7386425bc734cdac7f7a9be1391f14fd8))
+* **ci:** trigger Publish only on release published, not tag push ([#64](https://github.com/pawlsclick/mnemospark/issues/64)) ([3721019](https://github.com/pawlsclick/mnemospark/commit/37210192e7365587820113f9adf8ae0b417807e4))
+* **cloud:** align storage renewal cron jobs with OpenClaw model ([#77](https://github.com/pawlsclick/mnemospark/issues/77)) ([b2c590d](https://github.com/pawlsclick/mnemospark/commit/b2c590db092d0101ee28b30c71ad9ac3886287b5))
+* **cloud:** correct OpenClaw cron agent message for monthly renewal ([#79](https://github.com/pawlsclick/mnemospark/issues/79)) ([1ffa228](https://github.com/pawlsclick/mnemospark/commit/1ffa2281cfdb02a7e2ef92ae60517bf668f20e0d))
+* **cloud:** shorten OpenClaw renewal cron agent message prefix ([#81](https://github.com/pawlsclick/mnemospark/issues/81)) ([eeb2ace](https://github.com/pawlsclick/mnemospark/commit/eeb2ace6c6c6d534e984942b639813fa1fa2f53d))
+* **mnemospark_cloud:** support upload archives over 2 GiB ([#87](https://github.com/pawlsclick/mnemospark/issues/87)) ([718ae6e](https://github.com/pawlsclick/mnemospark/commit/718ae6ebc72f0d6628daec437e0b0707ea4e2637))
+* **mnemospark_cloud:** upload archives over 2 GiB ([#85](https://github.com/pawlsclick/mnemospark/issues/85)) ([ac4177d](https://github.com/pawlsclick/mnemospark/commit/ac4177d974132662a95201c4a4070ec9b6f4195d))
+* **openclaw:** register plugin synchronously for command inspection ([#116](https://github.com/pawlsclick/mnemospark/issues/116)) ([66f1605](https://github.com/pawlsclick/mnemospark/commit/66f1605413200fcc4a6f86bdac1fde9678db57ec))
+* **proxy:** harden local HTTP proxy for pen-test findings ([#102](https://github.com/pawlsclick/mnemospark/issues/102)) ([6a073c2](https://github.com/pawlsclick/mnemospark/commit/6a073c256a8f78d22ea61bbca75ba47a5055ff5d))
+* resolve price-storage object-id-hash from local SQLite without sqlite3 CLI ([#109](https://github.com/pawlsclick/mnemospark/issues/109)) ([ed87f52](https://github.com/pawlsclick/mnemospark/commit/ed87f52d572a50bca5d84ac7d4114c75948662ff))
+
+
+### Documentation
+
+* and test: commits do not bump semver by default. ([38ff847](https://github.com/pawlsclick/mnemospark/commit/38ff8473a940f03c881cf6875c273d66b6f877a1))
+* **cli:** prefer key:value in cloud help and success copy ([#92](https://github.com/pawlsclick/mnemospark/issues/92)) ([5679916](https://github.com/pawlsclick/mnemospark/commit/567991660b690e1b0d208d23a6e4c7fea8bcdd94))
+* **readme:** add OpenClaw install warning and key:value core commands ([#104](https://github.com/pawlsclick/mnemospark/issues/104)) ([ea6c906](https://github.com/pawlsclick/mnemospark/commit/ea6c906c2c779fa2281525b06571151e7864c1ac))
+* **skill:** agent CLI execution, e2e plan, and root help skill path ([#101](https://github.com/pawlsclick/mnemospark/issues/101)) ([fcd57f0](https://github.com/pawlsclick/mnemospark/commit/fcd57f04e49a946845980fbadef289cba904a13e))
+
+
+### Tests
+
+* **cli:** add parser edge cases and parseCloudArgs integration tests ([#91](https://github.com/pawlsclick/mnemospark/issues/91)) ([ddac640](https://github.com/pawlsclick/mnemospark/commit/ddac6402828929cd26b7162c2ffc0b84cc33ff42))
+
 ## [2026.4.5](https://github.com/pawlsclick/mnemospark/compare/v1.6.0...v2026.4.5) (2026-04-05)
 
 ### Features
