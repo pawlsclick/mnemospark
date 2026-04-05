@@ -21,5 +21,12 @@ if (existsSync(syncScript)) {
 }
 
 if (existsSync(join(root, ".git"))) {
-  spawnSync("npx", ["husky"], { cwd: root, stdio: "inherit", shell: true });
+  const huskyResult = spawnSync("npx", ["husky"], {
+    cwd: root,
+    stdio: "inherit",
+    shell: true,
+  });
+  if (huskyResult.status !== 0) {
+    process.exit(huskyResult.status ?? 1);
+  }
 }
