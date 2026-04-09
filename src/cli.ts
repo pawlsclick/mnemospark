@@ -244,7 +244,7 @@ async function promptOrRunOpenClawPluginInstall(): Promise<void> {
         await ensureOpenClawRenewalPrerequisites();
       } catch (err) {
         console.warn(
-          "[mnemospark] Renewal prerequisites:",
+          "[mnemospark] OpenClaw prerequisites:",
           err instanceof Error ? err.message : String(err),
         );
       }
@@ -366,7 +366,7 @@ async function runUpdate(): Promise<void> {
         await ensureOpenClawRenewalPrerequisites();
       } catch (err) {
         console.warn(
-          "[mnemospark] Renewal prerequisites:",
+          "[mnemospark] OpenClaw prerequisites:",
           err instanceof Error ? err.message : String(err),
         );
       }

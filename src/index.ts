@@ -108,7 +108,7 @@ const plugin: OpenClawPluginDefinition = {
 
     void ensureOpenClawRenewalPrerequisites().catch((err) => {
       api.logger.warn(
-        `mnemospark renewal prerequisites: ${err instanceof Error ? err.message : String(err)}`,
+        `mnemospark OpenClaw prerequisites: ${err instanceof Error ? err.message : String(err)}`,
       );
     });
 
@@ -200,9 +200,12 @@ export { fetchWithRetry, isRetryable, DEFAULT_RETRY_CONFIG } from "./retry.js";
 export type { RetryConfig } from "./retry.js";
 export { createCloudCommand } from "./cloud-command.js";
 export {
+  DEFAULT_MNEMOSPARK_AGENT_ID,
   ensureOpenClawRenewalPrerequisites,
+  getMnemosparkAgentId,
   getRenewalAgentId,
   getRenewalNodeBinary,
+  runbookDedicatedAgentEntry,
 } from "./openclaw-renewal-runbook.js";
 export type { EnsureOpenClawRenewalPrerequisitesOptions } from "./openclaw-renewal-runbook.js";
 export { runMnemosparkSlashHandler } from "./mnemospark-handler.js";

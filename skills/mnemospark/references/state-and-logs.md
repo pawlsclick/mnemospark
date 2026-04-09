@@ -1,35 +1,42 @@
-# mnemospark State and Logs Reference
-
-## Environment variables (local behavior)
-
-- `MNEMOSPARK_REMOVE_BACKUP_FILE` — after a successful **upload**, remove the local backup archive under `~/.openclaw/mnemospark/backup/`. Default when unset: **remove**. Set to `0`, `false`, `no`, or `n` to keep the file; `1`, `true`, `yes`, or `y` to remove.
-- `MNEMOSPARK_DOWNLOAD_DIR` — override the directory used for download output (default `~/.openclaw/mnemospark/downloads/`).
+# Mnemospark State and Logs
 
 ## Primary state
 
-- SQLite: `~/.openclaw/mnemospark/state.db`
+SQLite:
 
-### Key tables
+- `~/.openclaw/mnemospark/state.db`
 
-- `objects`
-- `payments`
-- `cron_jobs`
-- `operations`
-- `friendly_names`
+Important rule:
 
-## Observability
+- Do not use host `sqlite3` to inspect Mnemospark SQLite.
+- Mnemospark uses Node’s built-in SQLite.
 
-- **Unified JSONL:** `~/.openclaw/mnemospark/events.jsonl` — command handler, async operation lifecycle, client-side `payment.settle` observations, and HTTP proxy traffic share this file. Use the `source` field to distinguish writers:
-  - `command` — CLI / plugin paths (including `payment.settle` lines that mirror proxy semantics for local troubleshooting)
-  - `proxy` — mnemospark HTTP proxy
+## Unified event log
 
-## Scheduler bookkeeping
+JSONL:
 
-- `~/.openclaw/mnemospark/crontab.txt` — JSON lines describing scheduled storage payment jobs (for your system scheduler)
+- `~/.openclaw/mnemospark/events.jsonl`
 
-## Correlation fields
+This is the main source of truth when command output is clipped or local lookup behaves inconsistently.
 
-Cross-stream troubleshooting should correlate by:
+## Useful event types
+
+Look for:
+
+- `backup.completed`
+- `price-storage.completed`
+- `upload.completed`
+- `download.completed`
+- `delete.completed`
+- `ls.completed`
+- `payment-settle.started`
+- `payment-settle.completed`
+- proxy `storage.call` lines
+- proxy `payment.settle` lines
+
+## Critical fields
+
+Correlate on:
 
 - `operation_id`
 - `trace_id`
@@ -37,61 +44,42 @@ Cross-stream troubleshooting should correlate by:
 - `object_id`
 - `object_key`
 
-## Operation lifecycle status values
+## Backup metadata recovery
 
-`operations.status` values used by async orchestration:
+If command output is truncated, inspect `backup.completed` and recover:
 
-- `started`
-- `running`
-- `succeeded`
-- `failed`
-- `cancelled`
-- `timed_out`
+- `object_id`
+- `details.object_id_hash`
+- `details.object_size_gb`
+- `details.friendly_name`
+- `details.archive_path`
 
-Common async terminal error codes:
+This is especially important before:
 
-- `ASYNC_FAILED`
-- `ASYNC_EXCEPTION`
-- `ASYNC_CANCELLED`
-- `ASYNC_TIMEOUT`
-- `ASYNC_DISPATCH_FAILED`
+- `price-storage`
+- `upload`
 
-## Orchestration metadata in operations
+## Validation signals
 
-For async runs, `operations` may include:
+Healthy runs typically show:
 
-- `trace_id`
-- `orchestrator` (`inline` or `subagent`)
-- `subagent_session_id`
-- `timeout_seconds`
-- `cancel_requested_at`
+- command-side `*.completed` events with terminal success
+- proxy/backend `storage.call` or `payment.settle` events with `details.status: 200`
 
-## Payment settle JSONL events
+## Other useful paths
 
-When `/mnemospark_cloud payment-settle` runs:
+Backup directory:
 
-- `payment-settle.started` / `payment-settle.completed` → `events.jsonl` with `source: "command"` (structured command events)
-- `payment.settle` with `status` `start` / `result` → same `events.jsonl` file, `source: "command"`, with `details.client_observation: true` where applicable
+- `~/.openclaw/mnemospark/backup/`
 
-The HTTP proxy emits `payment.settle` into the same file with `source: "proxy"`.
+Download directory default:
 
-## Operation lifecycle JSONL events
+- `~/.openclaw/mnemospark/downloads/`
 
-Emitted to `events.jsonl` with `source: "command"`:
+Scheduler bookkeeping:
 
-- `operation.dispatched`
-- `operation.progress`
-- `operation.cancel.requested`
-- `operation.cancelled`
-- `operation.timed_out`
-- `operation.completed`
+- `~/.openclaw/mnemospark/crontab.txt`
 
-## Quick correlation command
+## One-step operation correlation
 
-```bash
-./skills/mnemospark/scripts/debug-operation.sh <operation-id>
-```
-
-## Migration note
-
-Older releases wrote `object.log`, `manifest.jsonl`, and `proxy-events.jsonl`. Current mnemospark no longer reads those paths; use SQLite plus `events.jsonl` only.
+Run `./skills/mnemospark/scripts/debug-operation.sh <operation-id>` (or omit ID to use latest).
