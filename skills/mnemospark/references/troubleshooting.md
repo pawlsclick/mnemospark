@@ -1,50 +1,101 @@
-# mnemospark Troubleshooting Reference
+# Mnemospark Troubleshooting
 
-## Async workflow checks
+## 1) Main-agent exec denied: allowlist miss
 
-1. Start with `--async` for backup/upload/download.
-2. If explicit session lifecycle control is needed, add `--orchestrator subagent`.
-3. If timeout control is needed, add `--timeout-seconds <n>` with `--orchestrator subagent`.
-4. Capture `operation-id`.
-5. Query: `/mnemospark_cloud op-status --operation-id <id>`.
-6. If needed, request cancel: `/mnemospark_cloud op-status --operation-id <id> --cancel`.
-7. Correlate with `~/.openclaw/mnemospark/events.jsonl` (filter on `operation_id`, `trace_id`, and `source`).
+Symptom:
 
-## One-step correlation debugger
+- `exec denied: allowlist miss`
 
-From repo root:
+Meaning:
 
-```bash
-./skills/mnemospark/scripts/debug-operation.sh <operation-id>
-```
+- the command is still running under `main` instead of the dedicated `mnemospark` agent
+- or the dedicated agent exists but is not being used via routing
 
-If you omit `<operation-id>`, the latest operation from SQLite is used:
+Fix:
 
-```bash
-./skills/mnemospark/scripts/debug-operation.sh
-```
+1. route through OpenClaw using `openclaw agent --agent mnemospark --message "..."`
+2. verify `/usr/bin/node` is allowlisted for agent `mnemospark`
+3. verify `exec.ask: "off"` is set for that agent
 
-## Frequent failure patterns
+## 2) `price-storage` cannot resolve object-id-hash
 
-- `Operation not found: <id>`
-  - Check SQLite health or `MNEMOSPARK_DISABLE_SQLITE`.
-- `Cannot build storage object: invalid async flags`
-  - `--orchestrator`/`--timeout-seconds` require `--async`.
-  - `--timeout-seconds` requires `--orchestrator subagent`.
-- `error-code: ASYNC_DISPATCH_FAILED`
-  - Subagent dispatch could not start; inspect recent operation events.
-- `error-code: ASYNC_TIMEOUT`
-  - Operation exceeded timeout; increase `--timeout-seconds` or retry without timeout.
-- `error-code: ASYNC_CANCELLED`
-  - Operation was cancelled through `op-status --cancel`.
-- Name ambiguity for `--name`
-  - Re-run with `--latest` or `--at <timestamp>`.
-- `quote-id not found in local SQLite`
-  - Run `/mnemospark_cloud price-storage` again; quotes expire on the server after about one hour.
-- Repeated settle/upload mismatch
-  - In `events.jsonl`, inspect `payment.settle` and `storage.call` lines (`source: "proxy"`) and command-side events for matching `operation_id`.
+Symptom:
 
-## Operator fallback
+- `Cannot resolve object-id-hash: no object found in local SQLite for this object-id`
 
-- Use direct `--object-key` if friendly-name resolution is uncertain.
-- Re-run sync (without `--async`) for one-shot detailed failure output.
+Meaning:
+
+- backup may have succeeded, but Mnemospark cannot resolve the hash from SQLite for the next step
+
+Fix:
+
+1. inspect `~/.openclaw/mnemospark/events.jsonl`
+2. find the matching `backup.completed`
+3. recover `details.object_id_hash`
+4. re-run `price-storage` with explicit `--object-id-hash`
+
+## 3) `op-status` or `price-storage` output is clipped
+
+Symptom:
+
+- the tool result shows partial output or clips the human-readable fields you want
+
+Fix:
+
+1. treat `events.jsonl` as source of truth
+2. read `backup.completed` / `price-storage.completed` / `upload.completed`
+3. continue with recovered metadata instead of trusting clipped stdout
+
+## 4) Quote succeeded but price amount is not visible
+
+Symptom:
+
+- quote exists, but the visible result does not include the clean human-readable cost amount
+
+Fix:
+
+- report that pricing succeeded and preserve the quote metadata
+- for demos, consider skipping price narration if the output layer is noisy
+- continue with upload if the goal is workflow proof, not price display
+
+## 5) Async flows make demos messy
+
+Symptom:
+
+- `op-status` adds extra clipping, polling, and noisy output
+
+Fix:
+
+- prefer non-async commands for demos
+- use async only when runtime length justifies it
+- if async is required, rely on `events.jsonl` for exact metadata
+
+## 6) Name ambiguity
+
+Symptom:
+
+- `--name` selector is ambiguous
+
+Fix:
+
+- add `--latest` or `--at <timestamp>`
+- or use `--object-key` directly
+
+## 7) Renewal vs general-agent confusion
+
+Symptom:
+
+- renewal automation works, but interactive/manual Mnemospark usage does not
+
+Meaning:
+
+- `mnemospark-renewal` is not the same as a general `mnemospark` agent
+
+Fix:
+
+- keep `mnemospark-renewal` for cron renewals
+- create and route through a separate `mnemospark` agent for interactive work
+
+## One-step operation correlation
+
+Run `./skills/mnemospark/scripts/debug-operation.sh <operation-id>` (or omit ID to use latest).

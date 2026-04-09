@@ -8,7 +8,10 @@ import { resolveOpenClawConfigFilePath, runOpenClawCli } from "./openclaw-cli.js
 /** Default OpenClaw agent id for storage renewal cron (override with MNEMOSPARK_CRON_AGENT_ID). */
 export const DEFAULT_RENEWAL_AGENT_ID = "mnemospark-renewal";
 
-/** Stable allowlist entry id for /usr/bin/node (Mnemospark Renewal Agent Runbook). */
+/** Default OpenClaw agent id for interactive Mnemospark CLI (override with MNEMOSPARK_AGENT_ID). */
+export const DEFAULT_MNEMOSPARK_AGENT_ID = "mnemospark";
+
+/** Stable allowlist entry id for node binary (Mnemospark dedicated-agent runbooks). */
 export const RENEWAL_NODE_ALLOWLIST_ID = "node-usr-bin-node";
 
 export function getRenewalAgentId(): string {
@@ -16,7 +19,12 @@ export function getRenewalAgentId(): string {
   return fromEnv && fromEnv.length > 0 ? fromEnv : DEFAULT_RENEWAL_AGENT_ID;
 }
 
-/** Absolute path to node for renewal exec (override with MNEMOSPARK_CRON_NODE_BIN). */
+export function getMnemosparkAgentId(): string {
+  const fromEnv = process.env.MNEMOSPARK_AGENT_ID?.trim();
+  return fromEnv && fromEnv.length > 0 ? fromEnv : DEFAULT_MNEMOSPARK_AGENT_ID;
+}
+
+/** Absolute path to node for dedicated-agent exec (override with MNEMOSPARK_CRON_NODE_BIN). */
 export function getRenewalNodeBinary(): string {
   const fromEnv = process.env.MNEMOSPARK_CRON_NODE_BIN?.trim();
   return fromEnv && fromEnv.length > 0 ? fromEnv : "/usr/bin/node";
@@ -31,11 +39,9 @@ export type RenewalAgentListEntry = {
 };
 
 /**
- * Exact agent policy from the Mnemospark Renewal Agent Runbook (OpenClaw 2026.4.x).
+ * Shared policy for Mnemospark dedicated OpenClaw agents (renewal cron + interactive plugin CLI).
  */
-export function runbookRenewalAgentEntry(
-  agentId: string = getRenewalAgentId(),
-): RenewalAgentListEntry {
+export function runbookDedicatedAgentEntry(agentId: string): RenewalAgentListEntry {
   return {
     id: agentId,
     tools: {
@@ -43,6 +49,15 @@ export function runbookRenewalAgentEntry(
       exec: { ask: "off" },
     },
   };
+}
+
+/**
+ * Exact agent policy from the Mnemospark Renewal Agent Runbook (OpenClaw 2026.4.x).
+ */
+export function runbookRenewalAgentEntry(
+  agentId: string = getRenewalAgentId(),
+): RenewalAgentListEntry {
+  return runbookDedicatedAgentEntry(agentId);
 }
 
 type ExecApprovalsDoc = {
@@ -63,7 +78,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
-function renewalAgentEntrySatisfied(existing: unknown, desired: RenewalAgentListEntry): boolean {
+function dedicatedAgentEntrySatisfied(existing: unknown, desired: RenewalAgentListEntry): boolean {
   if (!isRecord(existing)) {
     return false;
   }
@@ -86,7 +101,7 @@ function renewalAgentEntrySatisfied(existing: unknown, desired: RenewalAgentList
 }
 
 /**
- * Ensure `agents.list` contains the renewal agent with runbook tools policy.
+ * Ensure `agents.list` contains one dedicated agent with runbook tools policy.
  * Returns whether the list was modified.
  */
 export function mergeRenewalAgentIntoAgentsList(
@@ -98,7 +113,7 @@ export function mergeRenewalAgentIntoAgentsList(
   if (idx === -1) {
     return { list: [...arr, desired] as RenewalAgentListEntry[], changed: true };
   }
-  if (renewalAgentEntrySatisfied(arr[idx], desired)) {
+  if (dedicatedAgentEntrySatisfied(arr[idx], desired)) {
     return { list: arr as RenewalAgentListEntry[], changed: false };
   }
   const next = [...arr];
@@ -154,9 +169,9 @@ export type EnsureOpenClawRenewalPrerequisitesOptions = {
 };
 
 /**
- * Apply the Mnemospark Renewal Agent Runbook (install/update / plugin load):
- * - `agents.list` entry via `openclaw config set` + `openclaw config validate`
- * - `~/.openclaw/exec-approvals.json` merge for the node binary
+ * Apply Mnemospark dedicated-agent OpenClaw runbooks (install/update / plugin load):
+ * - `agents.list` entries for **mnemospark-renewal** (cron) and **mnemospark** (interactive CLI), via `openclaw config set` + `openclaw config validate`
+ * - `~/.openclaw/exec-approvals.json` merge for the node binary on both agents
  *
  * Gateway restart is not performed here; OpenClaw restarts the gateway when a plugin is installed or updated.
  */
@@ -168,8 +183,10 @@ export async function ensureOpenClawRenewalPrerequisites(
   }
 
   const homeDir = options.homeDir ?? homedir();
-  const agentId = getRenewalAgentId();
-  const desired = runbookRenewalAgentEntry(agentId);
+  const renewalId = getRenewalAgentId();
+  const pluginAgentId = getMnemosparkAgentId();
+  const desiredRenewal = runbookRenewalAgentEntry(renewalId);
+  const desiredPlugin = runbookDedicatedAgentEntry(pluginAgentId);
   const nodeBinary = getRenewalNodeBinary();
 
   const configPath = await resolveOpenClawConfigFilePath(homeDir);
@@ -187,15 +204,19 @@ export async function ensureOpenClawRenewalPrerequisites(
     parsed = JSON.parse(configRaw) as Record<string, unknown>;
   } catch {
     throw new Error(
-      `openclaw.json at ${configPath} is not valid JSON; fix or remove it before applying renewal prerequisites.`,
+      `openclaw.json at ${configPath} is not valid JSON; fix or remove it before applying mnemospark OpenClaw prerequisites.`,
     );
   }
 
   const agents = (isRecord(parsed.agents) ? parsed.agents : {}) as Record<string, unknown>;
-  const { list: mergedList, changed: agentChanged } = mergeRenewalAgentIntoAgentsList(
-    agents.list,
-    desired,
-  );
+  let mergedList: RenewalAgentListEntry[] = [];
+  let agentChanged = false;
+  const afterRenewal = mergeRenewalAgentIntoAgentsList(agents.list, desiredRenewal);
+  mergedList = afterRenewal.list;
+  agentChanged = afterRenewal.changed;
+  const afterPlugin = mergeRenewalAgentIntoAgentsList(mergedList, desiredPlugin);
+  mergedList = afterPlugin.list;
+  agentChanged = agentChanged || afterPlugin.changed;
 
   if (agentChanged) {
     const listJson = JSON.stringify(mergedList);
@@ -214,11 +235,13 @@ export async function ensureOpenClawRenewalPrerequisites(
     }
   }
 
-  const { doc: mergedExec, changed: execChanged } = mergeExecApprovalsAllowlist(
-    execDoc,
-    agentId,
-    nodeBinary,
-  );
+  let mergedExec = execDoc;
+  let execChanged = false;
+  for (const id of [renewalId, pluginAgentId]) {
+    const { doc, changed } = mergeExecApprovalsAllowlist(mergedExec, id, nodeBinary);
+    mergedExec = doc;
+    execChanged = execChanged || changed;
+  }
   if (execChanged) {
     await writeFileAtomic(execPath, `${JSON.stringify(mergedExec, null, 2)}\n`);
   }

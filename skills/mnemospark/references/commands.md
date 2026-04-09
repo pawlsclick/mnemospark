@@ -1,92 +1,144 @@
-# mnemospark Commands Reference
+# Mnemospark Commands Reference
 
-## `/mnemospark cloud …`
+Use explicit Node plus the absolute Mnemospark CLI path.
 
-Slash usage: `/mnemospark cloud <subcommand> …`. CLI/agent: `node dist/cli.js cloud <subcommand> …`.
+Host path on this machine:
 
-### Backup
+```bash
+/usr/bin/node /home/ubuntu/.openclaw/extensions/mnemospark/dist/cli.js
+```
 
-`backup <file|directory> --name <friendly-name> [--async] [--orchestrator <inline|subagent>] [--timeout-seconds <n>]`
+## Wallet entrypoint
 
-- Purpose: create a local tar+gzip backup artifact under `~/.openclaw/mnemospark/backup/` and index metadata in SQLite.
-- **Required:** `--name <friendly-name>` (stored in `state.db`; on-disk filename is a sanitized single path segment derived from it).
-- Duplicate `--name` values that resolve to the same on-disk basename will fail with an “already exists” error.
-- `--timeout-seconds <n>` only applies when `--async --orchestrator subagent`.
+Wallet lives outside the `cloud` subcommand family.
 
-### Price storage quote
+```bash
+/usr/bin/node /home/ubuntu/.openclaw/extensions/mnemospark/dist/cli.js wallet
+```
 
-`price-storage --wallet-address <addr> --object-id <id> [--object-id-hash <hash>] --gb <gb> --provider aws --region us-east-1` (defaults; override `--provider` / `--region` for other regions). Omit `--object-id-hash` when the object already exists in local SQLite after **backup** (mnemospark resolves sha256 via `node:sqlite`; do not shell out to the `sqlite3` binary).
+Use it for:
 
-### Upload
+- wallet status
+- funding info
+- checking the configured wallet before cloud operations
 
-`upload --quote-id <quote-id> --wallet-address <addr> --object-id <id> --object-id-hash <hash> [--name <friendly-name>] [--async] [--orchestrator <inline|subagent>] [--timeout-seconds <n>]`
+## Cloud entrypoint
 
-- Purpose: upload encrypted object for a valid quote.
-- Local archive path: prefers `backup/<sanitized-friendly-name>` from SQLite (see `backup` + `friendly_names`); falls back to legacy `backup/<object-id>` if that file exists.
-- Optional `--name` must exactly match the friendly name in SQLite for that `object_id` (validation only; not sent to the backend).
-- `--timeout-seconds <n>` only applies when `--async --orchestrator subagent`.
-- **OpenClaw 2026.4.x:** The **Renewal Agent Runbook** (agent policy + `/usr/bin/node` in `exec-approvals.json` + `openclaw config validate`) is applied on install/update and when the gateway loads the plugin—not during upload. After a successful upload, mnemospark registers the monthly isolated cron with `--no-deliver` and a `Command: /usr/bin/node … dist/cli.js cloud payment-settle --renewal …` payload. See the main README for `MNEMOSPARK_CRON_*` overrides.
+```bash
+/usr/bin/node /home/ubuntu/.openclaw/extensions/mnemospark/dist/cli.js cloud <subcommand> [arguments...]
+```
 
-### Payment settle (scheduled / manual)
+Rules:
 
-**Quote path (upload prep):** `payment-settle --quote-id <quote-id> --wallet-address <addr> [--object-id <id>] [--object-key <key>] [--storage-price <n>]`
+- Use `--key value` flags.
+- Do not use slash-command syntax in shell commands.
+- Do not rely on cwd.
+- Prefer explicit `/usr/bin/node` in runbooks and stable automation.
 
-**Monthly renewal (no new quote):** `payment-settle --renewal --object-key <key> --wallet-address <addr> [--object-id <id>] [--storage-price <n>]`
+## Backup
 
-- Purpose: call the same proxy + x402 payment settlement path as upload. Cron lines after upload use **renewal** mode so the backend reads price from active inventory (no `QUOTES_TABLE` row).
-- Required: `--wallet-address` and either `--quote-id` or (`--renewal` and `--object-key`). The configured private key must match the address.
+```bash
+/usr/bin/node /home/ubuntu/.openclaw/extensions/mnemospark/dist/cli.js cloud backup <file|directory> --name <friendly-name>
+```
 
-### List
+Optional async form:
 
-`ls --wallet-address <addr> [--object-key <object-key> | --name <friendly-name>] [--latest|--at <timestamp>]`
+```bash
+/usr/bin/node /home/ubuntu/.openclaw/extensions/mnemospark/dist/cli.js cloud backup <file|directory> --name <friendly-name> --async [--orchestrator <inline|subagent>] [--timeout-seconds <n>]
+```
 
-### Download
+Notes:
 
-`download --wallet-address <addr> [--object-key <object-key> | --name <friendly-name>] [--latest|--at <timestamp>] [--async] [--orchestrator <inline|subagent>] [--timeout-seconds <n>]`
+- `--name` is required.
+- `backup` does not require `--wallet-address`.
 
-- Purpose: download object content to local filesystem (default directory `~/.openclaw/mnemospark/downloads/`, overridable with `MNEMOSPARK_DOWNLOAD_DIR`).
-- When SQLite has a friendly name for the object, the saved file basename is the sanitized friendly name; otherwise the layout follows `object_key` as before. The backend still receives only `object_id` / `object_key` semantics via the API.
-- `--timeout-seconds <n>` only applies when `--async --orchestrator subagent`.
+## Price storage
 
-### Delete
+```bash
+/usr/bin/node /home/ubuntu/.openclaw/extensions/mnemospark/dist/cli.js cloud price-storage --wallet-address <wallet> --object-id <object-id> [--object-id-hash <hash>] --gb <size-gb> --provider <provider> --region <region>
+```
 
-`delete --wallet-address <addr> [--object-key <object-key> | --name <friendly-name>] [--latest|--at <timestamp>]`
+Notes:
 
-### Operation status
+- `--provider` and `--region` are required.
+- After a local backup, `--object-id-hash` may be omitted if SQLite lookup works.
+- If lookup fails, pass `--object-id-hash` explicitly from `backup.completed`.
 
-`op-status --operation-id <id> [--cancel]`
+## Upload
 
-- `--cancel` requests cancellation for subagent-orchestrated operations.
-- Cancellation is idempotent and safe to call repeatedly.
+```bash
+/usr/bin/node /home/ubuntu/.openclaw/extensions/mnemospark/dist/cli.js cloud upload --quote-id <quote-id> --wallet-address <wallet> --object-id <object-id> --object-id-hash <hash> [--name <friendly-name>]
+```
 
-## Async orchestration flags (long-running commands only)
+Optional async form:
 
-Applies to `backup`, `upload`, `download`.
+```bash
+/usr/bin/node /home/ubuntu/.openclaw/extensions/mnemospark/dist/cli.js cloud upload --quote-id <quote-id> --wallet-address <wallet> --object-id <object-id> --object-id-hash <hash> [--name <friendly-name>] --async [--orchestrator <inline|subagent>] [--timeout-seconds <n>]
+```
 
-- `--async`
-  - Run in background and return immediately with `operation-id`.
-- `--orchestrator <inline|subagent>`
-  - Select async execution mode.
-  - Current default when omitted with `--async`: `inline`.
-  - Use `subagent` for explicit subagent session metadata and cancel controls.
-- `--timeout-seconds <n>`
-  - Positive integer timeout in seconds.
-  - Valid only with `--async --orchestrator subagent`.
+Notes:
 
-## Async examples
+- `--name` must match local SQLite metadata exactly when supplied.
 
-- `/mnemospark cloud upload ... --async --orchestrator subagent`
-- `/mnemospark cloud download ... --async --orchestrator subagent --timeout-seconds 900`
-- `/mnemospark cloud op-status --operation-id <id>`
-- `/mnemospark cloud op-status --operation-id <id> --cancel`
+## List
+
+```bash
+/usr/bin/node /home/ubuntu/.openclaw/extensions/mnemospark/dist/cli.js cloud ls --wallet-address <wallet> [--object-key <object-key> | --name <friendly-name>] [--latest|--at <timestamp>]
+```
+
+## Download
+
+```bash
+/usr/bin/node /home/ubuntu/.openclaw/extensions/mnemospark/dist/cli.js cloud download --wallet-address <wallet> [--object-key <object-key> | --name <friendly-name>] [--latest|--at <timestamp>]
+```
+
+Optional async form:
+
+```bash
+/usr/bin/node /home/ubuntu/.openclaw/extensions/mnemospark/dist/cli.js cloud download --wallet-address <wallet> [--object-key <object-key> | --name <friendly-name>] [--latest|--at <timestamp>] --async [--orchestrator <inline|subagent>] [--timeout-seconds <n>]
+```
+
+## Delete
+
+```bash
+/usr/bin/node /home/ubuntu/.openclaw/extensions/mnemospark/dist/cli.js cloud delete --wallet-address <wallet> [--object-key <object-key> | --name <friendly-name>] [--latest|--at <timestamp>]
+```
+
+## Payment settle
+
+Quote path:
+
+```bash
+/usr/bin/node /home/ubuntu/.openclaw/extensions/mnemospark/dist/cli.js cloud payment-settle --quote-id <quote-id> --wallet-address <wallet> [--object-id <object-id>] [--object-key <object-key>] [--storage-price <price>]
+```
+
+Renewal path:
+
+```bash
+/usr/bin/node /home/ubuntu/.openclaw/extensions/mnemospark/dist/cli.js cloud payment-settle --renewal --object-key <object-key> --wallet-address <wallet> [--object-id <object-id>] [--storage-price <price>]
+```
+
+## Operation status
+
+```bash
+/usr/bin/node /home/ubuntu/.openclaw/extensions/mnemospark/dist/cli.js cloud op-status --operation-id <id>
+```
+
+Cancel:
+
+```bash
+/usr/bin/node /home/ubuntu/.openclaw/extensions/mnemospark/dist/cli.js cloud op-status --operation-id <id> --cancel
+```
 
 ## Name selector rules
 
 - `--object-key` and `--name` are mutually exclusive.
-- If `--name` maps to multiple active objects, require `--latest` or `--at`.
+- If `--name` is ambiguous, use `--latest` or `--at <timestamp>`.
 
-## One-step debug helper
+## Slash equivalents (OpenClaw chat only)
 
-```bash
-./skills/mnemospark/scripts/debug-operation.sh <operation-id>
-```
+The same arguments work after `/mnemospark cloud …` (e.g. `/mnemospark cloud backup …`). Do not paste slash forms into a shell.
+
+## OpenClaw dedicated agents
+
+On **OpenClaw 2026.4.x**, the mnemospark plugin applies dedicated-agent runbooks on install/update and gateway load: **`mnemospark-renewal`** (monthly cron) and **`mnemospark`** (interactive wallet/cloud CLI), each with `tools.deny: ["subagents"]`, `tools.exec.ask: "off"`, and `/usr/bin/node` in `exec-approvals.json` (path overridable via `MNEMOSPARK_CRON_NODE_BIN`). After upload, renewal cron uses agent `mnemospark-renewal` by default (`MNEMOSPARK_CRON_AGENT_ID`). Interactive work should route through **`mnemospark`** (`MNEMOSPARK_AGENT_ID` if overridden). See `references/openclaw-routing.md`.

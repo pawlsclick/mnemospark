@@ -8,6 +8,12 @@ versions use **calendar-style** identifiers `YYYY.M.D` (and optional correction/
 aligned with [OpenClaw release naming](https://docs.openclaw.ai/reference/RELEASING), while
 remaining valid semver.
 
+## Unreleased
+
+### Features
+
+* **openclaw:** apply dedicated `mnemospark` agent runbook alongside renewal; document `MNEMOSPARK_AGENT_ID`; refresh bundled skill with routing reference and examples runbook.
+
 ## [2026.4.6](https://github.com/pawlsclick/mnemospark/compare/v2026.4.5...v2026.4.6) (2026-04-05)
 
 

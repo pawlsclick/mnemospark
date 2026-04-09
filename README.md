@@ -162,7 +162,8 @@ Optional unless noted. All names use the `MNEMOSPARK_` prefix.
 | `MNEMOSPARK_SQLITE_STRICT`           | Set to `1` so certain SQLite consistency checks (e.g. friendly-name verification after upload) throw instead of warning.                                                                                                                         |
 | `MNEMOSPARK_PROXY_VERBOSE_404`       | When `1`, `true`, or `yes`, the local HTTP proxy includes a `message` field on **404** responses describing supported paths. Default (unset) is a generic JSON body `{ "error": "Not found" }` only (reduces reconnaissance).                    |
 | `MNEMOSPARK_CRON_AGENT_ID`           | OpenClaw agent id used for the monthly renewal cron (default `mnemospark-renewal`).                                                                                                                                                              |
-| `MNEMOSPARK_CRON_NODE_BIN`           | Absolute path to `node` for renewal cron exec (default `/usr/bin/node`).                                                                                                                                                                         |
+| `MNEMOSPARK_AGENT_ID`                | OpenClaw agent id for interactive wallet/cloud CLI via the dedicated-agent runbook (default `mnemospark`). Distinct from `MNEMOSPARK_CRON_AGENT_ID`.                                                                                             |
+| `MNEMOSPARK_CRON_NODE_BIN`           | Absolute path to `node` for dedicated-agent exec allowlists and renewal cron payloads (default `/usr/bin/node`).                                                                                                                                 |
 | `MNEMOSPARK_DISABLE_OPENCLAW_PREREQ` | Set to `1` to skip automatic runbook application everywhere it runs (plugin load, CLI install/update; for advanced debugging only).                                                                                                              |
 
 ---
@@ -179,7 +180,12 @@ Optional unless noted. All names use the `MNEMOSPARK_` prefix.
 
 ## mnemospark Exec Approvals Runbook
 
-On **OpenClaw 2026.4.x**, the **Mnemospark Renewal Agent Runbook** is applied when you install or update mnemospark (including `npx mnemospark install`, `npx mnemospark update`, `openclaw plugins install`, and when the gateway loads the plugin): it ensures a dedicated agent (`mnemospark-renewal` by default) with `tools.deny: ["subagents"]` and `tools.exec.ask: "off"`, updates `~/.openclaw/exec-approvals.json` so `/usr/bin/node` is allowlisted for that agent, and runs `openclaw config validate`. OpenClaw restarts the gateway when a plugin is installed or updated; mnemospark does not call `openclaw gateway restart` itself. After a **successful upload**, mnemospark registers the monthly renewal cron only (`--no-deliver`, `--agent`, and a `Command: /usr/bin/node …/dist/cli.js cloud payment-settle --renewal …` message). Override paths with `MNEMOSPARK_CRON_AGENT_ID` and `MNEMOSPARK_CRON_NODE_BIN` if your system differs.
+On **OpenClaw 2026.4.x**, mnemospark applies **two** dedicated-agent runbooks when you install or update (including `npx mnemospark install`, `npx mnemospark update`, `openclaw plugins install`, and when the gateway loads the plugin):
+
+1. **`mnemospark-renewal`** (default; override `MNEMOSPARK_CRON_AGENT_ID`) — monthly storage renewal cron: `tools.deny: ["subagents"]`, `tools.exec.ask: "off"`, and `/usr/bin/node` allowlisted for that agent in `~/.openclaw/exec-approvals.json`.
+2. **`mnemospark`** (default; override `MNEMOSPARK_AGENT_ID`) — interactive wallet and cloud CLI work: same tool policy and its **own** `/usr/bin/node` allowlist entry under that agent id.
+
+The plugin merges both into `agents.list` via `openclaw config set` + `openclaw config validate`. OpenClaw restarts the gateway when a plugin is installed or updated; mnemospark does not call `openclaw gateway restart` itself. After a **successful upload**, mnemospark registers the monthly renewal cron only (`--no-deliver`, `--agent`, and a `Command: /usr/bin/node …/dist/cli.js cloud payment-settle --renewal …` message) against the renewal agent id. For interactive automation, route through the general agent (see bundled skill `skills/mnemospark/references/openclaw-routing.md`). Override the node path with `MNEMOSPARK_CRON_NODE_BIN` if your system differs.
 
 ---
 
@@ -189,7 +195,8 @@ On **OpenClaw 2026.4.x**, the **Mnemospark Renewal Agent Runbook** is applied wh
 - **402 payment required**: expected in challenge flow; ensure client retries with payment authorization.
 - **Upload/storage backend errors**: verify cloud permissions (e.g. bucket access + IAM role rights).
 - **Command not recognized**: confirm plugin installed and gateway restarted.
-- **Renewal cron / exec failures after upload**: ensure mnemospark was installed or updated through the normal path so the runbook ran (gateway load, `npx mnemospark install`, or `openclaw plugins install`). If the gateway never loaded the plugin, run install again or restart the gateway.
+- **Renewal cron / exec failures after upload**: ensure mnemospark was installed or updated through the normal path so both dedicated-agent runbooks ran (gateway load, `npx mnemospark install`, or `openclaw plugins install`). If the gateway never loaded the plugin, run install again or restart the gateway.
+- **Interactive Mnemospark exec denied on main**: use a dedicated `mnemospark` agent and route with `openclaw agent --agent mnemospark …` (see skill reference `openclaw-routing.md`); renewal-only setup does not cover general plugin usage.
 - **One-step operation correlation**: run `./skills/mnemospark/scripts/debug-operation.sh <operation-id>` (or omit ID to use latest).
 
 ---
