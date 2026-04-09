@@ -14,6 +14,13 @@ remaining valid semver.
 
 * **openclaw:** apply dedicated `mnemospark` agent runbook alongside renewal; document `MNEMOSPARK_AGENT_ID`; refresh bundled skill with routing reference and examples runbook.
 
+## [2026.4.7](https://github.com/pawlsclick/mnemospark/compare/v2026.4.6...v2026.4.7) (2026-04-09)
+
+
+### Features
+
+* **openclaw:** add dedicated mnemospark agent runbook and refresh skill ([#123](https://github.com/pawlsclick/mnemospark/issues/123)) ([8c2f8e4](https://github.com/pawlsclick/mnemospark/commit/8c2f8e46786c57764296c990524af3d602f61314))
+
 ## [2026.4.6](https://github.com/pawlsclick/mnemospark/compare/v2026.4.5...v2026.4.6) (2026-04-05)
 
 
