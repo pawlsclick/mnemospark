@@ -11,7 +11,15 @@
   "openclaw": {
     "extensions": [
       "./dist/index.js"
-    ]
+    ],
+    "compat": {
+      "pluginApi": ">=2026.4.9",
+      "minGatewayVersion": "2026.4.9"
+    },
+    "build": {
+      "openclawVersion": "2026.4.9",
+      "pluginSdkVersion": "2026.4.9"
+    }
   },
   "exports": {
     ".": {
@@ -85,7 +93,7 @@
     "eslint": "^9.39.2",
     "husky": "^9.1.7",
     "lint-staged": "^16.2.7",
-    "openclaw": "^2026.4.1",
+    "openclaw": "^2026.4.9",
     "prettier": "^3.8.1",
     "tsup": "^8.0.0",
     "typescript": "^5.7.0",
