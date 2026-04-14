@@ -5,6 +5,8 @@ _No forms. No email. Just Base. 💙_
 
 mnemospark is an agentic service layer for OpenClaw plus a standalone x402 payment + verification backend. It enables encrypted, authenticated, fully autonomous cloud and data workflows—paid via x402 with USDC on Base. No human onboarding. No API keys. The blockchain transaction is the record.
 
+For the story behind the product—agent-native encrypted cloud storage on x402 with USDC on Base—see the [launch post on Paragraph](https://paragraph.com/@mnemospark/launched-mnemospark-agent-native-encrypted-cloud-storage-on-x402-usdc).
+
 ---
 
 ## What is mnemospark?
@@ -28,10 +30,10 @@ openclaw plugins install mnemospark --dangerously-force-unsafe-install
 openclaw gateway start
 ```
 
-> Plugin registration is done by `openclaw plugins install mnemospark`.
-> The install also bundles the `skills/mnemospark` skill package so the main agent can delegate mnemospark workflows.
+Plugin registration is done by `openclaw plugins install mnemospark`.
+The install also bundles the `skills/mnemospark` skill package so the main agent can delegate mnemospark workflows. Tell your agent to read it!
 
-By default the plugin uses the production mnemospark API at **https://api.mnemospark.ai**. Set **`MNEMOSPARK_BACKEND_API_BASE_URL`** only when you need a different endpoint (for example staging or a private API URL).
+By default the plugin uses the mnemospark API at **https://api.mnemospark.ai**.
 
 ### 2) Restart gateway after updates
 
