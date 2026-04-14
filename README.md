@@ -30,10 +30,10 @@ openclaw plugins install mnemospark --dangerously-force-unsafe-install
 openclaw gateway start
 ```
 
-> Plugin registration is done by `openclaw plugins install mnemospark`.
-> The install also bundles the `skills/mnemospark` skill package so the main agent can delegate mnemospark workflows.
+Plugin registration is done by `openclaw plugins install mnemospark`.
+The install also bundles the `skills/mnemospark` skill package so the main agent can delegate mnemospark workflows. Tell your agent to read it!
 
-By default the plugin uses the production mnemospark API at **https://api.mnemospark.ai**.
+By default the plugin uses the mnemospark API at **https://api.mnemospark.ai**.
 
 ### 2) Restart gateway after updates
 
