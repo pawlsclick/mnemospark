@@ -3946,6 +3946,18 @@ async function runCloudCommandHandler(
         error_code: null,
         error_message: null,
       });
+      await emitCloudEventBestEffort(
+        "ls.completed",
+        {
+          operation_id: operationId,
+          trace_id: correlation.traceId,
+          wallet_address: walletAddress,
+          object_key: null,
+          status: "succeeded",
+          list_mode: true,
+        },
+        mnemosparkHomeDir,
+      );
 
       const urlBlock = ["```", browseUrl, "```"].join("\n");
       const webBlock = [
@@ -3960,7 +3972,10 @@ async function runCloudCommandHandler(
         text: `${lsText}\n\n${webBlock}`,
       };
     } catch (error) {
-      const message = error instanceof Error ? error.message.trim() : "Cannot run ls-web";
+      const lsFriendly = extractLsErrorMessage(error);
+      const raw =
+        error instanceof Error && error.message.trim().length > 0 ? error.message.trim() : "";
+      const message = (lsFriendly ?? raw) || "Cannot run ls-web";
       await datastore.upsertOperation({
         operation_id: operationId,
         type: "ls",
@@ -3968,10 +3983,22 @@ async function runCloudCommandHandler(
         quote_id: null,
         status: "failed",
         error_code: "LS_WEB_FAILED",
-        error_message: message || "Cannot run ls-web",
+        error_message: message,
       });
+      await emitCloudEventBestEffort(
+        "ls.completed",
+        {
+          operation_id: operationId,
+          trace_id: correlation.traceId,
+          wallet_address: walletAddress,
+          object_key: null,
+          status: "failed",
+          list_mode: true,
+        },
+        mnemosparkHomeDir,
+      );
       return {
-        text: message || "Cannot run ls-web",
+        text: message,
         isError: true,
       };
     }
