@@ -447,6 +447,16 @@ export function jsonBodyForLsRequest(request: StorageLsRequest): Record<string, 
   return o;
 }
 
+function jsonBodyForLsWebSessionRequest(
+  request: StorageLsWebSessionRequest,
+): Record<string, unknown> {
+  const o: Record<string, unknown> = { wallet_address: request.wallet_address };
+  if (request.location) {
+    o.location = request.location;
+  }
+  return o;
+}
+
 /** Proxy / local CLI: parse JSON body for /storage/ls (object_key optional). */
 export function parseStorageLsRequestPayload(payload: unknown): StorageLsRequest | null {
   const record = asRecord(payload);
@@ -470,6 +480,25 @@ export function parseStorageLsRequestPayload(payload: unknown): StorageLsRequest
     ...(continuation_token ? { continuation_token } : {}),
     ...(typeof max_keys === "number" ? { max_keys } : {}),
     ...(prefix ? { prefix } : {}),
+  };
+}
+
+/** Proxy / local CLI: parse JSON body for /storage/ls-web/session. */
+export function parseStorageLsWebSessionRequestPayload(
+  payload: unknown,
+): StorageLsWebSessionRequest | null {
+  const record = asRecord(payload);
+  if (!record) {
+    return null;
+  }
+  const walletAddress = asNonEmptyString(record.wallet_address);
+  if (!walletAddress) {
+    return null;
+  }
+  const location = asNonEmptyString(record.location) ?? undefined;
+  return {
+    wallet_address: walletAddress,
+    ...(location ? { location } : {}),
   };
 }
 
@@ -615,13 +644,9 @@ export async function requestStorageLsWebSessionViaProxy(
   request: StorageLsWebSessionRequest,
   options: ProxyStorageOptions = {},
 ): Promise<StorageLsWebSessionResponse> {
-  const jsonBody: Record<string, unknown> = {
-    wallet_address: request.wallet_address,
-    ...(request.location ? { location: request.location } : {}),
-  };
   return requestJsonViaProxy(
     STORAGE_LS_WEB_SESSION_PROXY_PATH,
-    jsonBody,
+    jsonBodyForLsWebSessionRequest(request),
     parseStorageLsWebSessionResponse,
     options,
   );
@@ -656,6 +681,18 @@ export async function forwardStorageLsToBackend(
   options: BackendStorageOptions = {},
 ): Promise<BackendStorageForwardResult> {
   return forwardStorageToBackend("/storage/ls", "POST", jsonBodyForLsRequest(request), options);
+}
+
+export async function forwardStorageLsWebSessionToBackend(
+  request: StorageLsWebSessionRequest,
+  options: BackendStorageOptions = {},
+): Promise<BackendStorageForwardResult> {
+  return forwardStorageToBackend(
+    "/storage/ls-web/session",
+    "POST",
+    jsonBodyForLsWebSessionRequest(request),
+    options,
+  );
 }
 
 export async function forwardStorageDownloadToBackend(

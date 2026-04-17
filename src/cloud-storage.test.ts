@@ -11,6 +11,7 @@ import {
   forwardStorageDeleteToBackend,
   forwardStorageDownloadToBackend,
   forwardStorageLsToBackend,
+  forwardStorageLsWebSessionToBackend,
   jsonBodyForLsRequest,
   parseProxyStorageDownloadPayload,
   parseStorageLsResponse,
@@ -300,6 +301,45 @@ describe("cloud storage transport", () => {
     expect(headers["x-api-key"]).toBeUndefined();
     expect(forwarded.status).toBe(200);
     expect(forwarded.bodyBuffer.toString("utf-8")).toBe("download-bytes");
+  });
+
+  it("forwards ls-web session request to backend /storage/ls-web/session", async () => {
+    let capturedUrl = "";
+    let capturedInit: RequestInit | undefined;
+
+    const forwarded = await forwardStorageLsWebSessionToBackend(
+      { wallet_address: SAMPLE_REQUEST.wallet_address, location: "us-west-2" },
+      {
+        backendBaseUrl: "https://api.example.com/prod/",
+        walletSignature: "wallet-proof-header",
+        fetchImpl: async (input, init) => {
+          capturedUrl = String(input);
+          capturedInit = init;
+          return new Response(
+            JSON.stringify({
+              code: "otp-123",
+              expires_at: "2026-01-01T00:00:00Z",
+            }),
+            {
+              status: 200,
+              headers: {
+                "Content-Type": "application/json",
+              },
+            },
+          );
+        },
+      },
+    );
+
+    expect(capturedUrl).toBe("https://api.example.com/prod/storage/ls-web/session");
+    expect(capturedInit?.method).toBe("POST");
+    expect(capturedInit?.body).toBe(
+      JSON.stringify({ wallet_address: SAMPLE_REQUEST.wallet_address, location: "us-west-2" }),
+    );
+    const headers = capturedInit?.headers as Record<string, string>;
+    expect(headers["X-Wallet-Signature"]).toBe("wallet-proof-header");
+    expect(headers["x-api-key"]).toBeUndefined();
+    expect(forwarded.status).toBe(200);
   });
 
   it("requires wallet proof for storage endpoint forwarding", async () => {

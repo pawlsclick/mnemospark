@@ -49,4 +49,19 @@ describe("local proxy HTTP hardening", () => {
     const j = (await r.json()) as { error?: string };
     expect(j.error).toBe("wallet_proof_invalid");
   });
+
+  it("returns 403 wallet_proof_invalid for wrong wallet on ls-web session", async () => {
+    const r = await fetch(`http://127.0.0.1:${port}/mnemospark/storage/ls-web/session`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        wallet_address: "0x0000000000000000000000000000000000000001",
+      }),
+    });
+    expect(r.status).toBe(403);
+    expect(r.headers.get("X-Content-Type-Options")).toBe("nosniff");
+    expect(r.headers.get("Cache-Control")).toBe("no-store");
+    const j = (await r.json()) as { error?: string };
+    expect(j.error).toBe("wallet_proof_invalid");
+  });
 });

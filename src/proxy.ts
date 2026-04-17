@@ -36,11 +36,14 @@ import {
   STORAGE_DELETE_PROXY_PATH,
   STORAGE_DOWNLOAD_PROXY_PATH,
   STORAGE_LS_PROXY_PATH,
+  STORAGE_LS_WEB_SESSION_PROXY_PATH,
   downloadStorageToDisk,
   forwardStorageDeleteToBackend,
   forwardStorageDownloadToBackend,
   forwardStorageLsToBackend,
+  forwardStorageLsWebSessionToBackend,
   parseStorageLsRequestPayload,
+  parseStorageLsWebSessionRequestPayload,
   parseProxyStorageDownloadPayload,
   parseStorageObjectRequest,
 } from "./cloud-storage.js";
@@ -1109,6 +1112,110 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
         sendJson(res, 502, {
           error: "proxy_error",
           message: `Failed to forward /mnemospark cloud ls: ${err instanceof Error ? err.message : String(err)}`,
+        });
+      }
+      return;
+    }
+
+    // Mnemospark backend proxy endpoint for /mnemospark cloud ls-web command.
+    if (req.method === "POST" && matchesProxyPath(req.url, STORAGE_LS_WEB_SESSION_PROXY_PATH)) {
+      const correlation = createProxyCorrelation(req.headers);
+      logProxyEvent("info", "proxy_ls_web_session_received");
+      emitProxyEvent("request.received", "start", correlation, {
+        path: STORAGE_LS_WEB_SESSION_PROXY_PATH,
+      });
+      try {
+        let payload: unknown;
+        try {
+          payload = await readProxyJsonBody(req);
+        } catch {
+          logProxyEvent("warn", "proxy_ls_web_session_invalid_json");
+          emitProxyTerminalFromStatus(correlation, 400, { reason: "invalid_json" });
+          sendJson(res, 400, {
+            error: "Bad request",
+            message: "Invalid JSON body for /mnemospark cloud ls-web",
+          });
+          return;
+        }
+
+        const requestPayload = parseStorageLsWebSessionRequestPayload(payload);
+        if (!requestPayload) {
+          logProxyEvent("warn", "proxy_ls_web_session_missing_fields");
+          emitProxyTerminalFromStatus(correlation, 400, { reason: "missing_fields" });
+          sendJson(res, 400, {
+            error: "Bad request",
+            message: "Missing required field: wallet_address",
+          });
+          return;
+        }
+
+        correlation.wallet_address = requestPayload.wallet_address;
+
+        if (requestPayload.wallet_address.toLowerCase() !== proxyWalletAddressLower) {
+          logProxyEvent("warn", "proxy_ls_web_session_wallet_mismatch");
+          emitProxyTerminalFromStatus(correlation, 403, { reason: "wallet_mismatch" });
+          sendJson(res, 403, {
+            error: "wallet_proof_invalid",
+            message: "wallet proof invalid",
+          });
+          return;
+        }
+
+        const walletSignature = await createBackendWalletSignature(
+          "POST",
+          "/storage/ls-web/session",
+          requestPayload.wallet_address,
+        );
+        if (!walletSignature) {
+          logProxyEvent("warn", "proxy_ls_web_session_wallet_signature_missing");
+          sendWalletRequired(res);
+          emitProxyTerminalFromStatus(correlation, 400, { reason: "wallet_signature_missing" });
+          return;
+        }
+
+        emitProxyEvent("storage.call", "start", correlation, { target: "storage/ls-web/session" });
+        const backendResponse = await forwardStorageLsWebSessionToBackend(requestPayload, {
+          backendBaseUrl: MNEMOSPARK_BACKEND_API_BASE_URL,
+          walletSignature,
+        });
+        logProxyEvent("info", "proxy_ls_web_session_backend_response", {
+          status: backendResponse.status,
+        });
+        emitProxyEvent("storage.call", "result", correlation, { status: backendResponse.status });
+
+        const authFailure = normalizeBackendAuthFailure(
+          backendResponse.status,
+          backendResponse.bodyText,
+        );
+        if (authFailure) {
+          logProxyEvent("warn", "proxy_ls_web_session_auth_failure", {
+            status: authFailure.status,
+          });
+          const responseHeaders = createBackendForwardHeaders({
+            contentType: authFailure.contentType,
+            paymentRequired: backendResponse.paymentRequired,
+            paymentResponse: backendResponse.paymentResponse,
+          });
+          res.writeHead(authFailure.status, responseHeaders);
+          res.end(authFailure.bodyText);
+          emitProxyTerminalFromStatus(correlation, authFailure.status, { reason: "auth_failure" });
+          return;
+        }
+
+        const responseHeaders = createBackendForwardHeaders(backendResponse);
+        res.writeHead(backendResponse.status, responseHeaders);
+        res.end(backendResponse.bodyText);
+        emitProxyTerminalFromStatus(correlation, backendResponse.status);
+      } catch (err) {
+        emitProxyEvent("terminal.failure", "failure", correlation, {
+          error: err instanceof Error ? err.message : String(err),
+        });
+        logProxyEvent("error", "proxy_ls_web_session_forward_failed", {
+          error: err instanceof Error ? err.message : String(err),
+        });
+        sendJson(res, 502, {
+          error: "proxy_error",
+          message: `Failed to forward /mnemospark cloud ls-web session: ${err instanceof Error ? err.message : String(err)}`,
         });
       }
       return;
