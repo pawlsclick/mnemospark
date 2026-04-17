@@ -3973,7 +3973,7 @@ async function runCloudCommandHandler(
       };
     } catch (error) {
       const lsFriendly = extractLsErrorMessage(error);
-      const message = lsFriendly ?? "Cannot run ls-web";
+      const message = lsFriendly ?? extractUploadErrorMessage(error) ?? "Cannot run ls-web";
       await datastore.upsertOperation({
         operation_id: operationId,
         type: "ls",
