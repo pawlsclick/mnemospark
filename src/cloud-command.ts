@@ -324,6 +324,7 @@ type ParsedCloudArgs =
   | { mode: "payment-settle-invalid" }
   | { mode: "ls"; storageObjectRequest: StorageObjectRequestInput; nameSelector?: NameSelector }
   | { mode: "ls-web"; storageObjectRequest: StorageObjectRequestInput }
+  | { mode: "ls-web-invalid" }
   | { mode: "ls-invalid" }
   | ({
       mode: "download";
@@ -849,7 +850,7 @@ export function parseCloudArgs(args?: string): ParsedCloudArgs {
     const flags = valuesToStringRecord(parsed.values);
     const walletAddress = flags["wallet-address"]?.trim() ?? "";
     if (!walletAddress) {
-      return { mode: "ls-invalid" };
+      return { mode: "ls-web-invalid" };
     }
     const location = flags.location?.trim() || flags.region?.trim() || undefined;
     return {
@@ -2593,6 +2594,13 @@ async function runCloudCommandHandler(
   if (parsed.mode === "ls-invalid") {
     return {
       text: `Cannot list storage object: required arguments are ${REQUIRED_LS}.`,
+      isError: true,
+    };
+  }
+
+  if (parsed.mode === "ls-web-invalid") {
+    return {
+      text: "Cannot list storage objects: wallet-address is required.",
       isError: true,
     };
   }
