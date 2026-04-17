@@ -57,6 +57,14 @@ export const lsSchema: CommandArgSchema = {
   ],
 };
 
+export const lsWebSchema: CommandArgSchema = {
+  args: [
+    { name: "wallet-address", aliases: ["wallet"], required: true },
+    { name: "location" },
+    { name: "region" },
+  ],
+};
+
 export const downloadSchema: CommandArgSchema = {
   args: [
     { name: "wallet-address", aliases: ["wallet"], required: true },

@@ -21,6 +21,7 @@ import {
 import { normalizeWalletSignature } from "./wallet-signature.js";
 
 export const STORAGE_LS_PROXY_PATH = "/mnemospark/storage/ls";
+export const STORAGE_LS_WEB_SESSION_PROXY_PATH = "/mnemospark/storage/ls-web/session";
 export const STORAGE_DOWNLOAD_PROXY_PATH = "/mnemospark/storage/download";
 export const STORAGE_DELETE_PROXY_PATH = "/mnemospark/storage/delete";
 
@@ -70,6 +71,17 @@ export type StorageLsResponse = StorageLsStatResponse | StorageLsListResponse;
 export function isStorageLsListResponse(r: StorageLsResponse): r is StorageLsListResponse {
   return r.mode === "list";
 }
+
+export type StorageLsWebSessionRequest = {
+  wallet_address: string;
+  location?: string;
+};
+
+export type StorageLsWebSessionResponse = {
+  code: string;
+  app_url?: string;
+  expires_at: string;
+};
 
 export type StorageDeleteResponse = {
   success: boolean;
@@ -524,6 +536,28 @@ export function parseStorageLsResponse(payload: unknown): StorageLsResponse {
   };
 }
 
+export function parseStorageLsWebSessionResponse(payload: unknown): StorageLsWebSessionResponse {
+  const record = asRecord(payload);
+  if (!record) {
+    throw new Error("Invalid ls-web session response payload");
+  }
+
+  const code = asNonEmptyString(record.code) ?? asNonEmptyString(record.exchange_code);
+  const appUrl = asNonEmptyString(record.app_url) ?? asNonEmptyString(record.appUrl) ?? undefined;
+  const expiresAt =
+    asNonEmptyString(record.expires_at) ?? asNonEmptyString(record.expiresAt) ?? undefined;
+
+  if (!code || !expiresAt) {
+    throw new Error("ls-web session response is missing required fields");
+  }
+
+  return {
+    code,
+    ...(appUrl ? { app_url: appUrl } : {}),
+    expires_at: expiresAt,
+  };
+}
+
 export function parseStorageDeleteResponse(payload: unknown): StorageDeleteResponse {
   const record = asRecord(payload);
   if (!record) {
@@ -573,6 +607,22 @@ export async function requestStorageLsViaProxy(
     STORAGE_LS_PROXY_PATH,
     jsonBodyForLsRequest(request),
     parseStorageLsResponse,
+    options,
+  );
+}
+
+export async function requestStorageLsWebSessionViaProxy(
+  request: StorageLsWebSessionRequest,
+  options: ProxyStorageOptions = {},
+): Promise<StorageLsWebSessionResponse> {
+  const jsonBody: Record<string, unknown> = {
+    wallet_address: request.wallet_address,
+    ...(request.location ? { location: request.location } : {}),
+  };
+  return requestJsonViaProxy(
+    STORAGE_LS_WEB_SESSION_PROXY_PATH,
+    jsonBody,
+    parseStorageLsWebSessionResponse,
     options,
   );
 }

@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   backupFlagsSchema,
   downloadSchema,
+  lsWebSchema,
   opStatusSchema,
   paymentSettleSchema,
   priceStorageSchema,
@@ -165,6 +166,22 @@ describe("parseCommandArgs", () => {
         downloadSchema,
       );
       expect(r.ok).toBe(true);
+    });
+  });
+
+  describe("ls-web schema", () => {
+    it("accepts wallet-address only (alias wallet:)", () => {
+      const r = parseCommandArgs(`wallet:${WALLET}`, lsWebSchema);
+      expect(r.ok).toBe(true);
+      if (!r.ok) return;
+      expect(r.values["wallet-address"]).toBe(WALLET);
+    });
+
+    it("accepts optional location/region", () => {
+      const r = parseCommandArgs(`wallet:${WALLET} location:us-east-1`, lsWebSchema);
+      expect(r.ok).toBe(true);
+      if (!r.ok) return;
+      expect(r.values.location).toBe("us-east-1");
     });
   });
 

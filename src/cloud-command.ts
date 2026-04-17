@@ -37,12 +37,15 @@ import {
   requestStorageDeleteViaProxy,
   requestStorageDownloadViaProxy,
   requestStorageLsViaProxy,
+  requestStorageLsWebSessionViaProxy,
   sanitizeFriendlyNameForLocalBasename,
   type ProxyStorageOptions,
   type StorageDeleteResponse,
   type StorageDownloadProxyResponse,
   type StorageLsRequest,
   type StorageLsResponse,
+  type StorageLsWebSessionRequest,
+  type StorageLsWebSessionResponse,
   type StorageObjectRequest,
 } from "./cloud-storage.js";
 import {
@@ -70,6 +73,7 @@ import {
   deleteSchema,
   downloadSchema,
   lsSchema,
+  lsWebSchema,
   opStatusSchema,
   paymentSettleSchema,
   priceStorageSchema,
@@ -155,6 +159,10 @@ const CLOUD_HELP_TEXT = [
   "• `/mnemospark cloud ls wallet-address:<addr> [object-key:<key> | name:<friendly-name> | omit both to list bucket] [latest:true|at:<timestamp>]`",
   "  Purpose: stat one object or list all keys in the wallet bucket (S3).",
   "  Required: " + REQUIRED_LS,
+  "",
+  "• `/mnemospark cloud ls-web wallet-address:<addr>`",
+  "  Purpose: run `ls` in list mode (identical output), then mint a short-lived web session and print a browse URL + expiry.",
+  "  Required: wallet-address:<addr>",
   "",
   "• `/mnemospark cloud download wallet-address:<addr> [object-key:<object-key> | name:<friendly-name>] [latest:true|at:<timestamp>] [async:true] [orchestrator:<inline|subagent>] [timeout-seconds:<n>]`",
   "  Purpose: fetch an object to local disk.",
@@ -315,6 +323,7 @@ type ParsedCloudArgs =
   | { mode: "payment-settle"; paymentSettleRequest: PaymentSettleCommandRequest }
   | { mode: "payment-settle-invalid" }
   | { mode: "ls"; storageObjectRequest: StorageObjectRequestInput; nameSelector?: NameSelector }
+  | { mode: "ls-web"; storageObjectRequest: StorageObjectRequestInput }
   | { mode: "ls-invalid" }
   | ({
       mode: "download";
@@ -366,6 +375,10 @@ type CreateCloudCommandOptions = {
     request: StorageLsRequest,
     options?: ProxyStorageOptions,
   ) => Promise<StorageLsResponse>;
+  requestStorageLsWebSessionFn?: (
+    request: StorageLsWebSessionRequest,
+    options?: ProxyStorageOptions,
+  ) => Promise<StorageLsWebSessionResponse>;
   requestStorageDownloadFn?: (
     request: StorageObjectRequest,
     options?: ProxyStorageOptions,
@@ -821,6 +834,27 @@ export function parseCloudArgs(args?: string): ParsedCloudArgs {
         object_key: objectKey || undefined,
         storage_price: storagePrice,
       },
+    };
+  }
+
+  if (subcommand === "ls-web") {
+    const parsed = parseCommandArgs(rest, lsWebSchema);
+    if (!parsed.ok) {
+      return {
+        mode: "arg-parse-failure",
+        errors: parsed.errors,
+        warnings: mergeArgParseWarnings(normWarnings, parsed.warnings),
+      };
+    }
+    const flags = valuesToStringRecord(parsed.values);
+    const walletAddress = flags["wallet-address"]?.trim() ?? "";
+    if (!walletAddress) {
+      return { mode: "ls-invalid" };
+    }
+    const location = flags.location?.trim() || flags.region?.trim() || undefined;
+    return {
+      mode: "ls-web",
+      storageObjectRequest: { wallet_address: walletAddress, location },
     };
   }
 
@@ -2042,6 +2076,8 @@ export function createCloudCommand(
           nowDateFn: options.nowDateFn ?? (() => new Date()),
           idempotencyKeyFn: options.idempotencyKeyFn ?? randomUUID,
           requestStorageLsFn: options.requestStorageLsFn ?? requestStorageLsViaProxy,
+          requestStorageLsWebSessionFn:
+            options.requestStorageLsWebSessionFn ?? requestStorageLsWebSessionViaProxy,
           requestStorageDownloadFn:
             options.requestStorageDownloadFn ?? requestStorageDownloadViaProxy,
           requestStorageDeleteFn: options.requestStorageDeleteFn ?? requestStorageDeleteViaProxy,
@@ -2087,6 +2123,9 @@ type RunCloudCommandHandlerOptions = {
   nowDateFn: NonNullable<CreateCloudCommandOptions["nowDateFn"]>;
   idempotencyKeyFn: NonNullable<CreateCloudCommandOptions["idempotencyKeyFn"]>;
   requestStorageLsFn: NonNullable<CreateCloudCommandOptions["requestStorageLsFn"]>;
+  requestStorageLsWebSessionFn: NonNullable<
+    CreateCloudCommandOptions["requestStorageLsWebSessionFn"]
+  >;
   requestStorageDownloadFn: NonNullable<CreateCloudCommandOptions["requestStorageDownloadFn"]>;
   requestStorageDeleteFn: NonNullable<CreateCloudCommandOptions["requestStorageDeleteFn"]>;
   requestPaymentSettleViaProxyFn: NonNullable<
@@ -2477,6 +2516,7 @@ async function runCloudCommandHandler(
   const nowDateFn = options.nowDateFn;
   const idempotencyKeyFn = options.idempotencyKeyFn;
   const requestStorageLs = options.requestStorageLsFn;
+  const requestStorageLsWebSession = options.requestStorageLsWebSessionFn;
   const requestStorageDownload = options.requestStorageDownloadFn;
   const requestStorageDelete = options.requestStorageDeleteFn;
   const requestPaymentSettleViaProxy = options.requestPaymentSettleViaProxyFn;
@@ -3818,6 +3858,112 @@ async function runCloudCommandHandler(
       );
       return {
         text: lsErrorMessage,
+        isError: true,
+      };
+    }
+  }
+
+  if (parsed.mode === "ls-web") {
+    const walletAddress = parsed.storageObjectRequest.wallet_address?.trim() ?? "";
+    if (!walletAddress) {
+      return { text: "Cannot list storage objects: wallet-address is required.", isError: true };
+    }
+
+    const listRequest: StorageLsRequest = { wallet_address: walletAddress };
+    const location = parsed.storageObjectRequest.location?.trim();
+    if (location) {
+      listRequest.location = location;
+    }
+
+    const correlation = buildRequestCorrelation();
+    const operationId = correlation.operationId;
+    await datastore.upsertOperation({
+      operation_id: operationId,
+      type: "ls",
+      object_id: null,
+      quote_id: null,
+      status: "started",
+      error_code: null,
+      error_message: null,
+    });
+
+    try {
+      const lsResult = await requestStorageLs(listRequest, {
+        ...options.proxyStorageOptions,
+        correlation,
+      });
+      if (!lsResult.success) {
+        throw new Error("ls failed");
+      }
+
+      const lsText = await buildMnemosparkLsMessage(lsResult, {
+        walletAddress,
+        datastore,
+      });
+
+      const session = await requestStorageLsWebSession(
+        { wallet_address: walletAddress, ...(location ? { location } : {}) },
+        {
+          ...options.proxyStorageOptions,
+          correlation,
+        },
+      );
+
+      const browseUrl =
+        session.app_url?.trim() ||
+        `https://app.mnemospark.ai/?code=${encodeURIComponent(session.code)}`;
+
+      const now = nowDateFn();
+      const expiresDate = new Date(session.expires_at);
+      const expiresUtc = Number.isNaN(expiresDate.valueOf())
+        ? session.expires_at
+        : expiresDate.toUTCString();
+      let rel = "";
+      if (!Number.isNaN(expiresDate.valueOf())) {
+        const ms = expiresDate.getTime() - now.getTime();
+        if (ms > 0) {
+          const totalMinutes = Math.floor(ms / 60000);
+          const hours = Math.floor(totalMinutes / 60);
+          const minutes = totalMinutes % 60;
+          rel = ` (in ~${hours}h ${minutes}m)`;
+        }
+      }
+
+      await datastore.upsertOperation({
+        operation_id: operationId,
+        type: "ls",
+        object_id: null,
+        quote_id: null,
+        status: "succeeded",
+        error_code: null,
+        error_message: null,
+      });
+
+      const urlBlock = ["```", browseUrl, "```"].join("\n");
+      const webBlock = [
+        "Browse your files in the web app:",
+        "",
+        urlBlock,
+        "",
+        `Expires: ${expiresUtc}${rel}`,
+      ].join("\n");
+
+      return {
+        text: `${lsText}\n\n${webBlock}`,
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message.trim() : "Cannot run ls-web";
+      await datastore.upsertOperation({
+        operation_id: operationId,
+        type: "ls",
+        object_id: null,
+        quote_id: null,
+        status: "failed",
+        error_code: "LS_WEB_FAILED",
+        error_message: message || "Cannot run ls-web",
+      });
+      return {
+        text: message || "Cannot run ls-web",
         isError: true,
       };
     }

@@ -81,4 +81,12 @@ describe("parseCloudArgs", () => {
     if (r.mode !== "price-storage") return;
     expect(r.priceStorageRequest.object_id_hash).toBe(HASH);
   });
+
+  it("accepts ls-web with wallet only", () => {
+    const r = parseCloudArgs(`ls-web wallet:${WALLET}`);
+    expect(r.mode).toBe("ls-web");
+    if (r.mode !== "ls-web") return;
+    expect(r.storageObjectRequest.wallet_address).toBe(WALLET);
+    expect(r.storageObjectRequest.object_key).toBeUndefined();
+  });
 });

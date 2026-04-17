@@ -14,6 +14,7 @@ import {
   jsonBodyForLsRequest,
   parseProxyStorageDownloadPayload,
   parseStorageLsResponse,
+  requestStorageLsWebSessionViaProxy,
   requestStorageLsViaProxy,
   sanitizeFriendlyNameForLocalBasename,
   type BackendStorageForwardResult,
@@ -169,6 +170,34 @@ describe("cloud storage transport", () => {
         jsonBodyForLsRequest({ wallet_address: "0xaaaabbbbccccddddeeeeffff00001111aaaabbbb" }),
       ),
     );
+  });
+
+  it("sends ls-web session mint request to local proxy and parses response", async () => {
+    let capturedUrl = "";
+    let capturedInit: RequestInit | undefined;
+    const result = await requestStorageLsWebSessionViaProxy(
+      { wallet_address: "0xaaaabbbbccccddddeeeeffff00001111aaaabbbb" },
+      {
+        proxyBaseUrl: "http://127.0.0.1:7120/",
+        fetchImpl: async (input, init) => {
+          capturedUrl = String(input);
+          capturedInit = init;
+          return new Response(
+            JSON.stringify({
+              code: "otp-1",
+              app_url: "https://app.mnemospark.ai/?code=otp-1",
+              expires_at: "2026-01-01T00:00:00Z",
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          );
+        },
+      },
+    );
+
+    expect(capturedUrl).toBe("http://127.0.0.1:7120/mnemospark/storage/ls-web/session");
+    expect(capturedInit?.method).toBe("POST");
+    expect(result.code).toBe("otp-1");
+    expect(result.expires_at).toBe("2026-01-01T00:00:00Z");
   });
 
   it("parses list and stat ls responses", () => {
