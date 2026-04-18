@@ -14,6 +14,13 @@ remaining valid semver.
 
 * **openclaw:** apply dedicated `mnemospark` agent runbook alongside renewal; document `MNEMOSPARK_AGENT_ID`; refresh bundled skill with routing reference and examples runbook.
 
+## [2026.4.10](https://github.com/pawlsclick/mnemospark/compare/v2026.4.9...v2026.4.10) (2026-04-18)
+
+
+### Bug Fixes
+
+* **ls-web:** read mint browse URL from session response app field ([#130](https://github.com/pawlsclick/mnemospark/issues/130)) ([235f012](https://github.com/pawlsclick/mnemospark/commit/235f0122ae45bf8f21142383bc1b2b6f0017bf9c))
+
 ## [2026.4.9](https://github.com/pawlsclick/mnemospark/compare/v2026.4.8...v2026.4.9) (2026-04-17)
 
 
