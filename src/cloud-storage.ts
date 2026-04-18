@@ -572,7 +572,12 @@ export function parseStorageLsWebSessionResponse(payload: unknown): StorageLsWeb
   }
 
   const code = asNonEmptyString(record.code) ?? asNonEmptyString(record.exchange_code);
-  const appUrl = asNonEmptyString(record.app_url) ?? asNonEmptyString(record.appUrl) ?? undefined;
+  // Mint BFF uses `app`; keep app_url / appUrl for older proxies.
+  const appUrl =
+    asNonEmptyString(record.app) ??
+    asNonEmptyString(record.app_url) ??
+    asNonEmptyString(record.appUrl) ??
+    undefined;
   const expiresAt =
     asNonEmptyString(record.expires_at) ?? asNonEmptyString(record.expiresAt) ?? undefined;
 

@@ -15,6 +15,7 @@ import {
   jsonBodyForLsRequest,
   parseProxyStorageDownloadPayload,
   parseStorageLsResponse,
+  parseStorageLsWebSessionResponse,
   requestStorageLsWebSessionViaProxy,
   requestStorageLsViaProxy,
   sanitizeFriendlyNameForLocalBasename,
@@ -186,7 +187,7 @@ describe("cloud storage transport", () => {
           return new Response(
             JSON.stringify({
               code: "otp-1",
-              app_url: "https://app.mnemospark.ai/?code=otp-1",
+              app: "https://app.mnemospark.ai/?api=staging&code=otp-1",
               expires_at: "2026-01-01T00:00:00Z",
             }),
             { status: 200, headers: { "Content-Type": "application/json" } },
@@ -198,7 +199,19 @@ describe("cloud storage transport", () => {
     expect(capturedUrl).toBe("http://127.0.0.1:7120/mnemospark/storage/ls-web/session");
     expect(capturedInit?.method).toBe("POST");
     expect(result.code).toBe("otp-1");
+    expect(result.app_url).toBe("https://app.mnemospark.ai/?api=staging&code=otp-1");
     expect(result.expires_at).toBe("2026-01-01T00:00:00Z");
+  });
+
+  it("parses ls-web session preferring app field over app_url", () => {
+    const parsed = parseStorageLsWebSessionResponse({
+      success: true,
+      code: "c1",
+      app: "https://app.mnemospark.ai/?api=staging&code=c1",
+      app_url: "https://app.mnemospark.ai/?code=c1",
+      expires_at: "2026-01-01T00:00:00Z",
+    });
+    expect(parsed.app_url).toBe("https://app.mnemospark.ai/?api=staging&code=c1");
   });
 
   it("parses list and stat ls responses", () => {
