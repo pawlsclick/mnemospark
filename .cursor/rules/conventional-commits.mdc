@@ -1,0 +1,29 @@
+---
+description: Use Conventional Commits for all commits
+alwaysApply: true
+---
+
+# Commit policy: Conventional Commits
+
+In this repo (**mnemospark**), use **Conventional Commits** for every commit.
+
+## Format
+
+`<type>(<scope>): <subject>`
+
+- **type**: `feat`, `fix`, `docs`, `refactor`, `test`, `chore`, `build`, `ci`, `perf`, `style`, `revert`
+- **scope**: optional but preferred (module/package/area)
+- **subject**: imperative, present tense, no trailing period
+
+## Examples
+
+- `feat(plugin): add x402 payment settlement support`
+- `fix(ci): prevent double publish on release`
+- `refactor(auth): centralize token verification`
+
+## Breaking changes
+
+Use `!` in the header and describe in body:
+
+- `feat(api)!: change upload contract`
+

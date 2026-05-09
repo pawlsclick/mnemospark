@@ -1,0 +1,21 @@
+---
+description: Use gstack skills for planning, review, QA, shipping
+alwaysApply: true
+---
+
+# Cursor + gstack workflow
+
+gstack skills are installed globally under `~/.cursor/skills/gstack-*`.
+
+## When to use which gstack skill
+
+- **Plan before large work**: use `gstack-office-hours` and then `gstack-autoplan`
+- **Architecture review**: use `gstack-plan-eng-review` (before implementation) or `gstack-review` (after)
+- **Security review**: use `gstack-cso` for security-sensitive changes (auth, secrets, supply chain, CI/CD)
+- **Ship a PR**: use `gstack-ship` once changes are ready
+
+## Branch + commit rules (enforced)
+
+- **Never commit to `main`** (see `no-commit-to-main.mdc`)
+- **Use Conventional Commits** (see `conventional-commits.mdc`)
+
