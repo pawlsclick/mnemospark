@@ -82,6 +82,7 @@ import {
 import { CLOUD_ONBOARDING_BLOCK_LINES } from "./cloud-help-onboarding.js";
 import { parseOpenClawCliJson, runOpenClawCli } from "./openclaw-cli.js";
 import { getRenewalAgentId, getRenewalNodeBinary } from "./openclaw-renewal-runbook.js";
+import { resolveMnemosparkCliPath } from "./mnemospark-cli-path.js";
 
 const SUPPORTED_BACKUP_PLATFORMS = new Set<NodeJS.Platform>(["darwin", "linux"]);
 const BACKUP_DIR_SUBPATH = join(".openclaw", "mnemospark", "backup");
@@ -1331,8 +1332,8 @@ function buildStoragePaymentCronCommand(job: StoragePaymentRenewalJobFields): st
   return `/mnemospark cloud ${buildStoragePaymentRenewalArgs(job)}`;
 }
 
-function buildOpenClawRenewalAgentMessage(openClawHome: string, renewalArgs: string): string {
-  const cliPath = join(openClawHome, ".openclaw/extensions/mnemospark/dist/cli.js");
+function buildOpenClawRenewalAgentMessage(renewalArgs: string): string {
+  const cliPath = resolveMnemosparkCliPath();
   const nodeBin = getRenewalNodeBinary();
   return `Command: ${nodeBin} ${cliPath} cloud ${renewalArgs}`;
 }
@@ -1407,7 +1408,6 @@ async function createStoragePaymentCronJob(
   upload: StorageUploadResponse,
   storagePrice: number,
   openClawCronAdapter: OpenClawCronAdapter,
-  openClawHomeDir: string,
   nowDateFn: () => Date = () => new Date(),
 ): Promise<StoragePaymentCronJob> {
   const renewalFields: StoragePaymentRenewalJobFields = {
@@ -1433,7 +1433,7 @@ async function createStoragePaymentCronJob(
     location: upload.location,
   };
 
-  const payloadMessage = buildOpenClawRenewalAgentMessage(openClawHomeDir, renewalArgs);
+  const payloadMessage = buildOpenClawRenewalAgentMessage(renewalArgs);
   const created = await appendStoragePaymentCronJob(cronJob, openClawCronAdapter, payloadMessage);
   // Use the actual OpenClaw job id so datastore and delete cleanup stay in sync.
   if (created.jobId?.trim()) {
@@ -3660,7 +3660,6 @@ async function runCloudCommandHandler(
         finalizedUploadResponse,
         cronStoragePrice,
         openClawCronAdapter,
-        mnemosparkHomeDir ?? homedir(),
         nowDateFn,
       );
       await datastore.upsertObject({
