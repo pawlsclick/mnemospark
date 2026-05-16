@@ -14,6 +14,13 @@ remaining valid semver.
 
 * **openclaw:** apply dedicated `mnemospark` agent runbook alongside renewal; document `MNEMOSPARK_AGENT_ID`; refresh bundled skill with routing reference and examples runbook.
 
+## [2026.4.12](https://github.com/pawlsclick/mnemospark/compare/v2026.4.11...v2026.4.12) (2026-05-16)
+
+
+### Bug Fixes
+
+* **cloud:** resolve renewal cron CLI path from installed package ([#136](https://github.com/pawlsclick/mnemospark/issues/136)) ([0af0b49](https://github.com/pawlsclick/mnemospark/commit/0af0b49a6dc571cb3a0afd2fdc12df31469624e4))
+
 ## [2026.4.11](https://github.com/pawlsclick/mnemospark/compare/v2026.4.10...v2026.4.11) (2026-05-16)
 
 
