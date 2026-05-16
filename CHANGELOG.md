@@ -14,6 +14,13 @@ remaining valid semver.
 
 * **openclaw:** apply dedicated `mnemospark` agent runbook alongside renewal; document `MNEMOSPARK_AGENT_ID`; refresh bundled skill with routing reference and examples runbook.
 
+## [2026.4.11](https://github.com/pawlsclick/mnemospark/compare/v2026.4.10...v2026.4.11) (2026-05-16)
+
+
+### Bug Fixes
+
+* **openclaw:** start proxy via service lifecycle on gateway boot ([#134](https://github.com/pawlsclick/mnemospark/issues/134)) ([e052a87](https://github.com/pawlsclick/mnemospark/commit/e052a875bc27e39c90af759ac0188decc07b3c29))
+
 ## [2026.4.10](https://github.com/pawlsclick/mnemospark/compare/v2026.4.9...v2026.4.10) (2026-04-18)
 
 
