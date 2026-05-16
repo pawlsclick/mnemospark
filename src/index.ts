@@ -208,5 +208,7 @@ export {
   getRenewalNodeBinary,
   runbookDedicatedAgentEntry,
 } from "./openclaw-renewal-runbook.js";
+export { resolveMnemosparkCliPath } from "./mnemospark-cli-path.js";
+export type { ResolveMnemosparkCliPathOptions } from "./mnemospark-cli-path.js";
 export type { EnsureOpenClawRenewalPrerequisitesOptions } from "./openclaw-renewal-runbook.js";
 export { runMnemosparkSlashHandler } from "./mnemospark-handler.js";

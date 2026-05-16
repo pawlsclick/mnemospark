@@ -19,6 +19,7 @@ import { AES_GCM_NONCE_BYTES } from "./cloud-storage-crypto.js";
 import { createCloudDatastore } from "./cloud-datastore.js";
 import type { StorageDownloadProxyResponse } from "./cloud-storage.js";
 import { PaymentCache } from "./payment-cache.js";
+import { resolveMnemosparkCliPath } from "./mnemospark-cli-path.js";
 
 const sandboxDirs: string[] = [];
 
@@ -928,9 +929,8 @@ describe("cloud command", () => {
       expect(cronEntry?.jobId).toBe(cronId);
       expect(cronEntry?.message).toContain("Command:");
       expect(cronEntry?.message).toContain("/usr/bin/node");
-      expect(cronEntry?.message).toContain(
-        join(homeDir, ".openclaw/extensions/mnemospark/dist/cli.js"),
-      );
+      expect(cronEntry?.message).toContain(resolveMnemosparkCliPath());
+      expect(cronEntry?.message).not.toContain(".openclaw/extensions/mnemospark");
       expect(cronEntry?.message).toContain(" cloud payment-settle");
       expect(cronEntry?.message).toContain("--renewal");
       expect(cronEntry?.message).toContain("obj-upload-001.tar.gz.enc");
@@ -1249,9 +1249,8 @@ describe("cloud command", () => {
     expect(cronJobs).toHaveLength(1);
     expect(cronJobs[0].message).toContain("Command:");
     expect(cronJobs[0].message).toContain("/usr/bin/node");
-    expect(cronJobs[0].message).toContain(
-      join(homeDir, ".openclaw/extensions/mnemospark/dist/cli.js"),
-    );
+    expect(cronJobs[0].message).toContain(resolveMnemosparkCliPath());
+    expect(cronJobs[0].message).not.toContain(".openclaw/extensions/mnemospark");
     expect(cronJobs[0].message).toContain(" cloud payment-settle");
     expect(cronJobs[0].message).toContain("--renewal");
     expect(cronJobs[0].message).toContain("obj-upload-cron-adapter-001.tar.gz.enc");
