@@ -22,70 +22,75 @@ function isCompletionMode(): boolean {
   return args.some((arg, i) => arg === "completion" && i >= 1 && i <= 3);
 }
 
-/**
- * Detect if we're running in gateway mode.
- * The proxy should only start when the gateway is running.
- */
-function isGatewayMode(): boolean {
-  const args = process.argv;
-  return args.includes("gateway");
-}
-
 // Store active proxy handle for cleanup on gateway_stop
 let activeProxyHandle: Awaited<ReturnType<typeof startProxy>> | null = null;
+let startPromise: Promise<void> | null = null;
 
 /**
- * Start the proxy in the background.
- * Called from register() in gateway mode.
+ * Start the local proxy once via the OpenClaw plugin service lifecycle.
+ * Idempotent: concurrent callers share the same in-flight promise.
  */
-async function startProxyInBackground(api: OpenClawPluginApi): Promise<void> {
-  const { key: walletKey, address, source } = await resolveOrGenerateWalletKey();
-
-  if (source === "generated") {
-    api.logger.info(`Generated new wallet: ${address}`);
-  } else if (source === "saved") {
-    api.logger.info(`Using saved wallet: ${address}`);
-  } else {
-    api.logger.info(`Using wallet from MNEMOSPARK_WALLET_KEY: ${address}`);
+async function ensureProxyStarted(api: OpenClawPluginApi): Promise<void> {
+  if (activeProxyHandle) {
+    return;
+  }
+  if (startPromise) {
+    return startPromise;
   }
 
-  const proxy = await startProxy({
-    walletKey,
-    onReady: (port) => {
-      api.logger.info(`mnemospark proxy listening on port ${port}`);
-    },
-    onError: (error) => {
-      api.logger.error(`mnemospark proxy error: ${error.message}`);
-    },
-    onLowBalance: (info) => {
-      api.logger.warn(`[!] Low balance: ${info.balanceUSD}. Fund wallet: ${info.walletAddress}`);
-    },
-    onInsufficientFunds: (info) => {
-      api.logger.error(
-        `[!] Insufficient funds. Balance: ${info.balanceUSD}, Needed: ${info.requiredUSD}. Fund wallet: ${info.walletAddress}`,
-      );
-    },
+  startPromise = (async () => {
+    const { key: walletKey, address, source } = await resolveOrGenerateWalletKey();
+
+    if (source === "generated") {
+      api.logger.info(`Generated new wallet: ${address}`);
+    } else if (source === "saved") {
+      api.logger.info(`Using saved wallet: ${address}`);
+    } else {
+      api.logger.info(`Using wallet from MNEMOSPARK_WALLET_KEY: ${address}`);
+    }
+
+    const proxy = await startProxy({
+      walletKey,
+      onReady: (port) => {
+        api.logger.info(`mnemospark proxy listening on port ${port}`);
+      },
+      onError: (error) => {
+        api.logger.error(`mnemospark proxy error: ${error.message}`);
+      },
+      onLowBalance: (info) => {
+        api.logger.warn(`[!] Low balance: ${info.balanceUSD}. Fund wallet: ${info.walletAddress}`);
+      },
+      onInsufficientFunds: (info) => {
+        api.logger.error(
+          `[!] Insufficient funds. Balance: ${info.balanceUSD}, Needed: ${info.requiredUSD}. Fund wallet: ${info.walletAddress}`,
+        );
+      },
+    });
+
+    activeProxyHandle = proxy;
+    api.logger.info("mnemospark ready");
+
+    // Non-blocking startup balance check
+    const startupMonitor = new BalanceMonitor(address);
+    startupMonitor
+      .checkBalance()
+      .then((balance) => {
+        if (balance.isEmpty) {
+          api.logger.info(`Wallet: ${address} | Balance: $0.00`);
+        } else if (balance.isLow) {
+          api.logger.info(`Wallet: ${address} | Balance: ${balance.balanceUSD} (low)`);
+        } else {
+          api.logger.info(`Wallet: ${address} | Balance: ${balance.balanceUSD}`);
+        }
+      })
+      .catch(() => {
+        api.logger.info(`Wallet: ${address} | Balance: (checking...)`);
+      });
+  })().finally(() => {
+    startPromise = null;
   });
 
-  activeProxyHandle = proxy;
-  api.logger.info("mnemospark ready");
-
-  // Non-blocking startup balance check
-  const startupMonitor = new BalanceMonitor(address);
-  startupMonitor
-    .checkBalance()
-    .then((balance) => {
-      if (balance.isEmpty) {
-        api.logger.info(`Wallet: ${address} | Balance: $0.00`);
-      } else if (balance.isLow) {
-        api.logger.info(`Wallet: ${address} | Balance: ${balance.balanceUSD} (low)`);
-      } else {
-        api.logger.info(`Wallet: ${address} | Balance: ${balance.balanceUSD}`);
-      }
-    })
-    .catch(() => {
-      api.logger.info(`Wallet: ${address} | Balance: (checking...)`);
-    });
+  return startPromise;
 }
 
 const plugin: OpenClawPluginDefinition = {
@@ -141,11 +146,18 @@ const plugin: OpenClawPluginDefinition = {
       );
     }
 
-    // Register service for cleanup on gateway shutdown.
+    // Register service for proxy lifecycle (start on gateway service start, stop on shutdown).
     api.registerService({
       id: "mnemospark-proxy",
-      start: () => {
-        // No-op: proxy starts below in non-blocking mode.
+      start: async () => {
+        try {
+          await ensureProxyStarted(api);
+        } catch (err) {
+          api.logger.error(
+            `Failed to start mnemospark proxy: ${err instanceof Error ? err.message : String(err)}`,
+          );
+          throw err;
+        }
       },
       stop: async () => {
         if (activeProxyHandle) {
@@ -161,17 +173,6 @@ const plugin: OpenClawPluginDefinition = {
           }
         }
       },
-    });
-
-    // Proxy only runs in gateway mode.
-    if (!isGatewayMode()) {
-      return;
-    }
-
-    startProxyInBackground(api).catch((err) => {
-      api.logger.error(
-        `Failed to start mnemospark proxy: ${err instanceof Error ? err.message : String(err)}`,
-      );
     });
   },
 };

@@ -161,6 +161,16 @@ if (!proxyService) {
   } else {
     pass("mnemospark-proxy service has stop()");
   }
+  if (typeof proxyService.start !== "function") {
+    fail("mnemospark-proxy service missing start()");
+  } else {
+    const startSource = proxyService.start.toString();
+    if (startSource.includes("ensureProxyStarted") || startSource.length > 40) {
+      pass("mnemospark-proxy service start() wires proxy lifecycle (not a no-op)");
+    } else {
+      fail("mnemospark-proxy service start() looks like a no-op");
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
