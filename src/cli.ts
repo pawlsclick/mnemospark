@@ -21,6 +21,7 @@ import { BalanceMonitor } from "./balance.js";
 import { VERSION } from "./version.js";
 import { runMnemosparkSlashHandler } from "./mnemospark-handler.js";
 import { ensureOpenClawRenewalPrerequisites } from "./openclaw-renewal-runbook.js";
+import { getOpenClawConfigPath } from "./openclaw-cli.js";
 import type { PluginCommandContext } from "./types.js";
 import { spawn } from "node:child_process";
 import { dirname, join } from "node:path";
