@@ -21,6 +21,7 @@ import { BalanceMonitor } from "./balance.js";
 import { VERSION } from "./version.js";
 import { runMnemosparkSlashHandler } from "./mnemospark-handler.js";
 import { ensureOpenClawRenewalPrerequisites } from "./openclaw-renewal-runbook.js";
+import { getOpenClawConfigPath } from "./openclaw-cli.js";
 import type { PluginCommandContext } from "./types.js";
 import { spawn } from "node:child_process";
 import { dirname, join } from "node:path";
@@ -190,16 +191,11 @@ function isOpenClawAvailable(): Promise<boolean> {
   });
 }
 
-function getOpenClawConfigPath(): string {
-  const stateDir = process.env.OPENCLAW_STATE_DIR ?? join(homedir(), ".openclaw");
-  return join(stateDir, "openclaw.json");
-}
-
 /**
  * Ensure plugins.allow in openclaw.json includes "mnemospark". Idempotent; safe if file missing or invalid.
  */
 async function ensureMnemosparkInPluginsAllow(): Promise<void> {
-  const configPath = getOpenClawConfigPath();
+  const configPath = getOpenClawConfigPath(homedir());
   try {
     const raw = await readFile(configPath, "utf-8");
     const config = JSON.parse(raw) as Record<string, unknown>;

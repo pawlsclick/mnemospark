@@ -3,6 +3,9 @@ import { join } from "node:path";
 
 export type OpenClawCliResult = { stdout: string; stderr: string };
 
+const ANSI_ESCAPE_RE = new RegExp(`${String.fromCharCode(0x1b)}\\[[0-9;]*m`, "g");
+const BOX_DRAWING_RE = /[\u2500-\u257F]/g;
+
 /**
  * Run the `openclaw` CLI with optional HOME override (used for tests and multi-user paths).
  */
@@ -52,17 +55,78 @@ export function parseOpenClawCliJson<T>(stdout: string, commandLabel: string): T
   }
 }
 
+function stripCliDecorations(line: string): string {
+  return line.replace(ANSI_ESCAPE_RE, "").replace(BOX_DRAWING_RE, "").trim();
+}
+
+function expandHomePath(homeDir: string, line: string): string {
+  if (line.startsWith("~/")) {
+    return join(homeDir, line.slice(2));
+  }
+  if (line.startsWith("~\\")) {
+    return join(homeDir, line.slice(2));
+  }
+  return line;
+}
+
+function looksLikeOpenClawConfigPath(line: string): boolean {
+  if (!line || line.includes("\n")) {
+    return false;
+  }
+  if (line.endsWith("openclaw.json")) {
+    return true;
+  }
+  if (line.startsWith("~/") || line.startsWith("~\\")) {
+    return true;
+  }
+  if (line.startsWith("/")) {
+    return true;
+  }
+  return /^[A-Za-z]:\\/.test(line);
+}
+
 /**
- * Resolve `openclaw config file` output to an absolute path (CLI may print `~/.openclaw/...`).
+ * Parse `openclaw config file` stdout, ignoring warning boxes and other CLI decoration.
+ * Returns null when no plausible config path is found.
+ */
+export function parseOpenClawConfigFileStdout(stdout: string, homeDir: string): string | null {
+  const lines = stdout.split(/\r?\n/);
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = stripCliDecorations(lines[i] ?? "");
+    if (!line || !looksLikeOpenClawConfigPath(line)) {
+      continue;
+    }
+    return expandHomePath(homeDir, line);
+  }
+  return null;
+}
+
+/**
+ * Deterministic OpenClaw config path (matches cli.ts / OpenClaw state dir conventions).
+ */
+export function getOpenClawConfigPath(
+  homeDir: string,
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  const stateDir = env.OPENCLAW_STATE_DIR ?? join(homeDir, ".openclaw");
+  return join(stateDir, "openclaw.json");
+}
+
+/**
+ * Resolve the OpenClaw config file to an absolute path.
+ * Prefers deterministic state-dir resolution; uses `openclaw config file` only when it
+ * returns a parseable path (ignoring warning boxes and other decorated stdout).
  */
 export async function resolveOpenClawConfigFilePath(homeDir: string): Promise<string> {
-  const { stdout } = await runOpenClawCli(["config", "file"], homeDir);
-  const trimmed = stdout.trim();
-  if (trimmed.startsWith("~/")) {
-    return join(homeDir, trimmed.slice(2));
+  const fallback = getOpenClawConfigPath(homeDir);
+  try {
+    const { stdout } = await runOpenClawCli(["config", "file"], homeDir);
+    const parsed = parseOpenClawConfigFileStdout(stdout, homeDir);
+    if (parsed) {
+      return parsed;
+    }
+  } catch {
+    // openclaw missing or config file command failed — use deterministic fallback
   }
-  if (trimmed.startsWith("~\\")) {
-    return join(homeDir, trimmed.slice(2));
-  }
-  return trimmed;
+  return fallback;
 }
