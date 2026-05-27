@@ -5,6 +5,17 @@ import { randomUUID } from "node:crypto";
 
 import { resolveOpenClawConfigFilePath, runOpenClawCli } from "./openclaw-cli.js";
 
+const MAX_CONFIG_PATH_LENGTH = 4096;
+
+function assertValidConfigPath(configPath: string): void {
+  if (configPath.includes("\n") || configPath.includes("\r")) {
+    throw new Error("openclaw config path must not contain newlines");
+  }
+  if (configPath.length > MAX_CONFIG_PATH_LENGTH) {
+    throw new Error("openclaw config path is too long");
+  }
+}
+
 /** Default OpenClaw agent id for storage renewal cron (override with MNEMOSPARK_CRON_AGENT_ID). */
 export const DEFAULT_RENEWAL_AGENT_ID = "mnemospark-renewal";
 
@@ -190,6 +201,7 @@ export async function ensureOpenClawRenewalPrerequisites(
   const nodeBinary = getRenewalNodeBinary();
 
   const configPath = await resolveOpenClawConfigFilePath(homeDir);
+  assertValidConfigPath(configPath);
   let configRaw = "{}";
   try {
     configRaw = await readFile(configPath, "utf-8");
