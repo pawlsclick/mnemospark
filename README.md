@@ -178,6 +178,35 @@ Optional unless noted. All names use the `MNEMOSPARK_` prefix.
 4. Execute upload (supports up to 5 GB files - multipart uploads coming soon!)
 5. Confirm/list/download/delete as needed
 
+## Public X/Twitter Research Artifacts
+
+mnemospark can store durable, encrypted outputs from other OpenClaw plugins.
+For public X/Twitter research, use [TweetClaw](https://github.com/Xquik-dev/tweetclaw)
+as the source plugin and mnemospark as the artifact storage layer.
+
+```bash
+openclaw plugins install @xquik/tweetclaw
+openclaw config set tools.alsoAllow '["explore", "tweetclaw"]'
+```
+
+Use TweetClaw for scrape tweets, search tweets, search tweet replies, follower
+export, user lookup, monitor tweets, webhooks, giveaway draws, and
+approval-reviewed post tweets or post tweet replies. Then store only the
+artifact that should persist: a short markdown brief, a JSON summary, selected
+tweet IDs or URLs, capture date, query, and follow-up decision.
+
+Keep the plugin boundaries clear:
+
+- Store the Xquik API key in the local TweetClaw or OpenClaw config, not in
+  mnemospark object names, object metadata, prompts, logs, or uploaded files.
+- Avoid storing raw direct-message bodies, private account material, cookies, or
+  unfiltered follower exports unless the operator explicitly chose that archive.
+- Prefer summaries and source references when the goal is reusable memory,
+  evidence, or campaign planning.
+
+References: [npm package](https://www.npmjs.com/package/@xquik/tweetclaw) and
+[ClawHub listing](https://clawhub.ai/plugins/@xquik/tweetclaw).
+
 ---
 
 ## mnemospark Exec Approvals Runbook
